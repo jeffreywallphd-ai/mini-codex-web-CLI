@@ -5,37 +5,33 @@ const {
   EXECUTION_MODE_FLAGS,
   buildCodexExecArgs,
   extractCreditsRemaining,
-  getCodexExecInput,
   normalizePrompt
 } = require("./codexRunner");
 
-test("execution mode flags are passed before stdin prompt input", () => {
-  assert.deepEqual(EXECUTION_MODE_FLAGS.readonly, ["--suggest"]);
-  assert.deepEqual(buildCodexExecArgs("Please update the README", "readonly"), [
+test("execution mode flags are only set for write mode", () => {
+  assert.deepEqual(EXECUTION_MODE_FLAGS.read, []);
+  assert.deepEqual(buildCodexExecArgs("Please update the README", "read"), [
     "exec",
-    "--suggest",
-    "-"
+    "Please update the README"
   ]);
-  assert.deepEqual(buildCodexExecArgs("Please make the change", "auto-edit"), [
-    "exec",
-    "--auto-edit",
-    "-"
-  ]);
-  assert.deepEqual(buildCodexExecArgs("Please make the change", "full-auto"), [
+  assert.deepEqual(buildCodexExecArgs("Please make the change", "write"), [
     "exec",
     "--full-auto",
-    "-"
+    "Please make the change"
   ]);
 });
 
-test("prompts are normalized and sent through stdin to avoid subcommand parsing", () => {
+test("prompts are normalized before being passed to codex exec", () => {
   assert.equal(normalizePrompt("  review base branch safety  "), "review base branch safety");
-  assert.equal(getCodexExecInput("  review base branch safety  "), "review base branch safety\n");
+  assert.deepEqual(buildCodexExecArgs("  review base branch safety  ", "read"), [
+    "exec",
+    "review base branch safety"
+  ]);
 });
 
-test("blank prompts do not create a stdin marker or input payload", () => {
-  assert.deepEqual(buildCodexExecArgs("   ", "readonly"), ["exec", "--suggest"]);
-  assert.equal(getCodexExecInput("   "), undefined);
+test("blank prompts do not create extra arguments", () => {
+  assert.deepEqual(buildCodexExecArgs("   ", "read"), ["exec"]);
+  assert.deepEqual(buildCodexExecArgs("   ", "write"), ["exec", "--full-auto"]);
 });
 
 test("credits can be parsed from different status output formats", () => {

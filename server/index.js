@@ -37,7 +37,7 @@ app.get("/api/projects", (req, res) => {
 });
 
 app.post("/api/run-test", async (req, res) => {
-  const { projectName, prompt, executionMode = "readonly" } = req.body;
+  const { projectName, prompt, executionMode = "read" } = req.body;
 
   if (!EXECUTION_MODE_FLAGS[executionMode]) {
     return res.status(400).json({ error: "Invalid execution mode" });

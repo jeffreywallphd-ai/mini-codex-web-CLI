@@ -18,7 +18,7 @@ The app is designed for personal LAN use, not for public internet exposure or mu
 ## Features
 
 - Repository picker for local Git repositories
-- Codex execution mode selector: read-only, auto edit, and full auto
+- Codex execution mode selector with Read Mode and Write Mode (`--full-auto`)
 - Automatic branch creation from `main` before every run using `codex-<10 hex chars>` naming
 - Dedicated run details page for each prompt run
 - Git status display and one-tap merge action from the run details page
@@ -91,7 +91,7 @@ http://192.168.x.x:3000
 ## Usage Flow
 
 1. Select a repository.
-2. Select the execution mode.
+2. Select Read Mode for a standard `codex exec` run, or Write Mode to add `--full-auto`.
 3. Enter a prompt.
 4. Click **Run**.
 5. The server checks out local `main`, creates a new `codex-xxxxxxxxxx` branch, then runs Codex in the selected mode.

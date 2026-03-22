@@ -56,11 +56,12 @@ function renderRun(run) {
   const usage = run.usage_delta ?? "(not calculated)";
   const credits = run.credits_remaining ?? "(not available)";
   const mergeOutput = [run.merge_stdout, run.merge_stderr].filter(Boolean).join("\n\n").trim();
+  const executionMode = run.execution_mode === "write" ? "Write Mode" : "Read Mode";
 
   runSummary.innerHTML = `
     <div><strong>Run ID</strong><span>${run.id}</span></div>
     <div><strong>Project</strong><span>${run.project_name}</span></div>
-    <div><strong>Mode</strong><span>${run.execution_mode || "readonly"}</span></div>
+    <div><strong>Mode</strong><span>${executionMode}</span></div>
     <div><strong>Base Branch</strong><span>${run.base_branch || "main"}</span></div>
     <div><strong>Run Branch</strong><span>${run.branch_name || "(unknown)"}</span></div>
     <div><strong>Credits</strong><span>${credits}</span></div>
