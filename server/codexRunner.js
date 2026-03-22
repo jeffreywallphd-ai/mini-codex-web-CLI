@@ -2,7 +2,7 @@ const { runProcess } = require("./git");
 
 const EXECUTION_MODE_FLAGS = {
   read: [],
-  write: ["--full-auto"]
+  write: ["--full-auto", "--ask-for-approval", "on-failure", "--sandbox", "workspace-write"]
 };
 
 function extractCreditsRemaining(text) {
@@ -22,12 +22,13 @@ function normalizePrompt(prompt) {
 function buildCodexExecArgs(prompt, executionMode = "read") {
   const modeArgs = EXECUTION_MODE_FLAGS[executionMode] || EXECUTION_MODE_FLAGS.read;
   const trimmedPrompt = normalizePrompt(prompt);
+  const args = ["exec", ...modeArgs];
 
   if (!trimmedPrompt) {
-    return ["exec", ...modeArgs];
+    return args;
   }
 
-  return ["exec", ...modeArgs, trimmedPrompt];
+  return [...args, trimmedPrompt];
 }
 
 async function runCommand(repoPath, commandArgs, options = {}) {
@@ -42,12 +43,8 @@ async function runCodexWithUsage(repoPath, prompt, executionMode = "read") {
     [statusBefore.stdout, statusBefore.stderr].filter(Boolean).join("\n")
   );
 
-  console.log(["codex", ...buildCodexExecArgs(prompt, executionMode)]);
-
-  const result = await runCommand(
-    repoPath,
-    ["codex", ...buildCodexExecArgs(prompt, executionMode)]
-  );
+  const commandArgs = ["codex", ...buildCodexExecArgs(prompt, executionMode)];
+  const result = await runCommand(repoPath, commandArgs);
 
   const statusAfter = await runCommand(repoPath, ["codex", "status"]);
 
@@ -64,6 +61,8 @@ async function runCodexWithUsage(repoPath, prompt, executionMode = "read") {
   return {
     ...result,
     executionMode,
+    executedCommand: result.executedCommand,
+    spawnCommand: result.spawnCommand,
     statusBefore: [statusBefore.stdout, statusBefore.stderr].filter(Boolean).join("\n"),
     statusAfter: [statusAfter.stdout, statusAfter.stderr].filter(Boolean).join("\n"),
     usageDelta,

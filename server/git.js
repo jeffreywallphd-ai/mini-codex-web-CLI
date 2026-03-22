@@ -1,21 +1,53 @@
 const { spawn } = require("child_process");
 const crypto = require("crypto");
 
+function quoteArg(arg) {
+  if (arg === "") return '""';
+  if (!/[\s"^&|<>]/.test(arg)) return arg;
+  return `"${String(arg).replace(/(["\\])/g, "\\$1")}"`;
+}
+
+function formatCommand(command, args) {
+  return [command, ...args].map((arg) => quoteArg(String(arg))).join(" ");
+}
+
+function buildSpawnContext(command, args) {
+  const isWindows = process.platform === "win32";
+  const isCodexCommand = command === "codex" || command === "codex.cmd";
+
+  if (isWindows && isCodexCommand) {
+    const innerCommand = formatCommand("codex", args);
+    return {
+      actualCommand: "cmd.exe",
+      actualArgs: ["/d", "/s", "/c", innerCommand],
+      executedCommand: innerCommand,
+      spawnCommand: formatCommand("cmd.exe", ["/d", "/s", "/c", innerCommand])
+    };
+  }
+
+  return {
+    actualCommand: command,
+    actualArgs: args,
+    executedCommand: formatCommand(command, args),
+    spawnCommand: formatCommand(command, args)
+  };
+}
+
 function runProcess(repoPath, command, args, options = {}) {
   return new Promise((resolve, reject) => {
     let stdout = "";
     let stderr = "";
 
-    const isWindows = process.platform === "win32";
-    const isCodexCommand = command === "codex" || command === "codex.cmd";
+    const { actualCommand, actualArgs, executedCommand, spawnCommand } = buildSpawnContext(
+      command,
+      args
+    );
 
-    const actualCommand = isWindows && isCodexCommand ? "cmd.exe" : command;
-    const actualArgs =
-      isWindows && isCodexCommand
-        ? ["/d", "/s", "/c", "codex", ...args]
-        : args;
-
-    console.log("RUN", { actualCommand, actualArgs });
+    console.log("RUN", {
+      cwd: repoPath,
+      executedCommand,
+      spawnCommand
+    });
 
     const child = spawn(actualCommand, actualArgs, {
       cwd: repoPath,
@@ -45,7 +77,7 @@ function runProcess(repoPath, command, args, options = {}) {
     }
 
     child.on("close", (code) => {
-      resolve({ code, stdout, stderr });
+      resolve({ code, stdout, stderr, executedCommand, spawnCommand });
     });
   });
 }
@@ -106,7 +138,9 @@ async function mergeBranch(repoPath, branchName, baseBranch = "main") {
 }
 
 module.exports = {
+  buildSpawnContext,
   createCodexBranch,
+  formatCommand,
   getGitStatus,
   mergeBranch,
   runProcess

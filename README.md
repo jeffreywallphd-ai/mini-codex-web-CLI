@@ -18,7 +18,7 @@ The app is designed for personal LAN use, not for public internet exposure or mu
 ## Features
 
 - Repository picker for local Git repositories
-- Codex execution mode selector with Read Mode and Write Mode (`--full-auto`)
+- Codex execution mode selector with Read Mode and Write Mode (`--full-auto`, `--ask-for-approval on-failure`, `--sandbox workspace-write`)
 - Automatic branch creation from `main` before every run using `codex-<10 hex chars>` naming
 - Dedicated run details page for each prompt run
 - Git status display and one-tap merge action from the run details page
@@ -91,7 +91,7 @@ http://192.168.x.x:3000
 ## Usage Flow
 
 1. Select a repository.
-2. Select Read Mode for a standard `codex exec` run, or Write Mode to add `--full-auto`.
+2. Select Read Mode for a standard `codex exec` run, or Write Mode to add `--full-auto` plus explicit `--ask-for-approval on-failure --sandbox workspace-write` flags.
 3. Enter a prompt.
 4. Click **Run**.
 5. The server checks out local `main`, creates a new `codex-xxxxxxxxxx` branch, then runs Codex in the selected mode.
@@ -104,6 +104,7 @@ http://192.168.x.x:3000
 - The app creates a new branch named `codex-<10 hex chars>`.
 - Codex executes only after the branch checkout succeeds.
 - The run details page shows the stored `git status --short --branch` output.
+- The run details page also stores and shows the exact Codex command requested plus the final spawned command line (including the Windows `cmd.exe` wrapper when applicable).
 - Merge runs are performed by the server with Git and recorded in SQLite.
 - If a merge succeeds, the merge button is disabled for that run.
 
@@ -127,7 +128,7 @@ This application is meant for trusted LAN usage only.
 
 - The app assumes each selected repository has a local `main` branch.
 - Usage tracking is best-effort and depends on Codex CLI output format.
-- Windows support depends on Node, Git, and Codex CLI being available in the server environment PATH.
+- Windows support depends on Node, Git, and Codex CLI being available in the server environment PATH. OpenAI's Codex CLI documentation currently lists Windows 11 via WSL2 as the supported Windows setup, so native `cmd.exe` usage may still be limited by upstream Codex behavior.
 - There is no authentication, authorization, or multi-user isolation.
 
 ## License

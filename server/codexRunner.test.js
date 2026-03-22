@@ -17,6 +17,10 @@ test("execution mode flags are only set for write mode", () => {
   assert.deepEqual(buildCodexExecArgs("Please make the change", "write"), [
     "exec",
     "--full-auto",
+    "--ask-for-approval",
+    "on-failure",
+    "--sandbox",
+    "workspace-write",
     "Please make the change"
   ]);
 });
@@ -31,7 +35,14 @@ test("prompts are normalized before being passed to codex exec", () => {
 
 test("blank prompts do not create extra arguments", () => {
   assert.deepEqual(buildCodexExecArgs("   ", "read"), ["exec"]);
-  assert.deepEqual(buildCodexExecArgs("   ", "write"), ["exec", "--full-auto"]);
+  assert.deepEqual(buildCodexExecArgs("   ", "write"), [
+    "exec",
+    "--full-auto",
+    "--ask-for-approval",
+    "on-failure",
+    "--sandbox",
+    "workspace-write"
+  ]);
 });
 
 test("credits can be parsed from different status output formats", () => {

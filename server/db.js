@@ -13,6 +13,8 @@ const RUN_COLUMNS = {
   branch_name: "TEXT",
   base_branch: "TEXT",
   git_status: "TEXT",
+  executed_command: "TEXT",
+  spawn_command: "TEXT",
   merge_code: "INTEGER",
   merge_stdout: "TEXT",
   merge_stderr: "TEXT",
@@ -72,9 +74,11 @@ function saveRun(run) {
         execution_mode,
         branch_name,
         base_branch,
-        git_status
+        git_status,
+        executed_command,
+        spawn_command
       )
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         run.projectName,
         run.prompt,
@@ -88,7 +92,9 @@ function saveRun(run) {
         run.executionMode,
         run.branchName,
         run.baseBranch,
-        run.gitStatus
+        run.gitStatus,
+        run.executedCommand,
+        run.spawnCommand
       ],
       function onInsert(err) {
         if (err) return reject(err);

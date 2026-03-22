@@ -2,6 +2,7 @@ const backButton = document.getElementById("backButton");
 const mergeButton = document.getElementById("mergeButton");
 const promptDetail = document.getElementById("promptDetail");
 const gitStatusDetail = document.getElementById("gitStatusDetail");
+const commandDetail = document.getElementById("commandDetail");
 const stderrDetail = document.getElementById("stderrDetail");
 const mergeDetail = document.getElementById("mergeDetail");
 const runDetail = document.getElementById("runDetail");
@@ -57,6 +58,10 @@ function renderRun(run) {
   const credits = run.credits_remaining ?? "(not available)";
   const mergeOutput = [run.merge_stdout, run.merge_stderr].filter(Boolean).join("\n\n").trim();
   const executionMode = run.execution_mode === "write" ? "Write Mode" : "Read Mode";
+  const executedCommand = [run.executed_command, run.spawn_command]
+    .filter(Boolean)
+    .map((command, index) => (index === 0 ? `Requested: ${command}` : `Spawned:   ${command}`))
+    .join("\n");
 
   runSummary.innerHTML = `
     <div><strong>Run ID</strong><span>${run.id}</span></div>
@@ -72,6 +77,7 @@ function renderRun(run) {
 
   promptDetail.textContent = run.prompt || "(none)";
   gitStatusDetail.textContent = run.git_status || "(none)";
+  commandDetail.textContent = executedCommand || "(not captured for this run)";
   stderrDetail.textContent = run.stderr || "(none)";
   mergeDetail.textContent = mergeOutput || "No merge attempted.";
 
