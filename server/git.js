@@ -1,7 +1,7 @@
 const { spawn } = require("child_process");
 const crypto = require("crypto");
 
-function runProcess(repoPath, command, args) {
+function runProcess(repoPath, command, args, options = {}) {
   return new Promise((resolve, reject) => {
     let stdout = "";
     let stderr = "";
@@ -20,6 +20,12 @@ function runProcess(repoPath, command, args) {
     child.stderr.on("data", (data) => {
       stderr += data.toString();
     });
+
+    if (typeof options.input === "string") {
+      child.stdin.end(options.input);
+    } else {
+      child.stdin.end();
+    }
 
     child.on("close", (code) => {
       resolve({ code, stdout, stderr });

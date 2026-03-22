@@ -1,9 +1,9 @@
 const { runProcess } = require("./git");
 
 const EXECUTION_MODE_FLAGS = {
-  readonly: ["--", "--suggest"],
-  "auto-edit": ["--", "--auto-edit"],
-  "full-auto": ["--", "--full-auto"]
+  readonly: ["--suggest"],
+  "auto-edit": ["--auto-edit"],
+  "full-auto": ["--full-auto"]
 };
 
 function extractCreditsRemaining(text) {
@@ -16,17 +16,29 @@ function extractCreditsRemaining(text) {
   return match ? parseFloat(match[1]) : null;
 }
 
-function buildCodexExecArgs(prompt, executionMode = "readonly") {
-  const modeArgs = EXECUTION_MODE_FLAGS[executionMode] || EXECUTION_MODE_FLAGS.readonly;
-  const trimmedPrompt = typeof prompt === "string" ? prompt.trim() : "";
-  const promptArgs = trimmedPrompt ? [trimmedPrompt] : [];
-
-  return ["exec", ...promptArgs, ...modeArgs];
+function normalizePrompt(prompt) {
+  return typeof prompt === "string" ? prompt.trim() : "";
 }
 
-async function runCommand(repoPath, commandArgs) {
+function buildCodexExecArgs(prompt, executionMode = "readonly") {
+  const modeArgs = EXECUTION_MODE_FLAGS[executionMode] || EXECUTION_MODE_FLAGS.readonly;
+  const trimmedPrompt = normalizePrompt(prompt);
+
+  if (!trimmedPrompt) {
+    return ["exec", ...modeArgs];
+  }
+
+  return ["exec", ...modeArgs, "-"];
+}
+
+function getCodexExecInput(prompt) {
+  const trimmedPrompt = normalizePrompt(prompt);
+  return trimmedPrompt ? `${trimmedPrompt}\n` : undefined;
+}
+
+async function runCommand(repoPath, commandArgs, options = {}) {
   const [command, ...args] = commandArgs;
-  return runProcess(repoPath, command, args);
+  return runProcess(repoPath, command, args, options);
 }
 
 async function runCodexWithUsage(repoPath, prompt, executionMode = "readonly") {
@@ -36,7 +48,11 @@ async function runCodexWithUsage(repoPath, prompt, executionMode = "readonly") {
     [statusBefore.stdout, statusBefore.stderr].filter(Boolean).join("\n")
   );
 
-  const result = await runCommand(repoPath, ["codex", ...buildCodexExecArgs(prompt, executionMode)]);
+  const result = await runCommand(
+    repoPath,
+    ["codex", ...buildCodexExecArgs(prompt, executionMode)],
+    { input: getCodexExecInput(prompt) }
+  );
 
   const statusAfter = await runCommand(repoPath, ["codex", "status"]);
 
@@ -60,4 +76,11 @@ async function runCodexWithUsage(repoPath, prompt, executionMode = "readonly") {
   };
 }
 
-module.exports = { runCodexWithUsage, EXECUTION_MODE_FLAGS, buildCodexExecArgs, extractCreditsRemaining };
+module.exports = {
+  runCodexWithUsage,
+  EXECUTION_MODE_FLAGS,
+  buildCodexExecArgs,
+  extractCreditsRemaining,
+  getCodexExecInput,
+  normalizePrompt
+};

@@ -4,33 +4,38 @@ const assert = require("node:assert/strict");
 const {
   EXECUTION_MODE_FLAGS,
   buildCodexExecArgs,
-  extractCreditsRemaining
+  extractCreditsRemaining,
+  getCodexExecInput,
+  normalizePrompt
 } = require("./codexRunner");
 
-test("execution mode flags are passed after the prompt with a separator", () => {
-  assert.deepEqual(EXECUTION_MODE_FLAGS.readonly, ["--", "--suggest"]);
+test("execution mode flags are passed before stdin prompt input", () => {
+  assert.deepEqual(EXECUTION_MODE_FLAGS.readonly, ["--suggest"]);
   assert.deepEqual(buildCodexExecArgs("Please update the README", "readonly"), [
     "exec",
-    "Please update the README",
-    "--",
-    "--suggest"
+    "--suggest",
+    "-"
   ]);
   assert.deepEqual(buildCodexExecArgs("Please make the change", "auto-edit"), [
     "exec",
-    "Please make the change",
-    "--",
-    "--auto-edit"
+    "--auto-edit",
+    "-"
   ]);
   assert.deepEqual(buildCodexExecArgs("Please make the change", "full-auto"), [
     "exec",
-    "Please make the change",
-    "--",
-    "--full-auto"
+    "--full-auto",
+    "-"
   ]);
 });
 
-test("blank prompts do not create an empty positional argument", () => {
-  assert.deepEqual(buildCodexExecArgs("   ", "readonly"), ["exec", "--", "--suggest"]);
+test("prompts are normalized and sent through stdin to avoid subcommand parsing", () => {
+  assert.equal(normalizePrompt("  review base branch safety  "), "review base branch safety");
+  assert.equal(getCodexExecInput("  review base branch safety  "), "review base branch safety\n");
+});
+
+test("blank prompts do not create a stdin marker or input payload", () => {
+  assert.deepEqual(buildCodexExecArgs("   ", "readonly"), ["exec", "--suggest"]);
+  assert.equal(getCodexExecInput("   "), undefined);
 });
 
 test("credits can be parsed from different status output formats", () => {
