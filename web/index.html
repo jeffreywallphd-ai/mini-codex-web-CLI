@@ -9,43 +9,42 @@
 <body>
   <main>
     <h1>Codex LAN</h1>
+    <p class="page-copy">Small-screen Codex control for trusted LAN use.</p>
 
-    <label for="projectSelect">Project</label>
-    <select id="projectSelect"></select>
+    <section class="panel stack-gap">
+      <label for="projectSelect">Project</label>
+      <select id="projectSelect"></select>
 
-    <label for="promptInput">Prompt</label>
-    <textarea id="promptInput" rows="6" placeholder="Enter prompt..."></textarea>
+      <label for="executionModeSelect">Execution Mode</label>
+      <select id="executionModeSelect">
+        <option value="readonly">Read-only</option>
+        <option value="auto-edit">Auto Edit</option>
+        <option value="full-auto">Full Auto</option>
+      </select>
 
-    <div id="creditsBox">Credits Remaining: (unknown)</div>
+      <label for="promptInput">Prompt</label>
+      <textarea id="promptInput" rows="6" placeholder="Enter prompt..."></textarea>
 
-    <button id="runButton">Run</button>
+      <div id="creditsBox">Credits Remaining: (unknown)</div>
 
-    <div id="statusBox">Ready.</div>
+      <button id="runButton">Run</button>
+      <div id="statusBox">Ready.</div>
+    </section>
 
-    <h2>Recent Runs</h2>
+    <section class="panel stack-gap">
+      <div class="section-heading-row">
+        <h2>Recent Runs</h2>
+      </div>
 
-    <label for="runSearchInput">Search Runs</label>
-    <input
-      id="runSearchInput"
-      type="text"
-      placeholder="Search by project or prompt..."
-    />
+      <label for="runSearchInput">Search Runs</label>
+      <input
+        id="runSearchInput"
+        type="text"
+        placeholder="Search by project or prompt..."
+      />
 
-    <ul id="runsList"></ul>
-
-    <h2>Run Detail</h2>
-
-    <details id="promptCard">
-      <summary>Prompt</summary>
-      <pre id="promptDetail">No prompt available.</pre>
-    </details>
-
-    <details id="stderrCard">
-      <summary>Raw stderr</summary>
-      <pre id="stderrDetail">(none)</pre>
-    </details>
-
-    <pre id="runDetail">No run selected.</pre>
+      <ul id="runsList"></ul>
+    </section>
   </main>
 
   <script src="/app.js"></script>

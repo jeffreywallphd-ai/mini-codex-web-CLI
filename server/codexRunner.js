@@ -1,9 +1,14 @@
-const { spawn } = require("child_process");
+const { runProcess } = require("./git");
+
+const EXECUTION_MODE_FLAGS = {
+  readonly: "--suggest",
+  "auto-edit": "--auto-edit",
+  "full-auto": "--full-auto"
+};
 
 function extractCreditsRemaining(text) {
   if (!text) return null;
 
-  // Try common patterns (CLI may change format)
   const match =
     text.match(/remaining[:\s]+([\d.]+)/i) ||
     text.match(/credits[:\s]+([\d.]+)/i);
@@ -11,38 +16,24 @@ function extractCreditsRemaining(text) {
   return match ? parseFloat(match[1]) : null;
 }
 
-function runCommand(repoPath, commandArgs) {
-  return new Promise((resolve) => {
-    let stdout = "";
-    let stderr = "";
-
-    const child = spawn("cmd.exe", ["/c", ...commandArgs], {
-      cwd: repoPath,
-      env: { ...process.env }
-    });
-
-    child.stdout.on("data", d => stdout += d.toString());
-    child.stderr.on("data", d => stderr += d.toString());
-
-    child.on("close", (code) => {
-      resolve({ code, stdout, stderr });
-    });
-  });
+async function runCommand(repoPath, commandArgs) {
+  const [command, ...args] = commandArgs;
+  return runProcess(repoPath, command, args);
 }
 
-async function runCodexWithUsage(repoPath, prompt) {
-  // At the moment, status is only for sessions. Codex is not running sessions, so status is not yet usable. 
-  // Leaving this here for now in case that changes in the future.
+async function runCodexWithUsage(repoPath, prompt, executionMode = "readonly") {
+  const modeFlag = EXECUTION_MODE_FLAGS[executionMode] || EXECUTION_MODE_FLAGS.readonly;
+
   const statusBefore = await runCommand(repoPath, ["codex", "status"]);
-  
+
   const beforeCredits = extractCreditsRemaining(
     [statusBefore.stdout, statusBefore.stderr].filter(Boolean).join("\n")
   );
 
-  const result = await runCommand(repoPath, ["codex", "exec", prompt]);
+  const result = await runCommand(repoPath, ["codex", "exec", modeFlag, prompt]);
 
   const statusAfter = await runCommand(repoPath, ["codex", "status"]);
-  
+
   const afterCredits = extractCreditsRemaining(
     [statusAfter.stdout, statusAfter.stderr].filter(Boolean).join("\n")
   );
@@ -55,6 +46,7 @@ async function runCodexWithUsage(repoPath, prompt) {
 
   return {
     ...result,
+    executionMode,
     statusBefore: [statusBefore.stdout, statusBefore.stderr].filter(Boolean).join("\n"),
     statusAfter: [statusAfter.stdout, statusAfter.stderr].filter(Boolean).join("\n"),
     usageDelta,
@@ -62,4 +54,4 @@ async function runCodexWithUsage(repoPath, prompt) {
   };
 }
 
-module.exports = { runCodexWithUsage };
+module.exports = { runCodexWithUsage, EXECUTION_MODE_FLAGS };

@@ -1,16 +1,48 @@
 const projectSelect = document.getElementById("projectSelect");
+const executionModeSelect = document.getElementById("executionModeSelect");
 const promptInput = document.getElementById("promptInput");
 const runButton = document.getElementById("runButton");
 const runsList = document.getElementById("runsList");
-const runDetail = document.getElementById("runDetail");
-const promptDetail = document.getElementById("promptDetail");
-const stderrDetail = document.getElementById("stderrDetail");
 const statusBox = document.getElementById("statusBox");
 const runSearchInput = document.getElementById("runSearchInput");
+const creditsBox = document.getElementById("creditsBox");
 
+const EDITOR_STATE_KEY = "mini-codex-editor-state";
 let allRuns = [];
 
-const creditsBox = document.getElementById("creditsBox");
+function getEditorState() {
+  return {
+    projectName: projectSelect.value || "",
+    executionMode: executionModeSelect.value || "readonly",
+    prompt: promptInput.value
+  };
+}
+
+function saveEditorState() {
+  localStorage.setItem(EDITOR_STATE_KEY, JSON.stringify(getEditorState()));
+}
+
+function restoreEditorState(projects) {
+  const rawState = localStorage.getItem(EDITOR_STATE_KEY);
+  if (!rawState) return;
+
+  try {
+    const state = JSON.parse(rawState);
+    if (state.executionMode) {
+      executionModeSelect.value = state.executionMode;
+    }
+
+    if (state.prompt) {
+      promptInput.value = state.prompt;
+    }
+
+    if (state.projectName && projects.some((project) => project.name === state.projectName)) {
+      projectSelect.value = state.projectName;
+    }
+  } catch (error) {
+    console.warn("Unable to restore editor state", error);
+  }
+}
 
 function renderStatus(run) {
   if (run.error) {
@@ -24,7 +56,7 @@ function renderStatus(run) {
   }
 
   if (run.code === 0) {
-    statusBox.textContent = "Run completed successfully.";
+    statusBox.textContent = `Run completed on ${run.branchName || run.branch_name || "new branch"}.`;
     return;
   }
 
@@ -35,40 +67,6 @@ function renderStatus(run) {
   }
 
   statusBox.textContent = `Run failed with exit code ${run.code}.`;
-}
-
-function cleanOutput(text) {
-  if (!text) return "";
-
-  // Remove codex header noise if present
-  if (text.includes("--------")) {
-    return text.split("--------").pop().trim();
-  }
-
-  return text.trim();
-}
-
-function renderRun(run) {
-  const credits = run.credits_remaining ?? run.creditsRemaining;
-  const usage = run.usage_delta ?? run.usageDelta;
-
-  promptDetail.textContent = run.prompt || "(none)";
-
-  const parts = [
-    `Run ID: ${run.id ?? run.runId ?? ""}`,
-    `Project: ${run.project_name ?? run.projectName ?? ""}`,
-    credits !== undefined && credits !== null ? `Credits Remaining: ${credits}` : "Credits Remaining: (not available)",
-    `Exit Code: ${run.code ?? ""}`,
-    run.created_at ? `Created: ${run.created_at}` : "",
-    usage !== undefined && usage !== null ? `Usage: ${usage}` : "Usage: (not calculated)",
-    "",
-    "Response",
-    "--------",
-    cleanOutput(run.stdout) || "(none)"
-  ];
-
-  runDetail.textContent = parts.filter(Boolean).join("\n");
-  stderrDetail.textContent = run.stderr || "(none)";
 }
 
 function renderRunsList(runs) {
@@ -84,12 +82,13 @@ function renderRunsList(runs) {
   for (const run of runs) {
     const li = document.createElement("li");
     const button = document.createElement("button");
-    const promptPreview = (run.prompt || "")
-        .replace(/\s+/g, " ")
-        .slice(0, 280)
-        + ((run.prompt || "").length > 280 ? "..." : "");
-    button.textContent = `#${run.id} - ${run.project_name} - ${promptPreview || "(no prompt)"}`;
-    button.onclick = () => loadRunDetail(run.id);
+    const promptPreview = `${(run.prompt || "").replace(/\s+/g, " ").slice(0, 120)}${(run.prompt || "").length > 120 ? "..." : ""}`;
+    const mergeBadge = run.merged_at ? " · merged" : "";
+    button.textContent = `#${run.id} · ${run.project_name} · ${run.execution_mode || "readonly"} · ${run.branch_name || "(no branch)"}${mergeBadge}\n${promptPreview || "(no prompt)"}`;
+    button.onclick = () => {
+      saveEditorState();
+      window.location.href = `/run-details.html?id=${run.id}`;
+    };
     li.appendChild(button);
     runsList.appendChild(li);
   }
@@ -106,15 +105,16 @@ function filterRuns() {
   const filtered = allRuns.filter((run) => {
     const project = (run.project_name || "").toLowerCase();
     const prompt = (run.prompt || "").toLowerCase();
-    return project.includes(query) || prompt.includes(query);
+    const branch = (run.branch_name || "").toLowerCase();
+    return project.includes(query) || prompt.includes(query) || branch.includes(query);
   });
 
   renderRunsList(filtered);
 }
 
 async function loadProjects() {
-  const res = await fetch("/api/projects");
-  const projects = await res.json();
+  const response = await fetch("/api/projects");
+  const projects = await response.json();
 
   projectSelect.innerHTML = "";
   for (const project of projects) {
@@ -123,78 +123,61 @@ async function loadProjects() {
     option.textContent = project.name;
     projectSelect.appendChild(option);
   }
+
+  restoreEditorState(projects);
 }
 
 async function loadRuns() {
-  const res = await fetch("/api/runs");
-  allRuns = await res.json();
+  const response = await fetch("/api/runs");
+  allRuns = await response.json();
   filterRuns();
-}
-
-async function loadRunDetail(id) {
-  const res = await fetch(`/api/runs/${id}`);
-  const run = await res.json();
-  renderRun(run);
-  renderStatus(run);
-
-  if (run.credits_remaining !== undefined) {
-    creditsBox.textContent = `Credits Remaining: ${run.credits_remaining}`;
-  }
 }
 
 runButton.addEventListener("click", async () => {
   const projectName = projectSelect.value;
   const prompt = promptInput.value.trim();
+  const executionMode = executionModeSelect.value;
 
   if (!projectName || !prompt) return;
 
+  saveEditorState();
   runButton.disabled = true;
   runButton.textContent = "Running...";
-  statusBox.textContent = "Running...";
+  statusBox.textContent = "Creating branch from main and starting Codex...";
 
   try {
-    const res = await fetch("/api/run-test", {
+    const response = await fetch("/api/run-test", {
       method: "POST",
       headers: {
         "Content-Type": "application/json"
       },
-      body: JSON.stringify({ projectName, prompt })
+      body: JSON.stringify({ projectName, prompt, executionMode })
     });
 
-    const result = await res.json();
+    const result = await response.json();
 
-    if (!res.ok) {
+    if (!response.ok) {
       renderStatus(result);
-      runDetail.textContent = "";
-      stderrDetail.textContent = result.error || "(none)";
-      promptDetail.textContent = prompt;
       return;
     }
 
-    renderRun({
-      runId: result.runId,
-      code: result.code,
-      stdout: result.stdout,
-      stderr: result.stderr,
-      projectName,
-      prompt,
-      creditsRemaining: result.creditsRemaining ? result.creditsRemaining : "unavailable",
-      usageDelta: result.usageDelta ? result.usageDelta : "unavailable"
-    });
-
     if (result.creditsRemaining !== undefined) {
-       creditsBox.textContent = `Credits Remaining: ${result.creditsRemaining}`;
+      creditsBox.textContent = `Credits Remaining: ${result.creditsRemaining}`;
     }
 
     renderStatus(result);
-    promptInput.value = "";
     await loadRuns();
-  } catch (err) {
-    statusBox.textContent = `Request failed: ${err.message}`;
+  } catch (error) {
+    statusBox.textContent = `Request failed: ${error.message}`;
   } finally {
     runButton.disabled = false;
     runButton.textContent = "Run";
   }
+});
+
+[projectSelect, executionModeSelect, promptInput].forEach((element) => {
+  element.addEventListener("change", saveEditorState);
+  element.addEventListener("input", saveEditorState);
 });
 
 runSearchInput.addEventListener("input", filterRuns);

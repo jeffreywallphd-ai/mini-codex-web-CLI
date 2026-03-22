@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Run Details · Codex LAN</title>
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <main>
+    <div class="page-actions">
+      <button id="backButton" class="secondary-button">Back to Editor</button>
+    </div>
+
+    <h1>Run Details</h1>
+    <p class="page-copy">Single-run output, branch info, and merge controls.</p>
+
+    <div id="statusBox">Loading run details...</div>
+    <div id="runSummary" class="panel run-summary"></div>
+
+    <div class="page-actions">
+      <button id="mergeButton">Merge Changes</button>
+    </div>
+
+    <details>
+      <summary>Prompt</summary>
+      <pre id="promptDetail">Loading...</pre>
+    </details>
+
+    <details>
+      <summary>Git Status</summary>
+      <pre id="gitStatusDetail">Loading...</pre>
+    </details>
+
+    <details>
+      <summary>Raw stderr</summary>
+      <pre id="stderrDetail">Loading...</pre>
+    </details>
+
+    <details>
+      <summary>Merge Output</summary>
+      <pre id="mergeDetail">No merge attempted.</pre>
+    </details>
+
+    <pre id="runDetail">Loading...</pre>
+  </main>
+
+  <script src="/run-details.js"></script>
+</body>
+</html>
