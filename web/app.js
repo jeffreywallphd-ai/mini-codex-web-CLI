@@ -13,7 +13,7 @@ let allRuns = [];
 function getEditorState() {
   return {
     projectName: projectSelect.value || "",
-    executionMode: executionModeSelect.value || "readonly",
+    executionMode: executionModeSelect.value || "read",
     prompt: promptInput.value
   };
 }
@@ -84,7 +84,8 @@ function renderRunsList(runs) {
     const button = document.createElement("button");
     const promptPreview = `${(run.prompt || "").replace(/\s+/g, " ").slice(0, 120)}${(run.prompt || "").length > 120 ? "..." : ""}`;
     const mergeBadge = run.merged_at ? " · merged" : "";
-    button.textContent = `#${run.id} · ${run.project_name} · ${run.execution_mode || "readonly"} · ${run.branch_name || "(no branch)"}${mergeBadge}\n${promptPreview || "(no prompt)"}`;
+    const executionMode = run.execution_mode === "write" ? "Write Mode" : "Read Mode";
+    button.textContent = `#${run.id} · ${run.project_name} · ${executionMode} · ${run.branch_name || "(no branch)"}${mergeBadge}\n${promptPreview || "(no prompt)"}`;
     button.onclick = () => {
       saveEditorState();
       window.location.href = `/run-details.html?id=${run.id}`;

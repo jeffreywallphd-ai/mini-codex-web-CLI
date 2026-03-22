@@ -1,9 +1,8 @@
 const { runProcess } = require("./git");
 
 const EXECUTION_MODE_FLAGS = {
-  readonly: ["-s", "read-only"],
-  "auto-edit": ["-s", "workspace-write"],
-  "full-auto": ["--full-auto"]
+  read: [],
+  write: ["--full-auto"]
 };
 
 function extractCreditsRemaining(text) {
@@ -20,8 +19,8 @@ function normalizePrompt(prompt) {
   return typeof prompt === "string" ? prompt.trim() : "";
 }
 
-function buildCodexExecArgs(prompt, executionMode = "readonly") {
-  const modeArgs = EXECUTION_MODE_FLAGS[executionMode] || EXECUTION_MODE_FLAGS.readonly;
+function buildCodexExecArgs(prompt, executionMode = "read") {
+  const modeArgs = EXECUTION_MODE_FLAGS[executionMode] || EXECUTION_MODE_FLAGS.read;
   const trimmedPrompt = normalizePrompt(prompt);
 
   if (!trimmedPrompt) {
@@ -31,17 +30,12 @@ function buildCodexExecArgs(prompt, executionMode = "readonly") {
   return ["exec", ...modeArgs, trimmedPrompt];
 }
 
-function getCodexExecInput(prompt) {
-  const trimmedPrompt = normalizePrompt(prompt);
-  return trimmedPrompt ? `${trimmedPrompt}\n` : undefined;
-}
-
 async function runCommand(repoPath, commandArgs, options = {}) {
   const [command, ...args] = commandArgs;
   return runProcess(repoPath, command, args, options);
 }
 
-async function runCodexWithUsage(repoPath, prompt, executionMode = "readonly") {
+async function runCodexWithUsage(repoPath, prompt, executionMode = "read") {
   const statusBefore = await runCommand(repoPath, ["codex", "status"]);
 
   const beforeCredits = extractCreditsRemaining(
@@ -82,6 +76,5 @@ module.exports = {
   EXECUTION_MODE_FLAGS,
   buildCodexExecArgs,
   extractCreditsRemaining,
-  getCodexExecInput,
   normalizePrompt
 };
