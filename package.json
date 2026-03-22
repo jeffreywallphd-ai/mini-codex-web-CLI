@@ -1,0 +1,30 @@
+{
+  "name": "mini-codex-web-cli",
+  "version": "1.0.0",
+  "description": "A small scale web server designed for LAN based mobile phone development. Runs on a home PC using GitHub projects and codex CLI. Simple interface for codex prompting and simple monitoring",
+  "scripts": {
+    "start": "node server/index.js",
+    "dev": "nodemon server/index.js"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/jeffreywallphd/mini-codex-web-CLI.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/jeffreywallphd/mini-codex-web-CLI/issues"
+  },
+  "homepage": "https://github.com/jeffreywallphd/mini-codex-web-CLI#readme",
+  "dependencies": {
+    "cors": "^2.8.6",
+    "dotenv": "^17.3.1",
+    "express": "^5.2.1",
+    "sqlite3": "^6.0.1"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.14"
+  }
+}
