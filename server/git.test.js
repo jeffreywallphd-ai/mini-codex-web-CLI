@@ -1,7 +1,11 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
+const fs = require("node:fs");
+const os = require("node:os");
+const path = require("node:path");
+const { execFileSync } = require("node:child_process");
 
-const { buildSpawnContext, formatCommand, parseStatusEntries } = require("./git");
+const { buildSpawnContext, formatCommand, parseStatusEntries, pullRepository } = require("./git");
 
 test("formatCommand quotes arguments that need escaping", () => {
   assert.equal(
@@ -71,4 +75,52 @@ test("git status porcelain output is parsed into clickable file entries", () => 
       rawPath: "old.js -> new.js"
     }
   ]);
+});
+
+test("pullRepository pulls latest changes from origin and returns updated status", async () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "mini-codex-git-test-"));
+  const remotePath = path.join(tempRoot, "remote.git");
+  const seedPath = path.join(tempRoot, "seed");
+  const localPath = path.join(tempRoot, "local");
+  const incomingPath = path.join(tempRoot, "incoming");
+  const gitEnv = {
+    ...process.env,
+    GIT_AUTHOR_NAME: "Codex Test",
+    GIT_AUTHOR_EMAIL: "codex@example.com",
+    GIT_COMMITTER_NAME: "Codex Test",
+    GIT_COMMITTER_EMAIL: "codex@example.com"
+  };
+
+  const git = (cwd, ...args) => execFileSync("git", args, {
+    cwd,
+    env: gitEnv,
+    stdio: "pipe",
+    encoding: "utf8"
+  }).trim();
+
+  fs.mkdirSync(seedPath, { recursive: true });
+  git(tempRoot, "init", "--bare", remotePath);
+  git(tempRoot, "clone", remotePath, seedPath);
+  git(seedPath, "checkout", "-b", "main");
+  fs.writeFileSync(path.join(seedPath, "README.md"), "hello\n");
+  git(seedPath, "add", "README.md");
+  git(seedPath, "commit", "-m", "Initial commit");
+  git(seedPath, "push", "-u", "origin", "main");
+
+  git(tempRoot, "clone", remotePath, localPath);
+  git(localPath, "checkout", "main");
+
+  git(tempRoot, "clone", remotePath, incomingPath);
+  git(incomingPath, "checkout", "main");
+  fs.writeFileSync(path.join(incomingPath, "README.md"), "hello\nworld\n");
+  git(incomingPath, "add", "README.md");
+  git(incomingPath, "commit", "-m", "Update remote");
+  git(incomingPath, "push", "origin", "main");
+
+  const result = await pullRepository(localPath);
+
+  assert.equal(result.code, 0);
+  assert.match(result.stdout, /(Updating|Fast-forward|Already up to date\.)/);
+  assert.match(result.gitStatus, /^## main/);
+  assert.equal(fs.readFileSync(path.join(localPath, "README.md"), "utf8"), "hello\nworld\n");
 });

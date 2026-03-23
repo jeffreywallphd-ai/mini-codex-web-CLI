@@ -18,6 +18,7 @@ The app is designed for personal LAN use, not for public internet exposure or mu
 ## Features
 
 - Repository picker for local Git repositories
+- One-tap `git pull` action for the currently selected repository on the index page
 - Codex execution mode selector with Read Mode and Write Mode (SDK thread options use `workspace-write` sandboxing and `on-failure` approvals in write mode)
 - Automatic branch creation from `main` before every run using `codex-<10 hex chars>` naming
 - Dedicated run details page for each prompt run
@@ -91,16 +92,18 @@ http://192.168.x.x:3000
 ## Usage Flow
 
 1. Select a repository.
-2. Select Read Mode for a standard Codex SDK turn, or Write Mode to run with `workspace-write` sandboxing plus `on-failure` approvals through the SDK.
-3. Enter a prompt.
-4. Click **Run**.
-5. The server checks out local `main`, creates a new `codex-xxxxxxxxxx` branch, then runs Codex in the selected mode.
-6. Open the run from **Recent Runs** to review output, git status, and merge controls.
-7. Click **Merge Changes** on the run details page when you want to merge that branch into `main`.
+2. Optionally click **Git Pull Selected Repo** to fetch and integrate the latest remote changes on the repository's current branch.
+3. Select Read Mode for a standard Codex SDK turn, or Write Mode to run with `workspace-write` sandboxing plus `on-failure` approvals through the SDK.
+4. Enter a prompt.
+5. Click **Run**.
+6. The server checks out local `main`, creates a new `codex-xxxxxxxxxx` branch, then runs Codex in the selected mode.
+7. Open the run from **Recent Runs** to review output, git status, and merge controls.
+8. Click **Merge Changes** on the run details page when you want to merge that branch into `main`.
 
 ## Git Behavior
 
 - Every run starts from the repository's local `main` branch.
+- The index page can run `git pull` against the selected repository before starting a Codex run.
 - The app creates a new branch named `codex-<10 hex chars>`.
 - Codex executes only after the branch checkout succeeds.
 - The run details page shows the stored `git status --short --branch` output.

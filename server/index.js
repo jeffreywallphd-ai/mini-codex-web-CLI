@@ -7,7 +7,7 @@ const fs = require("fs");
 
 const { runCodexWithUsage, EXECUTION_MODE_OPTIONS } = require("./codexRunner");
 const { saveRun, getRuns, getRunById, updateRunMerge } = require("./db");
-const { createCodexBranch, getGitSnapshot, mergeBranch } = require("./git");
+const { createCodexBranch, getGitSnapshot, mergeBranch, pullRepository } = require("./git");
 
 const app = express();
 app.use(cors());
@@ -52,6 +52,33 @@ app.get("/api/projects", (req, res) => {
     .map((dirent) => ({ name: dirent.name }));
 
   res.json(dirs);
+});
+
+app.post("/api/projects/:projectName/pull", async (req, res) => {
+  const { projectName } = req.params;
+
+  if (!isValidProject(projectName)) {
+    return res.status(400).json({ error: "Invalid project" });
+  }
+
+  if (runningProjects.has(projectName)) {
+    return res.status(400).json({ error: "Project already running" });
+  }
+
+  runningProjects.add(projectName);
+
+  try {
+    const result = await pullRepository(getRepoPath(projectName));
+    res.json({
+      projectName,
+      ...result
+    });
+  } catch (err) {
+    console.error("project pull failed:", err);
+    res.status(500).json({ error: err.message });
+  } finally {
+    runningProjects.delete(projectName);
+  }
 });
 
 app.post("/api/run-test", async (req, res) => {

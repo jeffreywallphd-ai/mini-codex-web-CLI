@@ -234,6 +234,21 @@ async function getGitStatus(repoPath) {
   return snapshot.gitStatus;
 }
 
+async function pullRepository(repoPath) {
+  const pullResult = await runGit(repoPath, ["pull"]);
+
+  if (pullResult.code !== 0) {
+    throw new Error(`Failed to pull latest changes.\n${pullResult.stderr || pullResult.stdout}`.trim());
+  }
+
+  const gitStatus = await getGitStatus(repoPath);
+
+  return {
+    ...pullResult,
+    gitStatus
+  };
+}
+
 async function mergeBranch(
   repoPath,
   branchName,
@@ -323,5 +338,6 @@ module.exports = {
   getGitSnapshot,
   mergeBranch,
   parseStatusEntries,
+  pullRepository,
   runProcess
 };

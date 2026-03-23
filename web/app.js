@@ -1,4 +1,5 @@
 const projectSelect = document.getElementById("projectSelect");
+const pullButton = document.getElementById("pullButton");
 const executionModeSelect = document.getElementById("executionModeSelect");
 const promptInput = document.getElementById("promptInput");
 const runButton = document.getElementById("runButton");
@@ -138,6 +139,43 @@ async function loadRuns() {
   filterRuns();
 }
 
+async function pullSelectedRepository() {
+  const projectName = projectSelect.value;
+
+  if (!projectName) {
+    statusBox.textContent = "Select a repository before pulling.";
+    return;
+  }
+
+  saveEditorState();
+  pullButton.disabled = true;
+  runButton.disabled = true;
+  pullButton.textContent = "Pulling...";
+  statusBox.textContent = `Pulling latest changes for ${projectName}...`;
+
+  try {
+    const response = await fetch(`/api/projects/${encodeURIComponent(projectName)}/pull`, {
+      method: "POST"
+    });
+    const result = await response.json();
+
+    if (!response.ok) {
+      statusBox.textContent = `Git pull failed: ${result.error || "Unknown error."}`;
+      return;
+    }
+
+    const summary = (result.stdout || "Git pull finished.").trim().split("\n").find(Boolean);
+    const branchStatus = (result.gitStatus || "").split("\n").find(Boolean);
+    statusBox.textContent = [summary, branchStatus].filter(Boolean).join(" ");
+  } catch (error) {
+    statusBox.textContent = `Git pull failed: ${error.message}`;
+  } finally {
+    pullButton.disabled = false;
+    runButton.disabled = false;
+    pullButton.textContent = "Git Pull Selected Repo";
+  }
+}
+
 runButton.addEventListener("click", async () => {
   const projectName = projectSelect.value;
   const prompt = promptInput.value.trim();
@@ -179,6 +217,8 @@ runButton.addEventListener("click", async () => {
     runButton.textContent = "Run";
   }
 });
+
+pullButton.addEventListener("click", pullSelectedRepository);
 
 [projectSelect, executionModeSelect, promptInput].forEach((element) => {
   element.addEventListener("change", saveEditorState);
