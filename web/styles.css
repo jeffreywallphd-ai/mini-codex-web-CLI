@@ -298,3 +298,21 @@ details pre {
     min-height: 150px;
   }
 }
+
+
+.error-card {
+  border-color: rgba(255, 92, 92, 0.45);
+  background: rgba(255, 92, 92, 0.08);
+}
+
+.error-card h2 {
+  color: #ffb3b3;
+}
+
+#errorCardMessage {
+  margin: 0;
+  color: #ffd4d4;
+  background: transparent;
+  border: none;
+  padding: 0;
+}

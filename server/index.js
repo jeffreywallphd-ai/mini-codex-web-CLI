@@ -19,6 +19,19 @@ const PROJECTS_DIR = path.resolve(__dirname, process.env.PROJECTS_DIR);
 
 const runningProjects = new Set();
 
+function getErrorMessage(error) {
+  if (!error) return "Unknown error";
+
+  if (typeof error.message === "string" && error.message.trim()) {
+    if (error.cause?.message && error.cause.message !== error.message) {
+      return `${error.message} (cause: ${error.cause.message})`;
+    }
+    return error.message;
+  }
+
+  return String(error);
+}
+
 function isValidProject(name) {
   const fullPath = path.join(PROJECTS_DIR, name);
   return fs.existsSync(fullPath);
@@ -75,7 +88,7 @@ app.post("/api/projects/:projectName/pull", async (req, res) => {
     });
   } catch (err) {
     console.error("project pull failed:", err);
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: getErrorMessage(err) });
   } finally {
     runningProjects.delete(projectName);
   }
@@ -127,7 +140,7 @@ app.post("/api/run-test", async (req, res) => {
     });
   } catch (err) {
     console.error("run-test failed:", err);
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: getErrorMessage(err) });
   } finally {
     runningProjects.delete(projectName);
   }
@@ -198,7 +211,7 @@ app.post("/api/runs/:id/merge", async (req, res) => {
     res.json(updatedRun);
   } catch (err) {
     console.error("merge failed:", err);
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: getErrorMessage(err) });
   }
 });
 
