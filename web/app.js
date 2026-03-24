@@ -7,6 +7,8 @@ const runsList = document.getElementById("runsList");
 const statusBox = document.getElementById("statusBox");
 const runSearchInput = document.getElementById("runSearchInput");
 const creditsBox = document.getElementById("creditsBox");
+const errorCard = document.getElementById("errorCard");
+const errorCardMessage = document.getElementById("errorCardMessage");
 
 const EDITOR_STATE_KEY = "mini-codex-editor-state";
 let allRuns = [];
@@ -43,6 +45,48 @@ function restoreEditorState(projects) {
   } catch (error) {
     console.warn("Unable to restore editor state", error);
   }
+}
+
+function hideErrorCard() {
+  errorCard.classList.add("hidden");
+  errorCardMessage.textContent = "";
+}
+
+function showErrorCard(message) {
+  const normalizedMessage = typeof message === "string" && message.trim()
+    ? message.trim()
+    : "Unknown error.";
+
+  errorCardMessage.textContent = normalizedMessage;
+  errorCard.classList.remove("hidden");
+}
+
+async function parseJsonResponse(response) {
+  const contentType = response.headers.get("content-type") || "";
+
+  if (contentType.includes("application/json")) {
+    try {
+      return await response.json();
+    } catch (error) {
+      return {
+        error: `Could not parse JSON response: ${error.message}`
+      };
+    }
+  }
+
+  const text = await response.text();
+  return {
+    error: text || `Unexpected ${response.status} response from server.`
+  };
+}
+
+function buildErrorMessage(context, result, fallback) {
+  const resultError = result?.error || result?.stderr;
+  if (resultError) {
+    return `${context}: ${resultError}`;
+  }
+
+  return `${context}: ${fallback}`;
 }
 
 function renderStatus(run) {
@@ -120,7 +164,11 @@ function filterRuns() {
 
 async function loadProjects() {
   const response = await fetch("/api/projects");
-  const projects = await response.json();
+  const projects = await parseJsonResponse(response);
+
+  if (!response.ok) {
+    throw new Error(buildErrorMessage("Could not load projects", projects, "Request failed"));
+  }
 
   projectSelect.innerHTML = "";
   for (const project of projects) {
@@ -135,7 +183,13 @@ async function loadProjects() {
 
 async function loadRuns() {
   const response = await fetch("/api/runs");
-  allRuns = await response.json();
+  const runs = await parseJsonResponse(response);
+
+  if (!response.ok) {
+    throw new Error(buildErrorMessage("Could not load recent runs", runs, "Request failed"));
+  }
+
+  allRuns = runs;
   filterRuns();
 }
 
@@ -147,6 +201,7 @@ async function pullSelectedRepository() {
     return;
   }
 
+  hideErrorCard();
   saveEditorState();
   pullButton.disabled = true;
   runButton.disabled = true;
@@ -157,10 +212,12 @@ async function pullSelectedRepository() {
     const response = await fetch(`/api/projects/${encodeURIComponent(projectName)}/pull`, {
       method: "POST"
     });
-    const result = await response.json();
+    const result = await parseJsonResponse(response);
 
     if (!response.ok) {
-      statusBox.textContent = `Git pull failed: ${result.error || "Unknown error."}`;
+      const message = buildErrorMessage("Git pull failed", result, "Unknown error.");
+      statusBox.textContent = message;
+      showErrorCard(message);
       return;
     }
 
@@ -168,7 +225,9 @@ async function pullSelectedRepository() {
     const branchStatus = (result.gitStatus || "").split("\n").find(Boolean);
     statusBox.textContent = [summary, branchStatus].filter(Boolean).join(" ");
   } catch (error) {
-    statusBox.textContent = `Git pull failed: ${error.message}`;
+    const message = `Git pull failed: ${error.message}`;
+    statusBox.textContent = message;
+    showErrorCard(message);
   } finally {
     pullButton.disabled = false;
     runButton.disabled = false;
@@ -183,6 +242,7 @@ runButton.addEventListener("click", async () => {
 
   if (!projectName || !prompt) return;
 
+  hideErrorCard();
   saveEditorState();
   runButton.disabled = true;
   runButton.textContent = "Running...";
@@ -197,10 +257,11 @@ runButton.addEventListener("click", async () => {
       body: JSON.stringify({ projectName, prompt, executionMode })
     });
 
-    const result = await response.json();
+    const result = await parseJsonResponse(response);
 
     if (!response.ok) {
       renderStatus(result);
+      showErrorCard(buildErrorMessage("Run failed", result, "Unknown server error."));
       return;
     }
 
@@ -211,7 +272,9 @@ runButton.addEventListener("click", async () => {
     renderStatus(result);
     await loadRuns();
   } catch (error) {
-    statusBox.textContent = `Request failed: ${error.message}`;
+    const message = `Request failed: ${error.message}`;
+    statusBox.textContent = message;
+    showErrorCard(message);
   } finally {
     runButton.disabled = false;
     runButton.textContent = "Run";
@@ -227,5 +290,12 @@ pullButton.addEventListener("click", pullSelectedRepository);
 
 runSearchInput.addEventListener("input", filterRuns);
 
-loadProjects();
-loadRuns();
+(async () => {
+  try {
+    await Promise.all([loadProjects(), loadRuns()]);
+  } catch (error) {
+    const message = `Initial page load failed: ${error.message}`;
+    statusBox.textContent = message;
+    showErrorCard(message);
+  }
+})();
