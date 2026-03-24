@@ -9,7 +9,7 @@ const EXECUTION_MODE_OPTIONS = {
 const CHANGESET_MARKER_START = "<<<CODEX_CHANGESET_START>>>";
 const CHANGESET_MARKER_END = "<<<CODEX_CHANGESET_END>>>";
 const PROMPT_SUFFIX = `
-Please follow the general guidance provided in general-prompt-guidance.md in the docs folder. 
+If the project has a docs folder and a general-prompt-guidance.md file, please follow the guidance provided in general-prompt-guidance.md. 
 Before you finish, append a machine-readable summary block to the very end of your response using exactly this format:
 ${CHANGESET_MARKER_START}
 TITLE: <short title, 80 chars or fewer>
