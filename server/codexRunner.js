@@ -100,15 +100,135 @@ function parseChangeSummary(text) {
   };
 }
 
-async function runCodexWithSdk(repoPath, prompt, executionMode = "read") {
+function formatEventMessage(message, fallback) {
+  if (typeof message === "string" && message.trim()) {
+    return message.trim();
+  }
+  return fallback;
+}
+
+function mapThreadEventToProgressEvent(event) {
+  if (!event || typeof event !== "object") return null;
+
+  if (event.type === "turn.started") {
+    return {
+      type: "codex.started",
+      message: "Codex started."
+    };
+  }
+
+  if (event.type === "turn.completed") {
+    return {
+      type: "codex.turn_completed",
+      message: "Codex turn completed."
+    };
+  }
+
+  if (event.type === "turn.failed") {
+    return {
+      type: "codex.failed",
+      message: `Codex failed: ${formatEventMessage(event.error?.message, "Unknown error.")}`
+    };
+  }
+
+  if (event.type === "error") {
+    return {
+      type: "codex.error",
+      message: `Execution error: ${formatEventMessage(event.message, "Unknown error.")}`
+    };
+  }
+
+  if (event.type !== "item.started" && event.type !== "item.completed") {
+    return null;
+  }
+
+  const phase = event.type === "item.started" ? "started" : "completed";
+  const item = event.item || {};
+
+  if (item.type === "command_execution") {
+    return {
+      type: "codex.command",
+      message: phase === "started"
+        ? `Running command: ${item.command || "(unknown command)"}`
+        : `Command finished: ${item.command || "(unknown command)"}`
+    };
+  }
+
+  if (item.type === "mcp_tool_call") {
+    const toolName = [item.server, item.tool].filter(Boolean).join("/");
+    return {
+      type: "codex.tool_call",
+      message: phase === "started"
+        ? `Running tool: ${toolName || "MCP tool"}`
+        : `Tool finished: ${toolName || "MCP tool"}`
+    };
+  }
+
+  if (item.type === "file_change" && phase === "completed") {
+    return {
+      type: "codex.file_change",
+      message: `File changes detected (${Array.isArray(item.changes) ? item.changes.length : 0} files).`
+    };
+  }
+
+  if (item.type === "web_search" && phase === "started") {
+    return {
+      type: "codex.web_search",
+      message: `Running web search: ${item.query || "(no query)"}`
+    };
+  }
+
+  if (item.type === "agent_message" && phase === "completed") {
+    return {
+      type: "codex.agent_message",
+      message: "Codex produced a response."
+    };
+  }
+
+  if (item.type === "error") {
+    return {
+      type: "codex.item_error",
+      message: `Execution warning: ${formatEventMessage(item.message, "Unknown error.")}`
+    };
+  }
+
+  return null;
+}
+
+async function runCodexWithSdk(repoPath, prompt, executionMode = "read", onProgressEvent = null) {
   const { Codex } = await loadCodexSdk();
   const codex = new Codex();
 
   console.log(buildThreadOptions(repoPath, executionMode));
 
   const thread = codex.startThread(buildThreadOptions(repoPath, executionMode));
-  const result = await thread.run(buildAugmentedPrompt(prompt));
-  const summary = parseChangeSummary(result.finalResponse || "");
+  const streamedResult = await thread.runStreamed(buildAugmentedPrompt(prompt));
+  let finalResponse = "";
+  let usage = null;
+  let turnFailure = null;
+
+  for await (const event of streamedResult.events) {
+    const progressEvent = mapThreadEventToProgressEvent(event);
+    if (progressEvent && typeof onProgressEvent === "function") {
+      onProgressEvent(progressEvent);
+    }
+
+    if (event.type === "item.completed" && event.item?.type === "agent_message") {
+      finalResponse = event.item.text || "";
+    } else if (event.type === "turn.completed") {
+      usage = event.usage;
+    } else if (event.type === "turn.failed") {
+      turnFailure = event.error;
+    } else if (event.type === "error") {
+      turnFailure = { message: event.message || "Unknown error." };
+    }
+  }
+
+  if (turnFailure) {
+    throw new Error(turnFailure.message || "Codex execution failed.");
+  }
+
+  const summary = parseChangeSummary(finalResponse || "");
 
   return {
     code: 0,
@@ -118,7 +238,7 @@ async function runCodexWithSdk(repoPath, prompt, executionMode = "read") {
     spawnCommand: null,
     statusBefore: "Not captured when using @openai/codex-sdk.",
     statusAfter: "Not captured when using @openai/codex-sdk.",
-    usageDelta: formatUsageSummary(result.usage),
+    usageDelta: formatUsageSummary(usage),
     creditsRemaining: null,
     executionMode,
     changeTitle: summary.changeTitle,
@@ -127,8 +247,8 @@ async function runCodexWithSdk(repoPath, prompt, executionMode = "read") {
   };
 }
 
-async function runCodexWithUsage(repoPath, prompt, executionMode = "read") {
-  return runCodexWithSdk(repoPath, prompt, executionMode);
+async function runCodexWithUsage(repoPath, prompt, executionMode = "read", onProgressEvent = null) {
+  return runCodexWithSdk(repoPath, prompt, executionMode, onProgressEvent);
 }
 
 module.exports = {
@@ -139,5 +259,6 @@ module.exports = {
   formatUsageSummary,
   normalizePrompt,
   parseChangeSummary,
+  mapThreadEventToProgressEvent,
   PROMPT_SUFFIX
 };
