@@ -3,7 +3,6 @@ const pullButton = document.getElementById("pullButton");
 const executionModeSelect = document.getElementById("executionModeSelect");
 const promptInput = document.getElementById("promptInput");
 const runButton = document.getElementById("runButton");
-const refreshRunningButton = document.getElementById("refreshRunningButton");
 const clearStateButton = document.getElementById("clearStateButton");
 const runningProjectHint = document.getElementById("runningProjectHint");
 const runsList = document.getElementById("runsList");
@@ -18,6 +17,56 @@ let allRuns = [];
 let runningProjects = new Set();
 let isRunningRequestInFlight = false;
 let isPullRequestInFlight = false;
+let activeRunStream = null;
+
+function createRunStreamId() {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return crypto.randomUUID();
+  }
+  return `run-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
+function closeRunStream() {
+  if (activeRunStream?.eventSource) {
+    activeRunStream.eventSource.close();
+  }
+  activeRunStream = null;
+}
+
+function startRunStream(streamId) {
+  closeRunStream();
+
+  const eventSource = new EventSource(`/api/run-test/stream/${encodeURIComponent(streamId)}`);
+  activeRunStream = {
+    streamId,
+    eventSource
+  };
+
+  eventSource.onmessage = (event) => {
+    if (!activeRunStream || activeRunStream.streamId !== streamId) {
+      return;
+    }
+
+    try {
+      const payload = JSON.parse(event.data || "{}");
+      if (payload?.message) {
+        statusBox.textContent = payload.message;
+      }
+    } catch (error) {
+      console.warn("Failed to parse run stream event", error);
+    }
+  };
+
+  eventSource.onerror = () => {
+    if (!activeRunStream || activeRunStream.streamId !== streamId) {
+      return;
+    }
+
+    if (isRunningRequestInFlight) {
+      statusBox.textContent = "Live status disconnected; waiting for final run result...";
+    }
+  };
+}
 
 function getEditorState() {
   return {
@@ -110,7 +159,7 @@ function updateProjectActionState() {
   const isProjectRunning = projectName && runningProjects.has(projectName);
 
   runningProjectHint.textContent = isProjectRunning
-    ? `"${projectName}" is currently running. Wait for it to finish or refresh the running-project cache.`
+    ? `"${projectName}" is currently running. Wait for it to finish.`
     : "";
 
   if (!isRunningRequestInFlight) {
@@ -135,9 +184,6 @@ async function loadRunningProjects() {
 }
 
 async function refreshRunningProjects() {
-  refreshRunningButton.disabled = true;
-  refreshRunningButton.textContent = "Refreshing...";
-
   try {
     const response = await fetch("/api/running-projects/refresh", {
       method: "POST"
@@ -154,9 +200,6 @@ async function refreshRunningProjects() {
     const message = `Cache refresh failed: ${error.message}`;
     statusBox.textContent = message;
     showErrorCard(message);
-  } finally {
-    refreshRunningButton.disabled = false;
-    refreshRunningButton.textContent = "Refresh Running-Project Cache";
   }
 }
 
@@ -320,7 +363,9 @@ runButton.addEventListener("click", async () => {
   isRunningRequestInFlight = true;
   runButton.disabled = true;
   runButton.textContent = "Running...";
-  statusBox.textContent = "Creating branch from main and starting Codex...";
+  statusBox.textContent = "Preparing run...";
+  const streamId = createRunStreamId();
+  startRunStream(streamId);
 
   try {
     const response = await fetch("/api/run-test", {
@@ -328,7 +373,7 @@ runButton.addEventListener("click", async () => {
       headers: {
         "Content-Type": "application/json"
       },
-      body: JSON.stringify({ projectName, prompt, executionMode })
+      body: JSON.stringify({ projectName, prompt, executionMode, streamId })
     });
 
     const result = await parseJsonResponse(response);
@@ -352,12 +397,12 @@ runButton.addEventListener("click", async () => {
   } finally {
     isRunningRequestInFlight = false;
     runButton.textContent = "Run";
+    closeRunStream();
     await loadRunningProjects();
   }
 });
 
 pullButton.addEventListener("click", pullSelectedRepository);
-refreshRunningButton.addEventListener("click", refreshRunningProjects);
 clearStateButton.addEventListener("click", async () => {
   clearEditorState();
   await refreshRunningProjects();

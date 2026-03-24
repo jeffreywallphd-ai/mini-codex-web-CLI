@@ -18,6 +18,44 @@ const PORT = process.env.PORT || 3000;
 const PROJECTS_DIR = path.resolve(__dirname, process.env.PROJECTS_DIR);
 
 const runningProjects = new Set();
+const runEventStreams = new Map();
+
+function getRunStreamConnections(streamId) {
+  if (!streamId) return null;
+  let connections = runEventStreams.get(streamId);
+  if (!connections) {
+    connections = new Set();
+    runEventStreams.set(streamId, connections);
+  }
+  return connections;
+}
+
+function publishRunEvent(streamId, event) {
+  if (!streamId) return;
+  const connections = runEventStreams.get(streamId);
+  if (!connections || connections.size === 0) return;
+
+  const payload = JSON.stringify({
+    ...event,
+    at: new Date().toISOString()
+  });
+
+  for (const connection of connections) {
+    connection.write(`data: ${payload}\n\n`);
+  }
+}
+
+function closeRunStream(streamId) {
+  if (!streamId) return;
+  const connections = runEventStreams.get(streamId);
+  if (!connections) return;
+
+  for (const connection of connections) {
+    connection.end();
+  }
+
+  runEventStreams.delete(streamId);
+}
 
 function getErrorMessage(error) {
   if (!error) return "Unknown error";
@@ -110,8 +148,38 @@ app.post("/api/projects/:projectName/pull", async (req, res) => {
   }
 });
 
+app.get("/api/run-test/stream/:streamId", (req, res) => {
+  const { streamId } = req.params;
+
+  if (!streamId) {
+    return res.status(400).json({ error: "Missing stream id" });
+  }
+
+  res.setHeader("Content-Type", "text/event-stream");
+  res.setHeader("Cache-Control", "no-cache, no-transform");
+  res.setHeader("Connection", "keep-alive");
+  res.flushHeaders?.();
+
+  const connections = getRunStreamConnections(streamId);
+  connections.add(res);
+
+  res.write(`data: ${JSON.stringify({ type: "stream.connected", message: "Connected to live run stream.", at: new Date().toISOString() })}\n\n`);
+
+  req.on("close", () => {
+    connections.delete(res);
+    if (connections.size === 0) {
+      runEventStreams.delete(streamId);
+    }
+  });
+});
+
 app.post("/api/run-test", async (req, res) => {
-  const { projectName, prompt, executionMode = "read" } = req.body;
+  const {
+    projectName,
+    prompt,
+    executionMode = "read",
+    streamId = null
+  } = req.body;
 
   if (!EXECUTION_MODE_OPTIONS[executionMode]) {
     return res.status(400).json({ error: "Invalid execution mode" });
@@ -129,9 +197,15 @@ app.post("/api/run-test", async (req, res) => {
   runningProjects.add(projectName);
 
   try {
+    publishRunEvent(streamId, { type: "branch.creating", message: "Creating branch from base..." });
     const branchInfo = await createCodexBranch(repoPath);
-    const result = await runCodexWithUsage(repoPath, prompt, executionMode);
+    publishRunEvent(streamId, { type: "branch.created", message: `Branch created: ${branchInfo.branchName || "unknown"}.` });
+    const result = await runCodexWithUsage(repoPath, prompt, executionMode, (event) => {
+      publishRunEvent(streamId, event);
+    });
+    publishRunEvent(streamId, { type: "snapshot.collecting", message: "Collecting git snapshot..." });
     const gitSnapshot = await getGitSnapshot(repoPath);
+    publishRunEvent(streamId, { type: "run.persisting", message: "Saving run record..." });
 
     const runId = await saveRun({
       projectName,
@@ -142,6 +216,8 @@ app.post("/api/run-test", async (req, res) => {
       gitStatusFiles: gitSnapshot.files,
       gitDiffMap: gitSnapshot.diffs
     });
+
+    publishRunEvent(streamId, { type: "run.completed", message: `Run completed and saved (#${runId}).` });
 
     res.json({
       runId,
@@ -156,9 +232,11 @@ app.post("/api/run-test", async (req, res) => {
     });
   } catch (err) {
     console.error("run-test failed:", err);
+    publishRunEvent(streamId, { type: "run.failed", message: `Run failed: ${getErrorMessage(err)}` });
     res.status(500).json({ error: getErrorMessage(err) });
   } finally {
     runningProjects.delete(projectName);
+    closeRunStream(streamId);
   }
 });
 

@@ -6,6 +6,7 @@ const {
   buildAugmentedPrompt,
   buildThreadOptions,
   formatUsageSummary,
+  mapThreadEventToProgressEvent,
   normalizePrompt,
   parseChangeSummary
 } = require("./codexRunner");
@@ -67,5 +68,43 @@ DESCRIPTION:
   assert.equal(
     result.changeDescription,
     "- store the generated title\n- render git diff details in the UI"
+  );
+});
+
+test("thread events are mapped into concise progress events", () => {
+  assert.deepEqual(
+    mapThreadEventToProgressEvent({ type: "turn.started" }),
+    {
+      type: "codex.started",
+      message: "Codex started."
+    }
+  );
+
+  assert.deepEqual(
+    mapThreadEventToProgressEvent({
+      type: "item.started",
+      item: {
+        type: "command_execution",
+        command: "npm test"
+      }
+    }),
+    {
+      type: "codex.command",
+      message: "Running command: npm test"
+    }
+  );
+
+  assert.deepEqual(
+    mapThreadEventToProgressEvent({
+      type: "item.completed",
+      item: {
+        type: "file_change",
+        changes: [{ path: "web/app.js", kind: "update" }]
+      }
+    }),
+    {
+      type: "codex.file_change",
+      message: "File changes detected (1 files)."
+    }
   );
 });
