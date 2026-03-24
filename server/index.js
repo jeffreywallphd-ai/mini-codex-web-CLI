@@ -67,6 +67,22 @@ app.get("/api/projects", (req, res) => {
   res.json(dirs);
 });
 
+app.get("/api/running-projects", (req, res) => {
+  res.json({
+    projects: [...runningProjects].map((name) => ({ name }))
+  });
+});
+
+app.post("/api/running-projects/refresh", (req, res) => {
+  const clearedCount = runningProjects.size;
+  runningProjects.clear();
+
+  res.json({
+    clearedCount,
+    projects: []
+  });
+});
+
 app.post("/api/projects/:projectName/pull", async (req, res) => {
   const { projectName } = req.params;
 

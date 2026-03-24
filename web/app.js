@@ -3,6 +3,9 @@ const pullButton = document.getElementById("pullButton");
 const executionModeSelect = document.getElementById("executionModeSelect");
 const promptInput = document.getElementById("promptInput");
 const runButton = document.getElementById("runButton");
+const refreshRunningButton = document.getElementById("refreshRunningButton");
+const clearStateButton = document.getElementById("clearStateButton");
+const runningProjectHint = document.getElementById("runningProjectHint");
 const runsList = document.getElementById("runsList");
 const statusBox = document.getElementById("statusBox");
 const runSearchInput = document.getElementById("runSearchInput");
@@ -12,6 +15,9 @@ const errorCardMessage = document.getElementById("errorCardMessage");
 
 const EDITOR_STATE_KEY = "mini-codex-editor-state";
 let allRuns = [];
+let runningProjects = new Set();
+let isRunningRequestInFlight = false;
+let isPullRequestInFlight = false;
 
 function getEditorState() {
   return {
@@ -23,6 +29,16 @@ function getEditorState() {
 
 function saveEditorState() {
   localStorage.setItem(EDITOR_STATE_KEY, JSON.stringify(getEditorState()));
+}
+
+function clearEditorState() {
+  localStorage.removeItem(EDITOR_STATE_KEY);
+  promptInput.value = "";
+  executionModeSelect.value = "read";
+  if (projectSelect.options.length > 0) {
+    projectSelect.selectedIndex = 0;
+  }
+  updateProjectActionState();
 }
 
 function restoreEditorState(projects) {
@@ -87,6 +103,61 @@ function buildErrorMessage(context, result, fallback) {
   }
 
   return `${context}: ${fallback}`;
+}
+
+function updateProjectActionState() {
+  const projectName = projectSelect.value;
+  const isProjectRunning = projectName && runningProjects.has(projectName);
+
+  runningProjectHint.textContent = isProjectRunning
+    ? `"${projectName}" is currently running. Wait for it to finish or refresh the running-project cache.`
+    : "";
+
+  if (!isRunningRequestInFlight) {
+    runButton.disabled = !projectName || isProjectRunning;
+  }
+
+  if (!isPullRequestInFlight) {
+    pullButton.disabled = !projectName || isProjectRunning;
+  }
+}
+
+async function loadRunningProjects() {
+  const response = await fetch("/api/running-projects");
+  const result = await parseJsonResponse(response);
+
+  if (!response.ok) {
+    throw new Error(buildErrorMessage("Could not load running project cache", result, "Request failed"));
+  }
+
+  runningProjects = new Set((result.projects || []).map((entry) => entry.name));
+  updateProjectActionState();
+}
+
+async function refreshRunningProjects() {
+  refreshRunningButton.disabled = true;
+  refreshRunningButton.textContent = "Refreshing...";
+
+  try {
+    const response = await fetch("/api/running-projects/refresh", {
+      method: "POST"
+    });
+    const result = await parseJsonResponse(response);
+
+    if (!response.ok) {
+      throw new Error(buildErrorMessage("Could not refresh running-project cache", result, "Request failed"));
+    }
+
+    statusBox.textContent = `Refreshed running-project cache. Cleared ${result.clearedCount || 0} stale entr${result.clearedCount === 1 ? "y" : "ies"}.`;
+    await loadRunningProjects();
+  } catch (error) {
+    const message = `Cache refresh failed: ${error.message}`;
+    statusBox.textContent = message;
+    showErrorCard(message);
+  } finally {
+    refreshRunningButton.disabled = false;
+    refreshRunningButton.textContent = "Refresh Running-Project Cache";
+  }
 }
 
 function renderStatus(run) {
@@ -179,6 +250,7 @@ async function loadProjects() {
   }
 
   restoreEditorState(projects);
+  updateProjectActionState();
 }
 
 async function loadRuns() {
@@ -203,6 +275,7 @@ async function pullSelectedRepository() {
 
   hideErrorCard();
   saveEditorState();
+  isPullRequestInFlight = true;
   pullButton.disabled = true;
   runButton.disabled = true;
   pullButton.textContent = "Pulling...";
@@ -229,9 +302,9 @@ async function pullSelectedRepository() {
     statusBox.textContent = message;
     showErrorCard(message);
   } finally {
-    pullButton.disabled = false;
-    runButton.disabled = false;
+    isPullRequestInFlight = false;
     pullButton.textContent = "Git Pull Selected Repo";
+    await loadRunningProjects();
   }
 }
 
@@ -240,10 +313,11 @@ runButton.addEventListener("click", async () => {
   const prompt = promptInput.value.trim();
   const executionMode = executionModeSelect.value;
 
-  if (!projectName || !prompt) return;
+  if (!projectName || !prompt || runButton.disabled) return;
 
   hideErrorCard();
   saveEditorState();
+  isRunningRequestInFlight = true;
   runButton.disabled = true;
   runButton.textContent = "Running...";
   statusBox.textContent = "Creating branch from main and starting Codex...";
@@ -276,23 +350,31 @@ runButton.addEventListener("click", async () => {
     statusBox.textContent = message;
     showErrorCard(message);
   } finally {
-    runButton.disabled = false;
+    isRunningRequestInFlight = false;
     runButton.textContent = "Run";
+    await loadRunningProjects();
   }
 });
 
 pullButton.addEventListener("click", pullSelectedRepository);
+refreshRunningButton.addEventListener("click", refreshRunningProjects);
+clearStateButton.addEventListener("click", async () => {
+  clearEditorState();
+  await refreshRunningProjects();
+  statusBox.textContent = "Saved form state cleared and running-project cache refreshed.";
+});
 
 [projectSelect, executionModeSelect, promptInput].forEach((element) => {
   element.addEventListener("change", saveEditorState);
   element.addEventListener("input", saveEditorState);
 });
 
+projectSelect.addEventListener("change", updateProjectActionState);
 runSearchInput.addEventListener("input", filterRuns);
 
 (async () => {
   try {
-    await Promise.all([loadProjects(), loadRuns()]);
+    await Promise.all([loadProjects(), loadRuns(), loadRunningProjects()]);
   } catch (error) {
     const message = `Initial page load failed: ${error.message}`;
     statusBox.textContent = message;

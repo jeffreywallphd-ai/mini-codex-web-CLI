@@ -320,3 +320,13 @@ details pre {
   border: none;
   padding: 0;
 }
+
+.inline-hint {
+  margin: -4px 0 12px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.page-actions button {
+  margin-bottom: 0;
+}
