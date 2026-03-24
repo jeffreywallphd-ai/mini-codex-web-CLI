@@ -9,7 +9,7 @@ const EXECUTION_MODE_OPTIONS = {
 const CHANGESET_MARKER_START = "<<<CODEX_CHANGESET_START>>>";
 const CHANGESET_MARKER_END = "<<<CODEX_CHANGESET_END>>>";
 const PROMPT_SUFFIX = `
-
+Please follow the general guidance provided in general-prompt-guidance.md in the docs folder. 
 Before you finish, append a machine-readable summary block to the very end of your response using exactly this format:
 ${CHANGESET_MARKER_START}
 TITLE: <short title, 80 chars or fewer>
@@ -103,6 +103,9 @@ function parseChangeSummary(text) {
 async function runCodexWithSdk(repoPath, prompt, executionMode = "read") {
   const { Codex } = await loadCodexSdk();
   const codex = new Codex();
+
+  console.log(buildThreadOptions(repoPath, executionMode));
+
   const thread = codex.startThread(buildThreadOptions(repoPath, executionMode));
   const result = await thread.run(buildAugmentedPrompt(prompt));
   const summary = parseChangeSummary(result.finalResponse || "");
