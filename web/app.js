@@ -3,7 +3,9 @@ const pullButton = document.getElementById("pullButton");
 const executionModeSelect = document.getElementById("executionModeSelect");
 const promptInput = document.getElementById("promptInput");
 const runButton = document.getElementById("runButton");
+const pasteClipboardButton = document.getElementById("pasteClipboardButton");
 const clearStateButton = document.getElementById("clearStateButton");
+const runTimer = document.getElementById("runTimer");
 const runningProjectHint = document.getElementById("runningProjectHint");
 const runsList = document.getElementById("runsList");
 const statusBox = document.getElementById("statusBox");
@@ -18,6 +20,77 @@ let runningProjects = new Set();
 let isRunningRequestInFlight = false;
 let isPullRequestInFlight = false;
 let activeRunStream = null;
+let activeRunStartedAt = null;
+let runTimerInterval = null;
+
+function escapeHtml(text) {
+  return String(text ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+}
+
+function formatElapsed(ms) {
+  const totalSeconds = Math.max(0, Math.floor(ms / 1000));
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+
+  if (hours > 0) {
+    return `${hours}:${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
+  }
+  return `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
+}
+
+function renderRunTimer() {
+  if (!activeRunStartedAt) {
+    runTimer.textContent = "";
+    runTimer.classList.add("hidden");
+    return;
+  }
+
+  runTimer.textContent = `Running for ${formatElapsed(Date.now() - activeRunStartedAt)}`;
+  runTimer.classList.remove("hidden");
+}
+
+function startRunTimer() {
+  if (!activeRunStartedAt) return;
+  renderRunTimer();
+  if (runTimerInterval) {
+    clearInterval(runTimerInterval);
+  }
+  runTimerInterval = setInterval(renderRunTimer, 1000);
+}
+
+function stopRunTimer() {
+  activeRunStartedAt = null;
+  if (runTimerInterval) {
+    clearInterval(runTimerInterval);
+    runTimerInterval = null;
+  }
+  renderRunTimer();
+}
+
+function announceRunComplete() {
+  const supportsTts = typeof window !== "undefined"
+    && typeof window.speechSynthesis !== "undefined"
+    && typeof window.SpeechSynthesisUtterance !== "undefined";
+  const looksLikeChrome = typeof navigator !== "undefined"
+    && /Chrome/i.test(navigator.userAgent || "")
+    && !/Edg|OPR|Brave/i.test(navigator.userAgent || "");
+
+  if (!supportsTts || !looksLikeChrome) {
+    return;
+  }
+
+  const speak = () => {
+    const utterance = new SpeechSynthesisUtterance("Your current run is complete");
+    window.speechSynthesis.speak(utterance);
+  };
+
+  speak();
+  window.setTimeout(speak, 2000);
+}
 
 function createRunStreamId() {
   if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
@@ -157,13 +230,25 @@ function buildErrorMessage(context, result, fallback) {
 function updateProjectActionState() {
   const projectName = projectSelect.value;
   const isProjectRunning = projectName && runningProjects.has(projectName);
+  const isRunActive = isRunningRequestInFlight || isProjectRunning;
 
   runningProjectHint.textContent = isProjectRunning
     ? `"${projectName}" is currently running. Wait for it to finish.`
     : "";
 
-  if (!isRunningRequestInFlight) {
-    runButton.disabled = !projectName || isProjectRunning;
+  runButton.disabled = !projectName || isRunActive;
+  runButton.textContent = isRunActive ? "Running..." : "Run";
+  runButton.classList.toggle("running-button", isRunActive);
+
+  if (isRunActive) {
+    if (!activeRunStartedAt) {
+      activeRunStartedAt = Date.now();
+      startRunTimer();
+    } else {
+      renderRunTimer();
+    }
+  } else {
+    stopRunTimer();
   }
 
   if (!isPullRequestInFlight) {
@@ -245,10 +330,17 @@ function renderRunsList(runs) {
     const li = document.createElement("li");
     const button = document.createElement("button");
     const promptPreview = `${(run.prompt || "").replace(/\s+/g, " ").slice(0, 120)}${(run.prompt || "").length > 120 ? "..." : ""}`;
-    const mergeBadge = run.merged_at ? " · merged" : "";
+    const mergeBadgeHtml = run.merged_at
+      ? '<span class="merge-badge merge-badge--merged">merged</span>'
+      : '<span class="merge-badge merge-badge--not-merged">not merged</span>';
     const executionMode = run.execution_mode === "write" ? "Write Mode" : "Read Mode";
     const title = run.change_title ? `\nTitle: ${run.change_title}` : "";
-    button.textContent = `#${run.id} · ${run.project_name} · ${executionMode} · ${run.branch_name || "(no branch)"}${mergeBadge}${title}\n${promptPreview || "(no prompt)"}`;
+    button.classList.toggle("run-item-unmerged", !run.merged_at);
+    button.innerHTML = `
+      <div>#${escapeHtml(run.id)} · ${escapeHtml(run.project_name)} · ${escapeHtml(executionMode)} · ${escapeHtml(run.branch_name || "(no branch)")} · ${mergeBadgeHtml}</div>
+      <div>${escapeHtml(title ? title.trim() : "")}</div>
+      <div>${escapeHtml(promptPreview || "(no prompt)")}</div>
+    `;
     button.onclick = () => {
       saveEditorState();
       window.location.href = `/run-details.html?id=${run.id}`;
@@ -351,6 +443,19 @@ async function pullSelectedRepository() {
   }
 }
 
+async function pastePromptFromClipboard() {
+  try {
+    const clipboardText = await navigator.clipboard.readText();
+    promptInput.value = clipboardText;
+    saveEditorState();
+    statusBox.textContent = "Prompt replaced with clipboard contents.";
+  } catch (error) {
+    const message = `Clipboard paste failed: ${error.message}`;
+    statusBox.textContent = message;
+    showErrorCard(message);
+  }
+}
+
 runButton.addEventListener("click", async () => {
   const projectName = projectSelect.value;
   const prompt = promptInput.value.trim();
@@ -361,8 +466,9 @@ runButton.addEventListener("click", async () => {
   hideErrorCard();
   saveEditorState();
   isRunningRequestInFlight = true;
-  runButton.disabled = true;
-  runButton.textContent = "Running...";
+  activeRunStartedAt = Date.now();
+  startRunTimer();
+  updateProjectActionState();
   statusBox.textContent = "Preparing run...";
   const streamId = createRunStreamId();
   startRunStream(streamId);
@@ -396,13 +502,15 @@ runButton.addEventListener("click", async () => {
     showErrorCard(message);
   } finally {
     isRunningRequestInFlight = false;
-    runButton.textContent = "Run";
     closeRunStream();
+    stopRunTimer();
+    announceRunComplete();
     await loadRunningProjects();
   }
 });
 
 pullButton.addEventListener("click", pullSelectedRepository);
+pasteClipboardButton.addEventListener("click", pastePromptFromClipboard);
 clearStateButton.addEventListener("click", async () => {
   clearEditorState();
   await refreshRunningProjects();
