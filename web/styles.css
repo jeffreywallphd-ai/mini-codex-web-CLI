@@ -5,6 +5,8 @@
   --text: #e6e6e6;
   --muted: #a0a4ab;
   --accent: #4f8cff;
+  --running: #ffb3b3;
+  --running-text: #4a0f0f;
   --border: #2a2f38;
   --success: #2ecc71;
   --error: #ff5c5c;
@@ -87,6 +89,11 @@ button:disabled {
   border: 1px solid var(--border);
 }
 
+.running-button {
+  background: var(--running);
+  color: var(--running-text);
+}
+
 .panel,
 #statusBox,
 #creditsBox,
@@ -119,6 +126,12 @@ pre {
   align-items: center;
   justify-content: space-between;
   gap: 10px;
+}
+
+.run-timer {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
 }
 
 #statusBox,
@@ -158,6 +171,24 @@ li button {
 
 li button:hover {
   background: #272c35;
+}
+
+.merge-badge--merged {
+  color: var(--success);
+}
+
+.merge-badge--not-merged {
+  color: var(--error);
+}
+
+.run-item-unmerged {
+  background: #ffffff;
+  color: #000000;
+  border-color: #d2d5db;
+}
+
+.run-item-unmerged:hover {
+  background: #f4f5f8;
 }
 
 details {

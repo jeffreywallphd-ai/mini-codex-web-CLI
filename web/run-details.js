@@ -1,5 +1,6 @@
 const backButton = document.getElementById("backButton");
 const mergeButton = document.getElementById("mergeButton");
+const pullRepoButton = document.getElementById("pullRepoButton");
 const promptDetail = document.getElementById("promptDetail");
 const gitStatusDetail = document.getElementById("gitStatusDetail");
 const commandDetail = document.getElementById("commandDetail");
@@ -15,6 +16,7 @@ const diffModalBody = document.getElementById("diffModalBody");
 const closeDiffButton = document.getElementById("closeDiffButton");
 
 let activeRun = null;
+let isPullingRepo = false;
 
 function getRunId() {
   const params = new URLSearchParams(window.location.search);
@@ -111,6 +113,7 @@ function renderRun(run) {
   ].join("\n");
 
   mergeButton.disabled = Boolean(run.merged_at);
+  pullRepoButton.disabled = isPullingRepo || !run.project_name;
 }
 
 function renderGitFiles(files) {
@@ -226,6 +229,40 @@ mergeButton.addEventListener("click", async () => {
   } catch (error) {
     mergeButton.disabled = false;
     renderStatus({ error: error.message });
+  }
+});
+
+pullRepoButton.addEventListener("click", async () => {
+  if (!activeRun || !activeRun.project_name || isPullingRepo) return;
+
+  isPullingRepo = true;
+  pullRepoButton.disabled = true;
+  pullRepoButton.textContent = "Pulling...";
+  renderStatus(activeRun, `Pulling latest changes for ${activeRun.project_name}...`);
+
+  try {
+    const response = await fetch(`/api/projects/${encodeURIComponent(activeRun.project_name)}/pull`, {
+      method: "POST"
+    });
+    const result = await response.json();
+
+    if (!response.ok) {
+      renderStatus({ error: result.error || "Git pull failed." });
+      return;
+    }
+
+    const summary = (result.stdout || "Git pull finished.").trim().split("\n").find(Boolean);
+    const branchStatus = (result.gitStatus || "").split("\n").find(Boolean);
+    renderStatus(activeRun, [summary, branchStatus].filter(Boolean).join(" "));
+    await loadRun();
+  } catch (error) {
+    renderStatus({ error: `Git pull failed: ${error.message}` });
+  } finally {
+    isPullingRepo = false;
+    pullRepoButton.textContent = "Git Pull Repo";
+    if (activeRun) {
+      pullRepoButton.disabled = false;
+    }
   }
 });
 
