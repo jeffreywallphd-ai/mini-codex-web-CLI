@@ -829,6 +829,14 @@ function createAutomationStartRouter(deps = {}) {
           });
         }
 
+        if (plan?.queueStatus?.code === "target_ineligible" || plan?.queueStatus?.code === "empty_queue") {
+          return res.status(422).json({
+            error: plan.queueStatus.message,
+            errorType: "target_ineligible",
+            queueStatus: plan.queueStatus
+          });
+        }
+
         if (plan?.queueStatus?.code === "validation_failed") {
           return res.status(422).json({
             error: plan.queueStatus.message,
