@@ -292,6 +292,18 @@ test("feature page automation controls include a single-bundle selector loaded f
   assert.match(source, /createAutomationContextBundleSelector\(\{\s*idPrefix:\s*`story-\$\{story\.id\}`,\s*automationLabel:\s*"story"/m);
 });
 
+test("automation bundle selector surfaces non-blocking project-affinity mismatch warnings", () => {
+  const source = readFeaturesScript();
+
+  assert.match(source, /function normalizeProjectAffinityValue\(value\)/);
+  assert.match(source, /function resolveContextBundleProjectAffinityWarning\(bundleProjectName,\s*selectedProjectName\)/);
+  assert.match(source, /Warning: bundle project affinity is/);
+  assert.match(source, /warning\.className = "inline-validation inline-validation--warning hidden";/);
+  assert.match(source, /const selectedProjectName = String\(automationScope\.projectName \|\| ""\)\.trim\(\);/);
+  assert.match(source, /select\.addEventListener\("change", refreshAffinityWarning\);/);
+  assert.match(source, /refreshAffinityWarning\(\);/);
+});
+
 test("feature page syncs open cards with active queue story and auto-collapses completed nodes", () => {
   const source = readFeaturesScript();
 

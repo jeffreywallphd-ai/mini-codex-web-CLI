@@ -49,6 +49,17 @@ test("index page renders selected context bundle summary metadata", () => {
   assert.match(source, /contextBundleSelect\.addEventListener\("change", renderContextBundleSelectionSummary\);/);
 });
 
+test("index page shows a non-blocking project-affinity warning when selected bundle metadata mismatches current project", () => {
+  const source = readAppScript();
+
+  assert.match(source, /function normalizeProjectAffinityValue\(value\)/);
+  assert.match(source, /function resolveContextBundleProjectAffinityWarning\(bundleProjectName,\s*selectedProjectName\)/);
+  assert.match(source, /Warning: bundle project affinity is/);
+  assert.match(source, /const selectedProjectName = String\(projectSelect\.value \|\| ""\)\.trim\(\);/);
+  assert.match(source, /buildContextBundleSelectionGuidance\(selectedBundle\),\s*affinityWarning/);
+  assert.match(source, /projectSelect\.addEventListener\("change", async \(\) => \{\s*[\s\S]*renderContextBundleSelectionSummary\(\);/m);
+});
+
 test("recent run cards show concise context bundle traceability metadata", () => {
   const source = readAppScript();
 

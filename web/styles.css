@@ -459,6 +459,12 @@ details pre {
   font-size: 13px;
 }
 
+.inline-validation--warning {
+  color: #ffe6b0;
+  background: rgba(255, 179, 0, 0.1);
+  border-color: rgba(255, 179, 0, 0.35);
+}
+
 .story-automation-checkbox {
   display: flex;
   align-items: center;

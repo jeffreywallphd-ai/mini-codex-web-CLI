@@ -402,6 +402,33 @@ function formatContextBundleOption(bundle) {
   return meta ? `${title} - ${meta}` : title;
 }
 
+function normalizeProjectAffinityValue(value) {
+  const normalized = String(value || "").trim().toLowerCase().replace(/\\/g, "/").replace(/\.git$/, "");
+  if (!normalized) {
+    return null;
+  }
+
+  const segments = normalized.split("/").filter(Boolean);
+  return {
+    full: normalized,
+    leaf: segments[segments.length - 1] || normalized
+  };
+}
+
+function resolveContextBundleProjectAffinityWarning(bundleProjectName, selectedProjectName) {
+  const bundleAffinity = normalizeProjectAffinityValue(bundleProjectName);
+  const selectedProjectAffinity = normalizeProjectAffinityValue(selectedProjectName);
+  if (!bundleAffinity || !selectedProjectAffinity) {
+    return "";
+  }
+
+  if (bundleAffinity.full === selectedProjectAffinity.full || bundleAffinity.leaf === selectedProjectAffinity.leaf) {
+    return "";
+  }
+
+  return `Warning: bundle project affinity is "${bundleProjectName}", but current project is "${selectedProjectName}". You can still run.`;
+}
+
 function buildContextBundleSelectionGuidance(bundle) {
   const hasSummary = Boolean(String(bundle?.summary || "").trim());
   const hasIntendedUse = Boolean(String(bundle?.intended_use || "").trim());
@@ -443,9 +470,14 @@ function renderContextBundleSelectionSummary() {
   const summary = String(selectedBundle.summary || "").trim();
   const intendedUse = String(selectedBundle.intended_use || "").trim();
   const projectAffinity = String(selectedBundle.project_name || "").trim();
+  const selectedProjectName = String(projectSelect.value || "").trim();
+  const affinityWarning = resolveContextBundleProjectAffinityWarning(projectAffinity, selectedProjectName);
 
   contextBundleSummaryTitle.textContent = title;
-  contextBundleSummaryGuidance.textContent = buildContextBundleSelectionGuidance(selectedBundle);
+  contextBundleSummaryGuidance.textContent = [
+    buildContextBundleSelectionGuidance(selectedBundle),
+    affinityWarning
+  ].filter(Boolean).join(" ");
   contextBundleSummaryMeta.textContent = [
     `Summary: ${summary || "(none)"}`,
     `Intended use: ${intendedUse || "(none)"}`,
@@ -1010,6 +1042,7 @@ contextBundleSelect.addEventListener("change", renderContextBundleSelectionSumma
 
 projectSelect.addEventListener("change", async () => {
   hideErrorCard();
+  renderContextBundleSelectionSummary();
   await loadBranchesForSelectedProject();
   updateProjectActionState();
 });
