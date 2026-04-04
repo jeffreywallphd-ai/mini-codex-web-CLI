@@ -75,6 +75,17 @@ button {
   font-weight: 600;
 }
 
+.nav-link-button {
+  display: inline-block;
+  width: auto;
+  margin-bottom: 0;
+  text-decoration: none;
+  padding: 10px 12px;
+  color: var(--text);
+  border-radius: 8px;
+  font-weight: 600;
+}
+
 button:hover {
   opacity: 0.92;
 }
@@ -361,6 +372,24 @@ details pre {
   textarea {
     min-height: 150px;
   }
+
+  .search-row,
+  .story-sync-row,
+  .draft-actions {
+    flex-direction: column;
+  }
+
+  .search-row button,
+  .draft-actions button {
+    width: 100%;
+  }
+
+  .hier-card--epic,
+  .hier-card--epic-draft,
+  .hier-card--story,
+  .hier-card--story-draft {
+    margin-left: 0;
+  }
 }
 
 
@@ -388,5 +417,125 @@ details pre {
 }
 
 .page-actions button {
+  margin-bottom: 0;
+}
+
+.search-row {
+  display: flex;
+  gap: 8px;
+  align-items: stretch;
+}
+
+.search-row input {
+  margin-bottom: 0;
+}
+
+.search-row button {
+  width: auto;
+  margin-bottom: 0;
+}
+
+.hier-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.hier-card {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--panel);
+}
+
+.hier-card__header {
+  padding: 8px;
+}
+
+.hier-card__toggle {
+  margin: 0;
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  background: var(--panel-alt);
+  color: var(--text);
+  border: 1px solid var(--border);
+}
+
+.hier-card__toggle.is-open {
+  border-color: var(--accent);
+}
+
+.hier-card__content {
+  padding: 10px;
+}
+
+.hier-card__content label {
+  margin-top: 4px;
+}
+
+.hier-card--feature {
+  background: #171b22;
+}
+
+.hier-card--epic {
+  background: #1c212b;
+}
+
+.hier-card--story {
+  background: #202733;
+}
+
+.hier-card--epic,
+.hier-card--epic-draft {
+  margin-left: 12px;
+}
+
+.hier-card--story,
+.hier-card--story-draft {
+  margin-left: 24px;
+}
+
+.status-pill {
+  border-radius: 999px;
+  padding: 4px 8px;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.status-pill--complete {
+  background: rgba(46, 204, 113, 0.18);
+  color: #aef0c9;
+}
+
+.status-pill--incomplete {
+  background: rgba(255, 92, 92, 0.18);
+  color: #ffc7c7;
+}
+
+.draft-actions {
+  display: flex;
+  gap: 8px;
+  margin: 10px 0;
+}
+
+.draft-actions button {
+  margin-bottom: 0;
+}
+
+.card-description,
+.empty-card-copy {
+  margin-top: 0;
+  color: var(--muted);
+}
+
+.story-sync-row {
+  display: flex;
+  gap: 8px;
+}
+
+.story-run-select {
   margin-bottom: 0;
 }

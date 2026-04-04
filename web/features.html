@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Feature Management - Codex LAN</title>
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <main>
+    <div class="page-actions">
+      <button id="backButton" class="secondary-button" type="button">Back to Editor</button>
+    </div>
+
+    <h1>Feature Management</h1>
+    <p class="page-copy">Create and track features, epics, and stories.</p>
+
+    <section class="panel stack-gap">
+      <h2>Create New Feature</h2>
+      <div id="createStatusBox">Ready.</div>
+
+      <article class="hier-card hier-card--feature-draft">
+        <header class="hier-card__header">
+          <strong>Feature Draft</strong>
+        </header>
+        <div class="hier-card__content">
+          <label for="featureNameInput">Feature Name</label>
+          <input id="featureNameInput" type="text" placeholder="Feature name" />
+          <label for="featureDescriptionInput">Feature Description</label>
+          <textarea id="featureDescriptionInput" rows="3" placeholder="Feature description"></textarea>
+
+          <div class="draft-actions">
+            <button id="addEpicButton" class="secondary-button" type="button">Add Epic</button>
+            <button id="saveFeatureButton" type="button">Save Feature</button>
+          </div>
+
+          <div id="epicDraftsContainer" class="hier-stack"></div>
+        </div>
+      </article>
+    </section>
+
+    <section class="panel stack-gap">
+      <h2>Not Yet Implemented</h2>
+      <div class="search-row">
+        <input id="incompleteSearchInput" type="text" placeholder="Search features, epics, and stories..." />
+        <button id="clearIncompleteSearchButton" class="secondary-button" type="button">Clear Search</button>
+      </div>
+      <div id="incompleteListContainer" class="hier-stack"></div>
+    </section>
+
+    <section class="panel stack-gap">
+      <h2>Completed Features</h2>
+      <div class="search-row">
+        <input id="completeSearchInput" type="text" placeholder="Search features, epics, and stories..." />
+        <button id="clearCompleteSearchButton" class="secondary-button" type="button">Clear Search</button>
+      </div>
+      <div id="completeListContainer" class="hier-stack"></div>
+    </section>
+  </main>
+
+  <script src="/features.js"></script>
+</body>
+</html>

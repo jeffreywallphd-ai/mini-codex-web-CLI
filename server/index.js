@@ -6,7 +6,17 @@ const path = require("path");
 const fs = require("fs");
 
 const { runCodexWithUsage, EXECUTION_MODE_OPTIONS } = require("./codexRunner");
-const { saveRun, getRuns, getRunById, updateRunMerge, dbReady } = require("./db");
+const {
+  saveRun,
+  getRuns,
+  getRunById,
+  updateRunMerge,
+  createFeatureTree,
+  getFeaturesTree,
+  syncStoryCompletionFromRun,
+  getCompletionEligibleRuns,
+  dbReady
+} = require("./db");
 const { createCodexBranch, getGitSnapshot, mergeBranch, pullRepository } = require("./git");
 
 const app = express();
@@ -68,6 +78,13 @@ function getErrorMessage(error) {
   }
 
   return String(error);
+}
+
+function normalizeCompletionStatus(status) {
+  if (status === "complete" || status === "incomplete") {
+    return status;
+  }
+  return "unknown";
 }
 
 function isValidProject(name) {
@@ -272,6 +289,81 @@ app.get("/api/runs/:id", async (req, res) => {
   const run = hydrateRun(await getRunById(req.params.id));
   if (!run) return res.status(404).json({ error: "Not found" });
   res.json(run);
+});
+
+app.get("/api/features/tree", async (req, res) => {
+  try {
+    const features = await getFeaturesTree();
+    res.json(features);
+  } catch (error) {
+    res.status(500).json({ error: getErrorMessage(error) });
+  }
+});
+
+app.post("/api/features/tree", async (req, res) => {
+  const draft = req.body || {};
+
+  if (typeof draft.name !== "string" || !draft.name.trim()) {
+    return res.status(400).json({ error: "Feature name is required." });
+  }
+
+  const epics = Array.isArray(draft.epics) ? draft.epics : [];
+  for (const epic of epics) {
+    if (typeof epic?.name !== "string" || !epic.name.trim()) {
+      return res.status(400).json({ error: "Each epic requires a name." });
+    }
+
+    const stories = Array.isArray(epic.stories) ? epic.stories : [];
+    for (const story of stories) {
+      if (typeof story?.name !== "string" || !story.name.trim()) {
+        return res.status(400).json({ error: "Each story requires a name." });
+      }
+    }
+  }
+
+  try {
+    await createFeatureTree(draft);
+    const features = await getFeaturesTree();
+    res.status(201).json(features);
+  } catch (error) {
+    res.status(400).json({ error: getErrorMessage(error) });
+  }
+});
+
+app.get("/api/features/completion-runs", async (req, res) => {
+  try {
+    const runs = await getCompletionEligibleRuns();
+    res.json(runs.map((run) => ({
+      ...run,
+      completion_status: normalizeCompletionStatus(run.completion_status)
+    })));
+  } catch (error) {
+    res.status(500).json({ error: getErrorMessage(error) });
+  }
+});
+
+app.post("/api/stories/:storyId/sync-completion", async (req, res) => {
+  const storyId = Number.parseInt(req.params.storyId, 10);
+  const runId = Number.parseInt(req.body?.runId, 10);
+
+  if (!Number.isInteger(storyId) || storyId <= 0) {
+    return res.status(400).json({ error: "Invalid story id." });
+  }
+
+  if (!Number.isInteger(runId) || runId <= 0) {
+    return res.status(400).json({ error: "Invalid run id." });
+  }
+
+  try {
+    const result = await syncStoryCompletionFromRun(storyId, runId);
+    res.json(result);
+  } catch (error) {
+    const message = getErrorMessage(error);
+    if (message.includes("not found")) {
+      return res.status(404).json({ error: message });
+    }
+    res.status(400).json({ error: message });
+  }
 });
 
 app.get("/api/runs/:id/diff", async (req, res) => {
