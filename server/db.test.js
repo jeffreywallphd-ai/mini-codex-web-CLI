@@ -1334,7 +1334,7 @@ test("context bundle schema migration creates bundle foundation tables", async (
 
   const schemaVersion = await getDbRow("SELECT version FROM schema_version LIMIT 1");
   assert.ok(Number.isInteger(schemaVersion?.version));
-  assert.ok(schemaVersion.version >= 17);
+  assert.ok(schemaVersion.version >= 18);
 
   const bundleTable = await getDbRow(
     "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'context_bundles'"
@@ -1371,7 +1371,11 @@ test("context bundles support multiple bundles with deterministic ordered parts"
     const bundleA = await createContextBundle({
       title: `Bundle A ${stamp}`,
       description: "Bundle A description",
-      status: "draft"
+      status: "draft",
+      intendedUse: "story_implementation",
+      tags: ["backend", "api"],
+      projectName: "bundle-project-a",
+      summary: "Bundle A summary"
     });
     createdBundleIds.push(bundleA.id);
 
@@ -1416,6 +1420,10 @@ test("context bundles support multiple bundles with deterministic ordered parts"
 
     const loadedA = await getContextBundleById(bundleA.id);
     assert.equal(loadedA.id, bundleA.id);
+    assert.equal(loadedA.intended_use, "story_implementation");
+    assert.deepEqual(loadedA.tags, ["backend", "api"]);
+    assert.equal(loadedA.project_name, "bundle-project-a");
+    assert.equal(loadedA.summary, "Bundle A summary");
     assert.equal(loadedA.parts.length, 2);
     assert.deepEqual(
       loadedA.parts.map((part) => part.position),
@@ -1466,15 +1474,34 @@ test("context bundle and part models support create update and delete", async ()
       title: "Bundle CRUD Updated",
       description: "Updated description",
       status: "active",
+      intendedUse: "bug_fixes",
+      tags: ["db", "migration", "db"],
+      projectName: "bundle-crud-project",
+      summary: "Updated bundle metadata summary.",
       tokenEstimate: 256,
       isActive: 1,
       lastUsedAt: "2026-04-04T12:34:56.000Z"
     });
     assert.equal(updatedBundle.title, "Bundle CRUD Updated");
     assert.equal(updatedBundle.status, "active");
+    assert.equal(updatedBundle.intended_use, "bug_fixes");
+    assert.deepEqual(updatedBundle.tags, ["db", "migration"]);
+    assert.equal(updatedBundle.project_name, "bundle-crud-project");
+    assert.equal(updatedBundle.summary, "Updated bundle metadata summary.");
     assert.equal(updatedBundle.token_estimate, 256);
     assert.equal(updatedBundle.is_active, 1);
     assert.equal(updatedBundle.last_used_at, "2026-04-04T12:34:56.000Z");
+
+    const clearedMetadataBundle = await updateContextBundle(bundleId, {
+      intendedUse: "",
+      tags: [],
+      projectName: "",
+      summary: ""
+    });
+    assert.equal(clearedMetadataBundle.intended_use, null);
+    assert.deepEqual(clearedMetadataBundle.tags, []);
+    assert.equal(clearedMetadataBundle.project_name, null);
+    assert.equal(clearedMetadataBundle.summary, null);
 
     const createdPart = await createContextBundlePart({
       bundleId,

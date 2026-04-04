@@ -33,7 +33,7 @@ The app is designed for personal LAN use, not for public internet exposure or mu
 - Shared queue-position ordering utilities reused by runner/API orchestration (`server/automationQueuePosition.js`)
 - Shared automated story run pipeline that reuses manual run creation/execution persistence (`server/automatedStoryRunPipeline.js`)
 - Automated run-origin linkage persisted on each run (`automation_origin_type`, `automation_origin_id`, `automation_run_id`) for feature/epic/story traceability
-- Context bundle schema + model persistence with ordered multi-part composition (`context_bundles`, `context_bundle_parts`)
+- Context bundle schema + model persistence with ordered multi-part composition (`context_bundles`, `context_bundle_parts`) and reusable metadata (`intended_use`, `tags`, `project_name`, `summary`, `updated_at`)
 - Feature card automation control in **Not Yet Implemented** for launching feature-wide automation (`Complete with Automation`)
 - Feature/epic/story automation summaries include concise stop reasons for early stops (`execution_failed`, `story_incomplete`, `manual_stop`) when backend state provides one
 - SQLite storage with no external database
@@ -128,7 +128,7 @@ http://192.168.x.x:3000
 
 Context bundles are persisted with a parent-child data model in SQLite:
 
-- `context_bundles` stores bundle-level metadata (`title`, `description`, `status`, timestamps, and nullable extensibility fields like `token_estimate`, `is_active`, `last_used_at`).
+- `context_bundles` stores bundle-level metadata (`title`, `description`, `status`) plus optional reuse/selection metadata (`intended_use`, `tags`, `project_name`, `summary`) and freshness timestamps (`updated_at`, `created_at`), with nullable extensibility fields (`token_estimate`, `is_active`, `last_used_at`).
 - `context_bundle_parts` stores ordered bundle parts linked by `bundle_id` with explicit `position`, semantic fields (`part_type`, `title`, `content`), optional authoring metadata (`instructions`, `notes`), and inclusion flags (`include_in_compiled`, `include_in_preview`).
 - `part_type` is a controlled server-validated value (centralized in `server/contextBundlePartTypes.js`) with this canonical set:
   - `repository_context`
@@ -143,6 +143,13 @@ Context bundles are persisted with a parent-child data model in SQLite:
 - Bundle part records include `part_type_label` in model responses so UI surfaces can display the selected type with a stable human-readable label.
 - Ordering is deterministic and explicit (`position`) rather than inferred from creation order.
 - Bundle and part CRUD persistence is implemented in `server/db.js` with migration-backed schema evolution (no reset required).
+- Bundle metadata authoring UI is available at `/context-bundles.html` and supports create/edit/delete with metadata display for `intended_use`, `tags`, `project_name`, `summary`, and `updated_at`.
+- Context bundle API endpoints:
+  - `GET /api/context-bundles` (supports `includeParts=false`)
+  - `POST /api/context-bundles`
+  - `GET /api/context-bundles/:bundleId` (supports `includeParts=false`)
+  - `PATCH /api/context-bundles/:bundleId`
+  - `DELETE /api/context-bundles/:bundleId`
 
 ## Automation Queue Planning
 
