@@ -50,7 +50,7 @@ test("story automation button starts story-scoped automation endpoint and queues
 test("feature card automation UI keeps existing card copy and eligibility affordance", () => {
   const source = readFeaturesScript();
 
-  assert.match(source, /button\.textContent\s*=\s*isActiveFeatureRun\s*\?\s*"Automation Running\.\.\."\s*:\s*"Complete with Automation"/m);
+  assert.match(source, /button\.textContent\s*=\s*isActiveFeatureRun \|\| isFeatureStartInFlight\s*\?\s*"Automation Running\.\.\."\s*:\s*"Complete with Automation"/m);
   assert.match(source, /"Stop Run For Incomplete Stories"/);
   assert.match(source, /"No incomplete stories in this feature\."/);
 });
@@ -61,9 +61,29 @@ test("epic card automation UI adds complete-with-automation control and status s
   assert.match(source, /function createEpicAutomationUi\(content,\s*epic\)/);
   assert.match(source, /"No incomplete stories in this epic\."/);
   assert.match(source, /createEpicAutomationStatusSummary\(content,\s*epic\);/);
-  assert.match(source, /button\.textContent\s*=\s*isActiveEpicRun\s*\?\s*"Automation Running\.\.\."\s*:\s*"Complete with Automation"/m);
+  assert.match(source, /button\.textContent\s*=\s*isActiveEpicRun \|\| isEpicStartInFlight\s*\?\s*"Automation Running\.\.\."\s*:\s*"Complete with Automation"/m);
   assert.match(source, /stopRunForIncompleteStoriesByEpicId\.get\(epic\.id\)/);
   assert.match(source, /"Stop Run For Incomplete Stories"/);
+});
+
+test("automation start controls guard duplicate starts per target while preserving lightweight scope", () => {
+  const source = readFeaturesScript();
+
+  assert.match(source, /const featureAutomationStartInFlight = new Set\(\);/);
+  assert.match(source, /const epicAutomationStartInFlight = new Set\(\);/);
+  assert.match(source, /const storyAutomationInFlight = new Set\(\);/);
+  assert.match(source, /if \(featureAutomationStartInFlight\.has\(feature\.id\)\)/);
+  assert.match(source, /if \(epicAutomationStartInFlight\.has\(epic\.id\)\)/);
+  assert.match(source, /if \(storyAutomationInFlight\.has\(story\.id\)\)/);
+  assert.match(source, /featureAutomationStartInFlight\.add\(feature\.id\);/);
+  assert.match(source, /epicAutomationStartInFlight\.add\(epic\.id\);/);
+  assert.match(source, /storyAutomationInFlight\.add\(story\.id\);/);
+  assert.match(source, /featureAutomationStartInFlight\.delete\(feature\.id\);/);
+  assert.match(source, /epicAutomationStartInFlight\.delete\(epic\.id\);/);
+  assert.match(source, /storyAutomationInFlight\.delete\(story\.id\);/);
+  assert.match(source, /"Feature automation start is already being requested for this feature\."/);
+  assert.match(source, /"Epic automation start is already being requested for this epic\."/);
+  assert.match(source, /"Story automation start is already being requested for this story\."/);
 });
 
 test("feature card shows compact automation status summary with required states and fallback", () => {

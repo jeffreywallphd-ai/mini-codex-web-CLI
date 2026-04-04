@@ -279,6 +279,8 @@ Feature Management UI integration:
 - incomplete story cards surface a **Complete with Automation** button
 - the story button starts automation via `POST /api/automation/start/story/:storyId`
 - story-card automation startup validates that exactly one story is queued for the selected story target
+- feature/epic/story automation start controls keep a lightweight per-target in-flight guard to prevent duplicate start clicks while a start request is pending
+- repeated starts on the same target show explicit "already being requested" feedback, while non-duplicate starts continue to rely on the existing active-run lock behavior
 - story cards include a compact automation status summary badge using the same state model (`not_started`, `running`, `completed`, `stopped`, `failed`) with backend-driven fallback to `not_started` when status data is missing
 
 Automation status response (`200 OK`) includes polling-friendly state:
