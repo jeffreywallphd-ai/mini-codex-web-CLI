@@ -455,6 +455,33 @@ function getFeatureAutomationStatusLabel(status) {
   return "Not Started";
 }
 
+function getEpicAutomationStatus(epic) {
+  const activeEpicRun = Boolean(
+    globalAutomationLock?.isActive
+      && globalAutomationLock?.automationType === "epic"
+      && Number(globalAutomationLock?.targetId) === Number(epic?.id)
+  );
+  if (activeEpicRun) {
+    return "running";
+  }
+
+  const rawStatus = String(epic?.epic_automation_status || "").trim().toLowerCase();
+  if (rawStatus === "running") return "running";
+  if (rawStatus === "completed") return "completed";
+  if (rawStatus === "stopped") return "stopped";
+  if (rawStatus === "failed") return "failed";
+
+  return "not_started";
+}
+
+function getEpicAutomationStatusLabel(status) {
+  if (status === "running") return "Running";
+  if (status === "completed") return "Completed";
+  if (status === "stopped") return "Stopped";
+  if (status === "failed") return "Failed";
+  return "Not Started";
+}
+
 function createFeatureAutomationStatusSummary(content, feature) {
   const status = getFeatureAutomationStatus(feature);
   const label = getFeatureAutomationStatusLabel(status);
@@ -469,6 +496,27 @@ function createFeatureAutomationStatusSummary(content, feature) {
   row.appendChild(badge);
 
   const runId = Number.parseInt(feature?.feature_automation_run_id, 10);
+  if (Number.isInteger(runId) && runId > 0 && status !== "not_started") {
+    row.appendChild(document.createTextNode(` (#${runId})`));
+  }
+
+  content.appendChild(row);
+}
+
+function createEpicAutomationStatusSummary(content, epic) {
+  const status = getEpicAutomationStatus(epic);
+  const label = getEpicAutomationStatusLabel(status);
+
+  const row = document.createElement("p");
+  row.className = "feature-automation-status-row";
+  row.appendChild(document.createTextNode("Automation: "));
+
+  const badge = document.createElement("span");
+  badge.className = `automation-status-pill automation-status-pill--${status}`;
+  badge.textContent = label;
+  row.appendChild(badge);
+
+  const runId = Number.parseInt(epic?.epic_automation_run_id, 10);
   if (Number.isInteger(runId) && runId > 0 && status !== "not_started") {
     row.appendChild(document.createTextNode(` (#${runId})`));
   }
@@ -497,6 +545,30 @@ async function startFeatureAutomation(featureId, options = {}) {
 
   if (!response.ok) {
     throw new Error(result.error || "Unable to start feature automation.");
+  }
+
+  return result;
+}
+
+async function startEpicAutomation(epicId) {
+  const projectName = automationScope.projectName;
+  const baseBranch = automationScope.baseBranch;
+  if (!projectName || !baseBranch) {
+    throw new Error("Select a project and branch on the editor page first, then retry automation.");
+  }
+
+  const response = await fetch(`/api/automation/start/epic/${encodeURIComponent(String(epicId))}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      projectName,
+      baseBranch
+    })
+  });
+  const result = await response.json();
+
+  if (!response.ok) {
+    throw new Error(result.error || "Unable to start epic automation.");
   }
 
   return result;
@@ -577,6 +649,83 @@ function createFeatureAutomationUi(content, feature) {
     } catch (error) {
       createStatusBox.textContent = `Feature automation failed to start: ${error.message}`;
       button.disabled = isAnyAutomationInFlight() && !isActiveFeatureRun;
+      button.textContent = "Complete with Automation";
+    } finally {
+      renderFeatureLists();
+    }
+  });
+
+  content.appendChild(button);
+}
+
+function getIncompleteStoryCountForEpic(epic) {
+  let count = 0;
+  for (const story of epic.stories || []) {
+    if (!isStoryComplete(story)) {
+      count += 1;
+    }
+  }
+
+  return count;
+}
+
+function createEpicAutomationUi(content, epic) {
+  if (isEpicComplete(epic)) {
+    return;
+  }
+
+  const incompleteStoryCount = getIncompleteStoryCountForEpic(epic);
+  if (incompleteStoryCount <= 0) {
+    content.appendChild(createTextNode("p", "inline-hint", "No incomplete stories in this epic."));
+    return;
+  }
+
+  const isActiveEpicRun = Boolean(
+    globalAutomationLock?.isActive
+      && globalAutomationLock?.automationType === "epic"
+      && Number(globalAutomationLock?.targetId) === Number(epic.id)
+  );
+
+  if (isActiveEpicRun) {
+    const runLabel = Number.isInteger(Number(globalAutomationLock?.automationRunId))
+      ? `Epic automation run #${globalAutomationLock.automationRunId} is in progress.`
+      : "Epic automation is in progress.";
+    content.appendChild(createTextNode("p", "inline-hint", runLabel));
+  }
+
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "secondary-button";
+  button.textContent = isActiveEpicRun
+    ? "Automation Running..."
+    : "Complete with Automation";
+  button.disabled = isAnyAutomationInFlight() && !isActiveEpicRun;
+
+  button.addEventListener("click", async () => {
+    if (isAnyAutomationInFlight() && !isActiveEpicRun) {
+      createStatusBox.textContent = "Automation is already running. Wait for completion before starting another run.";
+      return;
+    }
+
+    if (isActiveEpicRun) {
+      createStatusBox.textContent = "Epic automation is already running for this epic.";
+      return;
+    }
+
+    button.disabled = true;
+    button.textContent = "Starting Automation...";
+
+    try {
+      const result = await startEpicAutomation(epic.id);
+      const runId = result?.automationRun?.id;
+      const totalStories = result?.queue?.totalStories;
+      createStatusBox.textContent = Number.isInteger(runId)
+        ? `Epic automation started for epic #${epic.id} (run #${runId}, ${totalStories} story(s) queued).`
+        : `Epic automation started for epic #${epic.id}.`;
+      await loadAutomationLock();
+    } catch (error) {
+      createStatusBox.textContent = `Epic automation failed to start: ${error.message}`;
+      button.disabled = isAnyAutomationInFlight() && !isActiveEpicRun;
       button.textContent = "Complete with Automation";
     } finally {
       renderFeatureLists();
@@ -679,6 +828,10 @@ function renderEpicCard(epic, options = {}) {
     status: getEpicStatus(epic),
     renderBody: (content) => {
       createDescription(content, epic.description);
+      createEpicAutomationStatusSummary(content, epic);
+      if (options.showAutomation) {
+        createEpicAutomationUi(content, epic);
+      }
       const stories = epic.stories || [];
       if (!stories.length) {
         content.appendChild(createTextNode("p", "empty-card-copy", "No stories defined."));
