@@ -88,6 +88,15 @@ test("index page includes navigation to context bundles page", () => {
   assert.match(source, />Manage Context Bundles</);
 });
 
+test("index page run form includes optional single context bundle selector", () => {
+  const source = readHtml(INDEX_HTML_PATH);
+
+  assert.match(source, /<label for="contextBundleSelect">Context Bundle \(Optional\)<\/label>/);
+  assert.match(source, /<select id="contextBundleSelect">/);
+  assert.match(source, /<option value="">No context bundle<\/option>/);
+  assert.match(source, /id="contextBundleHint"/);
+});
+
 test("context bundles page provides central authoring and management sections", () => {
   const source = readHtml(CONTEXT_BUNDLES_HTML_PATH);
 

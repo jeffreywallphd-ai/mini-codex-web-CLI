@@ -35,6 +35,15 @@
       <label for="promptInput">Prompt</label>
       <button id="pasteClipboardButton" class="secondary-button" type="button">Paste from Clipboard</button>
       <textarea id="promptInput" rows="6" placeholder="Enter prompt..."></textarea>
+
+      <label for="contextBundleSelect">Context Bundle (Optional)</label>
+      <select id="contextBundleSelect">
+        <option value="">No context bundle</option>
+      </select>
+      <p id="contextBundleHint" class="inline-hint" aria-live="polite">
+        Choose one saved bundle to prepend reusable context, or leave unselected.
+      </p>
+
       <button id="clearStateButton" class="secondary-button" type="button">Clear Saved Form State</button>
 
       <div id="creditsBox">Credits Remaining: (unknown)</div>

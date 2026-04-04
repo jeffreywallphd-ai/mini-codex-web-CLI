@@ -4,6 +4,8 @@ const branchHint = document.getElementById("branchHint");
 const pullButton = document.getElementById("pullButton");
 const executionModeSelect = document.getElementById("executionModeSelect");
 const promptInput = document.getElementById("promptInput");
+const contextBundleSelect = document.getElementById("contextBundleSelect");
+const contextBundleHint = document.getElementById("contextBundleHint");
 const runButton = document.getElementById("runButton");
 const pasteClipboardButton = document.getElementById("pasteClipboardButton");
 const clearStateButton = document.getElementById("clearStateButton");
@@ -29,6 +31,7 @@ let activeRunStartedAt = null;
 let runTimerInterval = null;
 let lastBranchLoadRequestId = 0;
 let loadRunsRequestId = 0;
+let loadContextBundlesRequestId = 0;
 let activeAutomationLock = null;
 
 function escapeHtml(text) {
@@ -180,7 +183,8 @@ function getEditorState() {
     projectName: projectSelect.value || "",
     baseBranch: baseBranchSelect.value || "",
     executionMode: executionModeSelect.value || "read",
-    prompt: promptInput.value
+    prompt: promptInput.value,
+    contextBundleId: contextBundleSelect.value || ""
   };
 }
 
@@ -198,6 +202,7 @@ function clearEditorState() {
   localStorage.removeItem(EDITOR_STATE_KEY);
   promptInput.value = "";
   executionModeSelect.value = "read";
+  contextBundleSelect.value = "";
   if (projectSelect.options.length > 0) {
     projectSelect.selectedIndex = 0;
   }
@@ -206,29 +211,35 @@ function clearEditorState() {
   updateManageFeaturesLink();
 }
 
-function restoreEditorState(projects) {
+function getSavedEditorState() {
   const rawState = localStorage.getItem(EDITOR_STATE_KEY);
   if (!rawState) return null;
 
   try {
-    const state = JSON.parse(rawState);
-    if (state.executionMode) {
-      executionModeSelect.value = state.executionMode;
-    }
-
-    if (state.prompt) {
-      promptInput.value = state.prompt;
-    }
-
-    if (state.projectName && projects.some((project) => project.name === state.projectName)) {
-      projectSelect.value = state.projectName;
-    }
-
-    return state;
+    return JSON.parse(rawState);
   } catch (error) {
     console.warn("Unable to restore editor state", error);
     return null;
   }
+}
+
+function restoreEditorState(projects) {
+  const state = getSavedEditorState();
+  if (!state) return null;
+
+  if (state.executionMode) {
+    executionModeSelect.value = state.executionMode;
+  }
+
+  if (state.prompt) {
+    promptInput.value = state.prompt;
+  }
+
+  if (state.projectName && projects.some((project) => project.name === state.projectName)) {
+    projectSelect.value = state.projectName;
+  }
+
+  return state;
 }
 
 function hideErrorCard() {
@@ -349,6 +360,7 @@ function updateProjectActionState() {
   baseBranchSelect.disabled = isEditorFrozen || !projectName || baseBranchSelect.options.length === 0;
   executionModeSelect.disabled = isEditorFrozen;
   promptInput.disabled = isEditorFrozen;
+  contextBundleSelect.disabled = isEditorFrozen;
   pasteClipboardButton.disabled = isEditorFrozen;
   clearStateButton.disabled = isEditorFrozen;
   manageFeaturesLink.classList.toggle("is-disabled-link", isEditorFrozen);
@@ -374,6 +386,79 @@ function updateProjectActionState() {
   }
 
   updateManageFeaturesLink();
+}
+
+function formatContextBundleOption(bundle) {
+  const title = String(bundle?.title || "").trim() || "Untitled Bundle";
+  const intendedUse = String(bundle?.intended_use || "").trim();
+  const summary = String(bundle?.summary || "").trim();
+
+  const meta = [intendedUse, summary].filter(Boolean).join(" | ");
+  return meta ? `${title} - ${meta}` : title;
+}
+
+async function loadContextBundles() {
+  const requestId = ++loadContextBundlesRequestId;
+
+  contextBundleHint.textContent = "Loading context bundles...";
+  contextBundleSelect.innerHTML = "";
+  const defaultOption = document.createElement("option");
+  defaultOption.value = "";
+  defaultOption.textContent = "No context bundle";
+  contextBundleSelect.appendChild(defaultOption);
+
+  try {
+    const response = await fetch("/api/context-bundles?includeParts=false");
+    const result = await parseJsonResponse(response);
+
+    if (requestId !== loadContextBundlesRequestId) {
+      return;
+    }
+
+    if (!response.ok) {
+      throw new Error(buildErrorMessage("Could not load context bundles", result, "Request failed"));
+    }
+
+    const bundles = Array.isArray(result) ? result : [];
+
+    for (const bundle of bundles) {
+      const bundleId = Number.parseInt(bundle?.id, 10);
+      if (!Number.isInteger(bundleId) || bundleId <= 0) {
+        continue;
+      }
+
+      const option = document.createElement("option");
+      option.value = String(bundleId);
+      option.textContent = formatContextBundleOption(bundle);
+      contextBundleSelect.appendChild(option);
+    }
+
+    const savedState = getSavedEditorState();
+    const savedContextBundleId = String(savedState?.contextBundleId || "").trim();
+    if (savedContextBundleId && [...contextBundleSelect.options].some((option) => option.value === savedContextBundleId)) {
+      contextBundleSelect.value = savedContextBundleId;
+    } else {
+      contextBundleSelect.value = "";
+    }
+
+    contextBundleHint.textContent = bundles.length > 0
+      ? "Choose one saved bundle to prepend reusable context, or leave unselected."
+      : "No saved bundles yet. Runs will proceed without bundle context.";
+  } catch (error) {
+    if (requestId !== loadContextBundlesRequestId) {
+      return;
+    }
+
+    contextBundleSelect.value = "";
+    contextBundleHint.textContent = "Context bundles are unavailable. Runs can continue without one.";
+    statusBox.textContent = `Context bundle load failed: ${error.message}`;
+    showErrorCard(`Context bundle load failed: ${error.message}`);
+  } finally {
+    if (requestId === loadContextBundlesRequestId) {
+      updateProjectActionState();
+      saveEditorState();
+    }
+  }
 }
 
 async function loadBranchesForSelectedProject(preferredBranch = "") {
@@ -767,6 +852,10 @@ runButton.addEventListener("click", async () => {
   const baseBranch = baseBranchSelect.value;
   const prompt = promptInput.value.trim();
   const executionMode = executionModeSelect.value;
+  const contextBundleId = Number.parseInt(contextBundleSelect.value, 10);
+  const selectedContextBundleId = Number.isInteger(contextBundleId) && contextBundleId > 0
+    ? contextBundleId
+    : null;
 
   if (!projectName || !baseBranch || !prompt || runButton.disabled) return;
 
@@ -786,7 +875,14 @@ runButton.addEventListener("click", async () => {
       headers: {
         "Content-Type": "application/json"
       },
-      body: JSON.stringify({ projectName, baseBranch, prompt, executionMode, streamId })
+      body: JSON.stringify({
+        projectName,
+        baseBranch,
+        prompt,
+        executionMode,
+        contextBundleId: selectedContextBundleId,
+        streamId
+      })
     });
 
     const result = await parseJsonResponse(response);
@@ -835,7 +931,7 @@ clearStateButton.addEventListener("click", async () => {
   statusBox.textContent = "Saved form state cleared and running-project cache refreshed.";
 });
 
-[projectSelect, baseBranchSelect, executionModeSelect, promptInput].forEach((element) => {
+[projectSelect, baseBranchSelect, executionModeSelect, promptInput, contextBundleSelect].forEach((element) => {
   element.addEventListener("change", saveEditorState);
   element.addEventListener("input", saveEditorState);
 });
@@ -872,7 +968,7 @@ setInterval(() => {
 
 (async () => {
   try {
-    await Promise.all([loadProjects(), loadRuns(), loadRunningProjects(), loadAutomationLock()]);
+    await Promise.all([loadProjects(), loadContextBundles(), loadRuns(), loadRunningProjects(), loadAutomationLock()]);
   } catch (error) {
     const message = `Initial page load failed: ${error.message}`;
     statusBox.textContent = message;
