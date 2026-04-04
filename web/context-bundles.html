@@ -46,6 +46,15 @@
       <label for="bundleSummaryInput">Summary</label>
       <textarea id="bundleSummaryInput" rows="3" placeholder="Optional summary for quick selection context"></textarea>
 
+      <div class="bundle-parts-section">
+        <div class="section-heading-row">
+          <h3>Bundle Parts</h3>
+          <button id="addBundlePartButton" class="secondary-button" type="button" disabled>Add Part</button>
+        </div>
+        <p id="bundlePartsHint" class="inline-hint">Create or select a bundle to author parts.</p>
+        <div id="bundlePartsList" class="hier-stack"></div>
+      </div>
+
       <div class="draft-actions">
         <button id="saveBundleButton" type="button">Create Bundle</button>
         <button id="updateBundleButton" class="secondary-button" type="button" disabled>Update Bundle</button>

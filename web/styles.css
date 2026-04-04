@@ -657,6 +657,24 @@ details pre {
   color: var(--muted);
 }
 
+.bundle-parts-section {
+  border-top: 1px solid var(--border);
+  margin-top: 12px;
+  padding-top: 12px;
+}
+
+.bundle-parts-section h3 {
+  margin: 0;
+}
+
+.bundle-part-card {
+  background: #1d232d;
+}
+
+.bundle-part-heading {
+  margin: 0 0 6px;
+}
+
 .active-story-command-box {
   margin: 0;
   min-height: calc(1.4em * 3 + 20px);

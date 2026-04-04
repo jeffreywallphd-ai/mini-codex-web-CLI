@@ -13,9 +13,25 @@ const updateBundleButton = document.getElementById("updateBundleButton");
 const deleteBundleButton = document.getElementById("deleteBundleButton");
 const clearBundleFormButton = document.getElementById("clearBundleFormButton");
 const contextBundlesList = document.getElementById("contextBundlesList");
+const addBundlePartButton = document.getElementById("addBundlePartButton");
+const bundlePartsHint = document.getElementById("bundlePartsHint");
+const bundlePartsList = document.getElementById("bundlePartsList");
+
+const PART_TYPE_OPTIONS = [
+  { value: "repository_context", label: "Repository Context" },
+  { value: "architecture_guidance", label: "Architecture Guidance" },
+  { value: "coding_standards", label: "Coding Standards" },
+  { value: "documentation_standards", label: "Documentation Standards" },
+  { value: "domain_glossary", label: "Domain Glossary" },
+  { value: "implementation_constraints", label: "Implementation Constraints" },
+  { value: "testing_expectations", label: "Testing Expectations" },
+  { value: "feature_background", label: "Feature Background" },
+  { value: "user_notes", label: "User Notes" }
+];
 
 let bundles = [];
 let selectedBundleId = null;
+let bundleParts = [];
 
 function parseTags(value) {
   return String(value || "")
@@ -29,6 +45,12 @@ function formatMetadataValue(value) {
   return normalized || "(none)";
 }
 
+function formatPartTypeLabel(partType) {
+  const normalized = String(partType || "").trim().toLowerCase();
+  const match = PART_TYPE_OPTIONS.find((option) => option.value === normalized);
+  return match ? match.label : "Unknown";
+}
+
 function buildBundlePayload() {
   return {
     title: bundleTitleInput.value.trim(),
@@ -39,6 +61,13 @@ function buildBundlePayload() {
     tags: parseTags(bundleTagsInput.value),
     summary: bundleSummaryInput.value.trim() || null
   };
+}
+
+function getSelectedBundleIdOrThrow() {
+  if (!selectedBundleId) {
+    throw new Error("Create or select a bundle before managing parts.");
+  }
+  return selectedBundleId;
 }
 
 async function parseJsonResponse(response) {
@@ -86,9 +115,13 @@ function syncButtonState() {
   saveBundleButton.disabled = isEditing;
   updateBundleButton.disabled = !isEditing;
   deleteBundleButton.disabled = !isEditing;
+  addBundlePartButton.disabled = !isEditing;
   editingHint.textContent = isEditing
     ? `Editing bundle #${selectedBundleId}.`
     : "Creating a new bundle.";
+  bundlePartsHint.textContent = isEditing
+    ? "Each part has an explicit purpose. Save changes per part and use move up/down for deterministic order."
+    : "Create or select a bundle to author parts.";
 }
 
 function clearBundleForm() {
@@ -100,8 +133,10 @@ function clearBundleForm() {
   bundleProjectNameInput.value = "";
   bundleTagsInput.value = "";
   bundleSummaryInput.value = "";
+  bundleParts = [];
   clearValidation();
   syncButtonState();
+  renderBundleParts();
 }
 
 function setBundleForm(bundle) {
@@ -168,10 +203,15 @@ function renderBundles() {
     const editButton = document.createElement("button");
     editButton.type = "button";
     editButton.className = "secondary-button";
-    editButton.textContent = "Edit Metadata";
-    editButton.onclick = () => {
-      setBundleForm(bundle);
-      setStatus(`Loaded bundle #${bundle.id} for editing.`);
+    editButton.textContent = "Edit Bundle";
+    editButton.onclick = async () => {
+      try {
+        await selectBundleForEditing(bundle.id);
+        setStatus(`Loaded bundle #${bundle.id} for editing.`);
+      } catch (error) {
+        setValidation(error.message);
+        setStatus(`Load failed: ${error.message}`);
+      }
     };
 
     actions.appendChild(editButton);
@@ -188,6 +228,140 @@ function renderBundles() {
   }
 }
 
+function sortedParts(parts) {
+  return [...parts].sort((a, b) => (Number(a.position) - Number(b.position)) || (Number(a.id) - Number(b.id)));
+}
+
+function renderBundleParts() {
+  bundlePartsList.innerHTML = "";
+
+  if (!selectedBundleId) {
+    return;
+  }
+
+  if (bundleParts.length <= 0) {
+    const empty = document.createElement("p");
+    empty.className = "empty-card-copy";
+    empty.textContent = "No parts yet. Add a part to begin building this bundle's structured context.";
+    bundlePartsList.appendChild(empty);
+    return;
+  }
+
+  const totalParts = bundleParts.length;
+  for (const [index, part] of bundleParts.entries()) {
+    const card = document.createElement("article");
+    card.className = "hier-card bundle-part-card";
+
+    const content = document.createElement("div");
+    content.className = "hier-card__content";
+
+    const heading = document.createElement("h4");
+    heading.className = "bundle-part-heading";
+    heading.textContent = `Part ${index + 1}: ${formatPartTypeLabel(part.part_type)}`;
+
+    const titleMeta = document.createElement("p");
+    titleMeta.className = "card-description";
+    titleMeta.textContent = `Purpose: ${formatMetadataValue(part.title)}`;
+
+    const typeLabel = document.createElement("label");
+    typeLabel.textContent = "Type";
+    const typeInput = document.createElement("select");
+    for (const option of PART_TYPE_OPTIONS) {
+      const optionEl = document.createElement("option");
+      optionEl.value = option.value;
+      optionEl.textContent = option.label;
+      typeInput.appendChild(optionEl);
+    }
+    typeInput.value = part.part_type || "feature_background";
+
+    const titleLabel = document.createElement("label");
+    titleLabel.textContent = "Title";
+    const titleInput = document.createElement("input");
+    titleInput.type = "text";
+    titleInput.value = part.title || "";
+    titleInput.placeholder = "Part purpose title";
+
+    const contentLabel = document.createElement("label");
+    contentLabel.textContent = "Content";
+    const contentInput = document.createElement("textarea");
+    contentInput.rows = 5;
+    contentInput.value = part.content || "";
+    contentInput.placeholder = "Part content";
+
+    const includeRow = document.createElement("label");
+    includeRow.className = "story-automation-checkbox";
+    const includeInput = document.createElement("input");
+    includeInput.type = "checkbox";
+    includeInput.checked = Number(part.include_in_compiled) !== 0;
+    const includeCopy = document.createElement("span");
+    includeCopy.textContent = "Include in compiled output";
+    includeRow.appendChild(includeInput);
+    includeRow.appendChild(includeCopy);
+
+    const actions = document.createElement("div");
+    actions.className = "draft-actions";
+
+    const moveUpButton = document.createElement("button");
+    moveUpButton.type = "button";
+    moveUpButton.className = "secondary-button";
+    moveUpButton.textContent = "Move Up";
+    moveUpButton.disabled = index === 0;
+    moveUpButton.onclick = async () => {
+      await movePart(part.id, -1);
+    };
+
+    const moveDownButton = document.createElement("button");
+    moveDownButton.type = "button";
+    moveDownButton.className = "secondary-button";
+    moveDownButton.textContent = "Move Down";
+    moveDownButton.disabled = index === totalParts - 1;
+    moveDownButton.onclick = async () => {
+      await movePart(part.id, 1);
+    };
+
+    const savePartButton = document.createElement("button");
+    savePartButton.type = "button";
+    savePartButton.className = "secondary-button";
+    savePartButton.textContent = "Save Part";
+    savePartButton.onclick = async () => {
+      await savePartEdits(part.id, {
+        partType: typeInput.value,
+        title: titleInput.value.trim(),
+        content: contentInput.value,
+        includeInCompiled: includeInput.checked,
+        position: index + 1
+      });
+    };
+
+    const deletePartButton = document.createElement("button");
+    deletePartButton.type = "button";
+    deletePartButton.className = "danger-button";
+    deletePartButton.textContent = "Delete Part";
+    deletePartButton.onclick = async () => {
+      await deletePart(part.id);
+    };
+
+    actions.appendChild(moveUpButton);
+    actions.appendChild(moveDownButton);
+    actions.appendChild(savePartButton);
+    actions.appendChild(deletePartButton);
+
+    content.appendChild(heading);
+    content.appendChild(titleMeta);
+    content.appendChild(typeLabel);
+    content.appendChild(typeInput);
+    content.appendChild(titleLabel);
+    content.appendChild(titleInput);
+    content.appendChild(contentLabel);
+    content.appendChild(contentInput);
+    content.appendChild(includeRow);
+    content.appendChild(actions);
+
+    card.appendChild(content);
+    bundlePartsList.appendChild(card);
+  }
+}
+
 async function loadBundles() {
   const response = await fetch("/api/context-bundles?includeParts=false");
   const result = await parseJsonResponse(response);
@@ -197,6 +371,170 @@ async function loadBundles() {
 
   bundles = Array.isArray(result) ? result : [];
   renderBundles();
+}
+
+async function loadBundleParts(bundleId) {
+  const response = await fetch(`/api/context-bundles/${encodeURIComponent(String(bundleId))}/parts`);
+  const result = await parseJsonResponse(response);
+  if (!response.ok) {
+    throw new Error(result?.error || "Failed to load bundle parts.");
+  }
+
+  bundleParts = sortedParts(Array.isArray(result) ? result : []);
+  renderBundleParts();
+}
+
+async function selectBundleForEditing(bundleId) {
+  const response = await fetch(`/api/context-bundles/${encodeURIComponent(String(bundleId))}`);
+  const result = await parseJsonResponse(response);
+  if (!response.ok) {
+    throw new Error(result?.error || "Failed to load context bundle.");
+  }
+
+  setBundleForm(result);
+  bundleParts = sortedParts(Array.isArray(result.parts) ? result.parts : []);
+  renderBundleParts();
+}
+
+async function addBundlePart() {
+  try {
+    const bundleId = getSelectedBundleIdOrThrow();
+    clearValidation();
+    const response = await fetch(`/api/context-bundles/${encodeURIComponent(String(bundleId))}/parts`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        partType: "feature_background",
+        title: `New Part ${bundleParts.length + 1}`,
+        content: "",
+        includeInCompiled: true,
+        position: bundleParts.length + 1
+      })
+    });
+    const result = await parseJsonResponse(response);
+    if (!response.ok) {
+      throw new Error(result?.error || "Failed to add bundle part.");
+    }
+
+    bundleParts = sortedParts([...bundleParts, result]);
+    renderBundleParts();
+    setStatus(`Added part #${result.id} to bundle #${bundleId}.`);
+  } catch (error) {
+    setValidation(error.message);
+    setStatus(`Add part failed: ${error.message}`);
+  }
+}
+
+async function savePartEdits(partId, payload) {
+  try {
+    const bundleId = getSelectedBundleIdOrThrow();
+    if (!payload.title) {
+      throw new Error("Part title is required.");
+    }
+
+    clearValidation();
+    const response = await fetch(`/api/context-bundles/${encodeURIComponent(String(bundleId))}/parts/${encodeURIComponent(String(partId))}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    });
+    const result = await parseJsonResponse(response);
+    if (!response.ok) {
+      throw new Error(result?.error || "Failed to update bundle part.");
+    }
+
+    bundleParts = sortedParts(bundleParts.map((part) => (part.id === result.id ? result : part)));
+    renderBundleParts();
+    setStatus(`Saved part #${result.id}.`);
+  } catch (error) {
+    setValidation(error.message);
+    setStatus(`Save part failed: ${error.message}`);
+  }
+}
+
+async function persistPartOrder(partsInOrder) {
+  const bundleId = getSelectedBundleIdOrThrow();
+  const tempOffset = 100000;
+
+  for (const [index, part] of partsInOrder.entries()) {
+    const tempPosition = tempOffset + index + 1;
+    const tempResponse = await fetch(`/api/context-bundles/${encodeURIComponent(String(bundleId))}/parts/${encodeURIComponent(String(part.id))}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ position: tempPosition })
+    });
+    const tempResult = await parseJsonResponse(tempResponse);
+    if (!tempResponse.ok) {
+      throw new Error(tempResult?.error || "Failed to apply temporary part ordering.");
+    }
+  }
+
+  const persistedParts = [];
+  for (const [index, part] of partsInOrder.entries()) {
+    const finalResponse = await fetch(`/api/context-bundles/${encodeURIComponent(String(bundleId))}/parts/${encodeURIComponent(String(part.id))}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ position: index + 1 })
+    });
+    const finalResult = await parseJsonResponse(finalResponse);
+    if (!finalResponse.ok) {
+      throw new Error(finalResult?.error || "Failed to persist part ordering.");
+    }
+    persistedParts.push(finalResult);
+  }
+
+  bundleParts = sortedParts(persistedParts);
+  renderBundleParts();
+}
+
+async function movePart(partId, direction) {
+  try {
+    clearValidation();
+    const current = sortedParts(bundleParts);
+    const fromIndex = current.findIndex((part) => part.id === partId);
+    if (fromIndex < 0) return;
+
+    const toIndex = fromIndex + direction;
+    if (toIndex < 0 || toIndex >= current.length) return;
+
+    const reordered = [...current];
+    const [moved] = reordered.splice(fromIndex, 1);
+    reordered.splice(toIndex, 0, moved);
+
+    await persistPartOrder(reordered);
+    setStatus(`Reordered part #${partId}.`);
+  } catch (error) {
+    setValidation(error.message);
+    setStatus(`Reorder failed: ${error.message}`);
+  }
+}
+
+async function deletePart(partId) {
+  try {
+    const bundleId = getSelectedBundleIdOrThrow();
+    clearValidation();
+
+    const response = await fetch(`/api/context-bundles/${encodeURIComponent(String(bundleId))}/parts/${encodeURIComponent(String(partId))}`, {
+      method: "DELETE"
+    });
+    const result = await parseJsonResponse(response);
+    if (!response.ok) {
+      throw new Error(result?.error || "Failed to delete bundle part.");
+    }
+
+    const remaining = sortedParts(bundleParts.filter((part) => part.id !== partId));
+    if (remaining.length > 0) {
+      await persistPartOrder(remaining);
+    } else {
+      bundleParts = [];
+      renderBundleParts();
+    }
+
+    setStatus(`Deleted part #${partId}.`);
+  } catch (error) {
+    setValidation(error.message);
+    setStatus(`Delete part failed: ${error.message}`);
+  }
 }
 
 saveBundleButton.addEventListener("click", async () => {
@@ -221,7 +559,7 @@ saveBundleButton.addEventListener("click", async () => {
     await loadBundles();
     const createdBundle = bundles.find((bundle) => bundle.id === result.id);
     if (createdBundle) {
-      setBundleForm(createdBundle);
+      await selectBundleForEditing(createdBundle.id);
     } else {
       clearBundleForm();
     }
@@ -257,10 +595,7 @@ updateBundleButton.addEventListener("click", async () => {
     }
 
     await loadBundles();
-    const refreshedBundle = bundles.find((bundle) => bundle.id === result.id);
-    if (refreshedBundle) {
-      setBundleForm(refreshedBundle);
-    }
+    await selectBundleForEditing(result.id);
     setStatus(`Updated bundle #${result.id}.`);
   } catch (error) {
     setValidation(error.message);
@@ -296,6 +631,10 @@ deleteBundleButton.addEventListener("click", async () => {
 clearBundleFormButton.addEventListener("click", () => {
   clearBundleForm();
   setStatus("Bundle form cleared.");
+});
+
+addBundlePartButton.addEventListener("click", async () => {
+  await addBundlePart();
 });
 
 (async () => {
