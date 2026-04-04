@@ -243,6 +243,8 @@ Each endpoint:
 - validates `projectName` maps to a known local project and `baseBranch`
   exists in that repository before queue execution starts
 - validates the scoped target exists (`featureId`, `epicId`, or `storyId`)
+- validates scope consistency between route and request body when
+  `automationType`, `targetId`, or scoped ids are supplied
 - validates the selected target is eligible (non-empty runnable queue)
 - creates an `automation_runs` record with initial state
 - initializes a deterministic queue from `defineAutomationExecutionPlan`
@@ -254,6 +256,9 @@ Request body fields:
 - `projectName` (required)
 - `baseBranch` (required)
 - `stopOnIncompleteStory` (optional boolean, default `false`)
+- `automationType` (optional but validated against route scope when provided)
+- `targetId` (optional but validated against route id when provided)
+- scoped id field (`featureId`, `epicId`, `storyId`) (optional but validated against route id when provided)
 
 Success response (`202 Accepted`) includes tracking metadata for the UI:
 
@@ -267,6 +272,7 @@ Feature Management UI integration:
 
 - incomplete feature cards surface a **Complete with Automation** button
 - the feature button starts automation via `POST /api/automation/start/feature/:featureId`
+- feature automation requests include explicit scope metadata (`automationType`, `targetId`, `featureId`) so backend scope validation can reject mismatched launches
 - feature cards include a `Stop Run For Incomplete Stories` checkbox that controls `stopOnIncompleteStory` in the start request (defaults to unchecked)
 - feature cards include a compact automation status summary badge sourced from backend feature automation state (`not_started`, `running`, `completed`, `stopped`, `failed`) with graceful fallback to `not_started` when status data is missing
 - running feature/epic automation summaries include a concise `Current story` line sourced from `GET /api/automation/status/:automationRunId` queue status data (`queue.currentItem`)
@@ -274,11 +280,14 @@ Feature Management UI integration:
 - the button is hidden for completed features and replaced with a lightweight hint when no incomplete stories are available in the feature
 - incomplete epic cards surface a **Complete with Automation** button
 - the epic button starts automation via `POST /api/automation/start/epic/:epicId`
+- epic automation requests include explicit scope metadata (`automationType`, `targetId`, `epicId`) so backend scope validation can reject mismatched launches
 - epic cards include a `Stop Run For Incomplete Stories` checkbox that controls `stopOnIncompleteStory` in the start request (defaults to unchecked)
 - epic cards include the same compact automation status summary badge pattern (`not_started`, `running`, `completed`, `stopped`, `failed`) and show active-run context when an epic run is in progress
 - incomplete story cards surface a **Complete with Automation** button
 - the story button starts automation via `POST /api/automation/start/story/:storyId`
+- story automation requests include explicit scope metadata (`automationType`, `targetId`, `storyId`) so backend scope validation can reject mismatched launches
 - story-card automation startup validates that exactly one story is queued for the selected story target
+- frontend validates the start response scope (`automationRun.automationType` + `automationRun.targetId`) before reporting launch success
 - feature/epic/story automation start controls keep a lightweight per-target in-flight guard to prevent duplicate start clicks while a start request is pending
 - repeated starts on the same target show explicit "already being requested" feedback, while non-duplicate starts continue to rely on the existing active-run lock behavior
 - story cards include a compact automation status summary badge using the same state model (`not_started`, `running`, `completed`, `stopped`, `failed`) with backend-driven fallback to `not_started` when status data is missing
