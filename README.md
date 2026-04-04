@@ -128,6 +128,15 @@ http://192.168.x.x:3000
 - The run details page shows the stored `git status --short --branch` output.
 - Merge runs are performed by the server with Git and recorded in SQLite.
 - If a merge succeeds, the merge button is disabled for that run.
+- After a successful merge and successful push to the selected target branch, branch cleanup runs automatically as best-effort for eligible Codex source branches (`codex/*`, plus legacy `codex-<10 hex chars>` branches).
+- Cleanup policy guards:
+  - source branch must differ from target branch
+  - source branch must match the strict Codex branch pattern
+  - local safe-delete will not run if the source branch is currently checked out
+- Local cleanup uses safe deletion (`git branch -d <source>`), not force delete.
+- Remote cleanup uses GitHub remote deletion via Git push delete (`git push origin --delete <source>`).
+- Cleanup is non-fatal: local/remote cleanup failures are reported in merge output but do not roll back or fail a successful merge.
+- Merge and push failures remain fatal.
 
 ## Context Bundles
 
@@ -370,6 +379,11 @@ Each endpoint:
 - keeps start/resume launch orchestration in a shared lightweight code path
   (lock activation, detached execution handoff, lifecycle launch logging, and
   launch-response shape) to reduce duplication without adding extra layers
+- automated story merges use the same shared merge orchestration path as manual
+  run merges (`mergeAutomationStoryRun` in `server/index.js`)
+- merge failures still stop automation with `stopReason: "merge_failed"`
+- post-merge branch cleanup failures are non-fatal warnings and do not stop
+  automation by themselves
 - emits lightweight structured lifecycle logs through `logger.info` for:
   - launch accepted (`start` or `resume`)
   - background automation start
