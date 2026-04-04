@@ -48,3 +48,11 @@ test("index page renders selected context bundle summary metadata", () => {
   assert.match(source, /Project affinity: \$\{projectAffinity \|\| "\(\s*none\s*\)"\}/);
   assert.match(source, /contextBundleSelect\.addEventListener\("change", renderContextBundleSelectionSummary\);/);
 });
+
+test("recent run cards show concise context bundle traceability metadata", () => {
+  const source = readAppScript();
+
+  assert.match(source, /const contextBundleTitle = String\(run\.context_bundle_title \|\| ""\)\.trim\(\);/);
+  assert.match(source, /const contextBundleLabel = contextBundleTitle \|\| "\(\s*none\s*\)";/);
+  assert.match(source, /Bundle: \$\{escapeHtml\(contextBundleLabel\)\}/);
+});

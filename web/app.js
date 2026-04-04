@@ -693,11 +693,13 @@ function renderRunsList(runs) {
 
     const completionStatus = normalizeCompletionStatus(run.completion_status);
     const duration = formatRunDuration(run.duration_ms);
+    const contextBundleTitle = String(run.context_bundle_title || "").trim();
+    const contextBundleLabel = contextBundleTitle || "(none)";
 
     openButton.classList.toggle("run-item-unmerged", !run.merged_at);
     openButton.innerHTML = `
       <div>#${escapeHtml(run.id)} | ${escapeHtml(run.project_name)} | ${escapeHtml(executionMode)} | ${escapeHtml(branchName)} | ${mergeBadgeHtml}</div>
-      <div>Completion: ${escapeHtml(completionStatus)} | Duration: ${escapeHtml(duration)}</div>
+      <div>Completion: ${escapeHtml(completionStatus)} | Duration: ${escapeHtml(duration)} | Bundle: ${escapeHtml(contextBundleLabel)}</div>
       <div>${escapeHtml(title || "(no title)")}</div>
       <div>${escapeHtml(promptPreview || "(no prompt)")}</div>
     `;
