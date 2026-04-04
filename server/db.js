@@ -9,7 +9,7 @@ const dbPath = path.resolve(dataDir, "app.db");
 const db = new sqlite3.Database(dbPath);
 db.run("PRAGMA foreign_keys = ON");
 
-const LATEST_SCHEMA_VERSION = 7;
+const LATEST_SCHEMA_VERSION = 8;
 
 function run(sql, params = []) {
   return new Promise((resolve, reject) => {
@@ -70,10 +70,12 @@ async function detectVersionFromSchema() {
     && await tableExists("epics")
     && await tableExists("stories");
   if (hasFeatureTables) {
+    const hasAutomationRuns = await tableExists("automation_runs");
     const hasArchived = await columnExists("runs", "archived");
     const hasStoryRunId = await columnExists("stories", "run_id");
     const hasFeatureProjectScope = await columnExists("features", "project_name")
       && await columnExists("features", "base_branch");
+    if (hasAutomationRuns && hasStoryRunId && hasArchived && hasFeatureProjectScope) return 8;
     if (hasStoryRunId && hasArchived && hasFeatureProjectScope) return 7;
     if (hasStoryRunId && hasArchived) return 6;
     if (hasStoryRunId) return 5;
@@ -243,6 +245,24 @@ async function migrateToV7() {
   `);
 }
 
+async function migrateToV8() {
+  await run(`
+    CREATE TABLE IF NOT EXISTS automation_runs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      automation_type TEXT NOT NULL,
+      target_id INTEGER NOT NULL,
+      stop_flag INTEGER NOT NULL DEFAULT 0,
+      current_position INTEGER NOT NULL DEFAULT 1,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )
+  `);
+  await run(`
+    CREATE INDEX IF NOT EXISTS idx_automation_runs_target
+    ON automation_runs(automation_type, target_id)
+  `);
+}
+
 async function runMigrations() {
   let version = await getSchemaVersion();
 
@@ -287,6 +307,12 @@ async function runMigrations() {
   if (version < 7) {
     await migrateToV7();
     version = 7;
+    await setSchemaVersion(version);
+  }
+
+  if (version < 8) {
+    await migrateToV8();
+    version = 8;
     await setSchemaVersion(version);
   }
 
@@ -722,6 +748,104 @@ async function attachRunToStory(storyId, runId) {
   );
 }
 
+async function createAutomationRun(input = {}) {
+  await dbReady;
+  const automationType = String(input.automationType || "").trim().toLowerCase();
+  const targetId = Number.parseInt(input.targetId, 10);
+  const stopFlag = input.stopFlag ? 1 : 0;
+  const currentPosition = Number.parseInt(input.currentPosition, 10);
+
+  if (!automationType) {
+    throw new Error("Automation type is required.");
+  }
+
+  if (!Number.isInteger(targetId) || targetId <= 0) {
+    throw new Error("Target id must be a positive integer.");
+  }
+
+  if (!Number.isInteger(currentPosition) || currentPosition <= 0) {
+    throw new Error("Current position must be a positive integer.");
+  }
+
+  const id = await runWithLastId(
+    `
+      INSERT INTO automation_runs (automation_type, target_id, stop_flag, current_position)
+      VALUES (?, ?, ?, ?)
+    `,
+    [automationType, targetId, stopFlag, currentPosition]
+  );
+
+  return getAutomationRunById(id);
+}
+
+async function getAutomationRunById(id) {
+  await dbReady;
+  const runId = Number.parseInt(id, 10);
+
+  if (!Number.isInteger(runId) || runId <= 0) {
+    return null;
+  }
+
+  return get(
+    `
+      SELECT
+        id,
+        automation_type,
+        target_id,
+        stop_flag,
+        current_position,
+        created_at,
+        updated_at
+      FROM automation_runs
+      WHERE id = ?
+    `,
+    [runId]
+  );
+}
+
+async function updateAutomationRunMetadata(id, updates = {}) {
+  await dbReady;
+  const runId = Number.parseInt(id, 10);
+  if (!Number.isInteger(runId) || runId <= 0) {
+    throw new Error("Automation run id must be a positive integer.");
+  }
+
+  const updateClauses = [];
+  const params = [];
+
+  if (Object.prototype.hasOwnProperty.call(updates, "stopFlag")) {
+    updateClauses.push("stop_flag = ?");
+    params.push(updates.stopFlag ? 1 : 0);
+  }
+
+  if (Object.prototype.hasOwnProperty.call(updates, "currentPosition")) {
+    const currentPosition = Number.parseInt(updates.currentPosition, 10);
+    if (!Number.isInteger(currentPosition) || currentPosition <= 0) {
+      throw new Error("Current position must be a positive integer.");
+    }
+    updateClauses.push("current_position = ?");
+    params.push(currentPosition);
+  }
+
+  if (updateClauses.length === 0) {
+    throw new Error("At least one automation metadata field must be provided.");
+  }
+
+  updateClauses.push("updated_at = CURRENT_TIMESTAMP");
+  params.push(runId);
+
+  await run(
+    `
+      UPDATE automation_runs
+      SET ${updateClauses.join(", ")}
+      WHERE id = ?
+    `,
+    params
+  );
+
+  return getAutomationRunById(runId);
+}
+
 function setRunArchived(id, archived) {
   return new Promise((resolve, reject) => {
     dbReady
@@ -766,6 +890,9 @@ module.exports = {
   getStoryAutomationContext,
   attachRunToStory,
   syncStoryCompletionFromRun,
+  createAutomationRun,
+  getAutomationRunById,
+  updateAutomationRunMetadata,
   getCompletionEligibleRuns,
   setRunArchived,
   deleteRunById,

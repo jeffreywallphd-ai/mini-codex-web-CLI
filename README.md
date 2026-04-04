@@ -26,6 +26,7 @@ The app is designed for personal LAN use, not for public internet exposure or mu
 - Recent run history with search
 - Basic usage tracking when the SDK returns usage data
 - Automation queue generation utilities for deterministic `feature -> epic -> story` ordering
+- Automation metadata persistence for orchestration state (`automation_type`, `target_id`, `stop_flag`, `current_position`)
 - SQLite storage with no external database
 - Mobile-friendly, lightweight UI intended for LAN access
 
@@ -144,6 +145,12 @@ automation domain.
   - numeric-string order values are coerced (for example, `"2"` sorts before `"10"`)
 - `flattenStoryExecutionQueues(queues)` returns one flat execution list with
   `positionInQueue` for strict run sequencing.
+- Automation run orchestration metadata is persisted in SQLite table
+  `automation_runs` with:
+  - `automation_type` (`feature`, `epic`, or `story` scope)
+  - `target_id` (the active scope identifier)
+  - `stop_flag` (whether orchestration should stop)
+  - `current_position` (current position in the ordered execution queue)
 - Stop-condition defaults are fail-fast for these outcomes:
   - `story`: `failed`, `blocked`, `cancelled`
   - `epic`: `failed`, `blocked`, `cancelled`
