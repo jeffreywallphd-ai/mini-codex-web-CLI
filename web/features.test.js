@@ -284,6 +284,7 @@ test("feature page automation controls include a single-bundle selector loaded f
   const source = readFeaturesScript();
 
   assert.match(source, /function createAutomationContextBundleSelector\(\{ idPrefix, automationLabel, disabled = false \} = \{\}\)/);
+  assert.match(source, /function formatContextBundleUsageCue\(bundle\)/);
   assert.match(source, /defaultOption\.textContent = "No context bundle";/);
   assert.match(source, /fetch\("\/api\/context-bundles\?includeParts=false"\)/);
   assert.match(source, /await loadAutomationContextBundles\(\);/);

@@ -63,7 +63,10 @@ test("context bundles authoring UI renders metadata fields including freshness i
   assert.match(source, /Project affinity:\s*\$\{formatMetadataValue\(bundle\.project_name\)\}/);
   assert.match(source, /Tags:\s*\$\{Array\.isArray\(bundle\.tags\)/);
   assert.match(source, /Summary:\s*\$\{formatMetadataValue\(bundle\.summary\)\}/);
+  assert.match(source, /Usage:\s*Last used \$\{formatBundleLastUsedAt\(bundle\.last_used_at\)\}/);
+  assert.match(source, /Recent successful uses \(30d\): \$\{formatBundleUsageCount\(bundle\.usage_recent_success_count\)\}/);
   assert.match(source, /Selection guidance:\s*\$\{buildIntentGuidance\(bundle\)\}/);
+  assert.match(source, /function formatBundleLastUsedAt\(value\)/);
   assert.match(source, /function buildIntentGuidance\(bundle = \{\}\)/);
   assert.match(source, /renderBundleDetailSummary\(bundle\)/);
   assert.match(source, /renderBundleDetailSummary\(null\)/);

@@ -397,9 +397,40 @@ function formatContextBundleOption(bundle) {
   const title = String(bundle?.title || "").trim() || "Untitled Bundle";
   const intendedUse = String(bundle?.intended_use || "").trim();
   const summary = String(bundle?.summary || "").trim();
+  const usageCue = formatContextBundleUsageCue(bundle);
 
-  const meta = [intendedUse, summary].filter(Boolean).join(" | ");
+  const meta = [intendedUse, summary, usageCue].filter(Boolean).join(" | ");
   return meta ? `${title} - ${meta}` : title;
+}
+
+function formatBundleUsageCount(value) {
+  const parsed = Number.parseInt(value, 10);
+  if (!Number.isInteger(parsed) || parsed < 0) {
+    return 0;
+  }
+  return parsed;
+}
+
+function formatBundleLastUsedAt(value) {
+  const timestamp = typeof value === "string" && value.trim()
+    ? value.trim()
+    : "";
+  if (!timestamp) {
+    return "(never)";
+  }
+
+  const parsedTimestamp = Date.parse(timestamp);
+  if (!Number.isFinite(parsedTimestamp)) {
+    return timestamp;
+  }
+
+  return new Date(parsedTimestamp).toLocaleString();
+}
+
+function formatContextBundleUsageCue(bundle) {
+  const recentSuccessCount = formatBundleUsageCount(bundle?.usage_recent_success_count);
+  const lastUsed = formatBundleLastUsedAt(bundle?.last_used_at);
+  return `Last used: ${lastUsed} | Recent success (30d): ${recentSuccessCount}`;
 }
 
 function normalizeProjectAffinityValue(value) {
@@ -472,6 +503,9 @@ function renderContextBundleSelectionSummary() {
   const projectAffinity = String(selectedBundle.project_name || "").trim();
   const selectedProjectName = String(projectSelect.value || "").trim();
   const affinityWarning = resolveContextBundleProjectAffinityWarning(projectAffinity, selectedProjectName);
+  const lastUsed = formatBundleLastUsedAt(selectedBundle.last_used_at);
+  const recentSuccessCount = formatBundleUsageCount(selectedBundle.usage_recent_success_count);
+  const recentUsageCount = formatBundleUsageCount(selectedBundle.usage_recent_count);
 
   contextBundleSummaryTitle.textContent = title;
   contextBundleSummaryGuidance.textContent = [
@@ -481,7 +515,10 @@ function renderContextBundleSelectionSummary() {
   contextBundleSummaryMeta.textContent = [
     `Summary: ${summary || "(none)"}`,
     `Intended use: ${intendedUse || "(none)"}`,
-    `Project affinity: ${projectAffinity || "(none)"}`
+    `Project affinity: ${projectAffinity || "(none)"}`,
+    `Last used: ${lastUsed}`,
+    `Recent uses (30d): ${recentUsageCount}`,
+    `Recent successful uses (30d): ${recentSuccessCount}`
   ].join(" | ");
   contextBundleSummaryCard.classList.remove("hidden");
 }

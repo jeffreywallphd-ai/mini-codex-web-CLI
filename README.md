@@ -170,7 +170,10 @@ Context bundles are persisted with a parent-child data model in SQLite:
 - Index and feature-management bundle selectors now surface a non-blocking project-affinity warning when a selected bundle's `project_name` metadata appears mismatched with the current project scope; users can still proceed, and missing metadata does not produce warnings.
 - Run and automation records persist nullable `context_bundle_id` linkage so bundle-backed and non-bundle executions remain backward compatible in one explicit model.
 - Run and automation APIs surface both bundle id and bundle title metadata (`context_bundle_id` + `context_bundle_title`, and camelCase variants in automation route payloads) so historical runs can be traced to bundle context selection.
+- Bundle model responses now include lightweight usage cues (`last_used_at`, `usage_total_count`, `usage_recent_count`, `usage_recent_success_count`) computed from run + automation history without requiring analytics infrastructure.
+- Bundle usage metadata (`last_used_at`) is automatically updated after manual/automated runs that use a bundle and when a bundle is attached to an automation run.
 - Recent run cards on the index page and run details summaries show concise selected-bundle metadata (bundle title, with id in run details when available) so the context source used for each run remains visible for troubleshooting.
+- Bundle selectors and bundle cards now surface lightweight usage cues (last used timestamp and recent successful usage count) to help users quickly differentiate and reuse effective bundles.
 - Prompt assembly uses a stable rule: compiled bundle context is injected **before** the task prompt using `bundle_context_before_task_prompt_v1` in `server/runPromptContext.js`.
 - The index page includes a **Manage Context Bundles** navigation action that routes to `/context-bundles.html`, making it the central bundle authoring/management page.
 - Context bundle API endpoints:

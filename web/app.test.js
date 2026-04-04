@@ -17,7 +17,9 @@ test("index page app loads context bundle selector options from context bundle A
   assert.match(source, /async function loadContextBundles\(\)/);
   assert.match(source, /fetch\("\/api\/context-bundles\?includeParts=false"\)/);
   assert.match(source, /function formatContextBundleOption\(bundle\)/);
-  assert.match(source, /const meta = \[intendedUse,\s*summary\]\.filter\(Boolean\)\.join\(" \| "\);/);
+  assert.match(source, /function formatContextBundleUsageCue\(bundle\)/);
+  assert.match(source, /const usageCue = formatContextBundleUsageCue\(bundle\);/);
+  assert.match(source, /const meta = \[intendedUse,\s*summary,\s*usageCue\]\.filter\(Boolean\)\.join\(" \| "\);/);
   assert.match(source, /option\.value = String\(bundleId\);/);
 });
 
@@ -46,6 +48,8 @@ test("index page renders selected context bundle summary metadata", () => {
   assert.match(source, /Summary: \$\{summary \|\| "\(\s*none\s*\)"\}/);
   assert.match(source, /Intended use: \$\{intendedUse \|\| "\(\s*none\s*\)"\}/);
   assert.match(source, /Project affinity: \$\{projectAffinity \|\| "\(\s*none\s*\)"\}/);
+  assert.match(source, /Last used: \$\{lastUsed\}/);
+  assert.match(source, /Recent successful uses \(30d\): \$\{recentSuccessCount\}/);
   assert.match(source, /contextBundleSelect\.addEventListener\("change", renderContextBundleSelectionSummary\);/);
 });
 
