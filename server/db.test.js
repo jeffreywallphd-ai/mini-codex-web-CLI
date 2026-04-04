@@ -40,7 +40,8 @@ test("automation metadata is persisted and updateable in sqlite", async () => {
       stopFlag: false,
       stopOnIncomplete: true,
       automationStatus: "running",
-      currentPosition: 1
+      currentPosition: 1,
+      stopReason: null
     });
     automationRunId = created.id;
 
@@ -50,6 +51,7 @@ test("automation metadata is persisted and updateable in sqlite", async () => {
     assert.equal(created.stop_on_incomplete, 1);
     assert.equal(created.current_position, 1);
     assert.equal(created.automation_status, "running");
+    assert.equal(created.stop_reason, null);
 
     const loaded = await getAutomationRunById(automationRunId);
     assert.equal(loaded.id, automationRunId);
@@ -57,17 +59,20 @@ test("automation metadata is persisted and updateable in sqlite", async () => {
     assert.equal(loaded.target_id, targetId);
     assert.equal(loaded.stop_on_incomplete, 1);
     assert.equal(loaded.automation_status, "running");
+    assert.equal(loaded.stop_reason, null);
 
     const updated = await updateAutomationRunMetadata(automationRunId, {
       stopFlag: true,
       stopOnIncomplete: false,
       currentPosition: 2,
-      automationStatus: "completed"
+      automationStatus: "completed",
+      stopReason: "all_work_complete"
     });
     assert.equal(updated.stop_flag, 1);
     assert.equal(updated.stop_on_incomplete, 0);
     assert.equal(updated.current_position, 2);
     assert.equal(updated.automation_status, "completed");
+    assert.equal(updated.stop_reason, "all_work_complete");
   } finally {
     await cleanupAutomationRun(automationRunId);
   }

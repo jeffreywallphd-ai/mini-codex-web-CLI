@@ -26,7 +26,7 @@ The app is designed for personal LAN use, not for public internet exposure or mu
 - Recent run history with search
 - Basic usage tracking when the SDK returns usage data
 - Automation queue generation utilities for deterministic `feature -> epic -> story` ordering
-- Automation metadata persistence for orchestration state (`automation_type`, `target_id`, `stop_on_incomplete`, `stop_flag`, `current_position`, `automation_status`)
+- Automation metadata persistence for orchestration state (`automation_type`, `target_id`, `stop_on_incomplete`, `stop_flag`, `current_position`, `automation_status`, `stop_reason`)
 - Sequential automation runner for server-driven queue execution (`server/automationRunner.js`)
 - SQLite storage with no external database
 - Mobile-friendly, lightweight UI intended for LAN access
@@ -163,6 +163,8 @@ Shared automation planning rules are defined in `server/automationQueue.js`.
   - `stop_flag`
   - `current_position`
   - `automation_status` (`pending`, `running`, `completed`, `failed`, or `stopped`)
+  - `stop_reason` (final outcome reason, such as `all_work_complete`,
+    `execution_failed`, or `story_incomplete`)
 
 ## Automation Execution Runner
 
@@ -178,6 +180,8 @@ is compatible with the existing story run lifecycle.
   - execution throws (`execution_failed`)
   - `stopOnIncompleteStory` is enabled and a story completion status is not
     `complete` (`story_incomplete`)
+- Final runner output includes `stopReason` so automation outcomes can be
+  persisted and displayed.
 - `onProgress` is invoked after each story to support persistence of queue
   progress (for example, updating `automation_runs.current_position`).
 

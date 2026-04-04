@@ -9,7 +9,7 @@ const dbPath = path.resolve(dataDir, "app.db");
 const db = new sqlite3.Database(dbPath);
 db.run("PRAGMA foreign_keys = ON");
 
-const LATEST_SCHEMA_VERSION = 9;
+const LATEST_SCHEMA_VERSION = 10;
 const VALID_AUTOMATION_TYPES = new Set(["feature", "epic", "story"]);
 const VALID_AUTOMATION_STATUSES = new Set(["pending", "running", "completed", "failed", "stopped"]);
 
@@ -80,7 +80,11 @@ async function detectVersionFromSchema() {
     if (hasAutomationRuns && hasStoryRunId && hasArchived && hasFeatureProjectScope) {
       const hasStopOnIncomplete = await columnExists("automation_runs", "stop_on_incomplete");
       const hasAutomationStatus = await columnExists("automation_runs", "automation_status");
-      if (hasStopOnIncomplete && hasAutomationStatus) return 9;
+      if (hasStopOnIncomplete && hasAutomationStatus) {
+        const hasStopReason = await columnExists("automation_runs", "stop_reason");
+        if (hasStopReason) return 10;
+        return 9;
+      }
       return 8;
     }
     if (hasStoryRunId && hasArchived && hasFeatureProjectScope) return 7;
@@ -280,6 +284,10 @@ async function migrateToV9() {
   `);
 }
 
+async function migrateToV10() {
+  await ensureColumn("automation_runs", "stop_reason", "TEXT");
+}
+
 async function runMigrations() {
   let version = await getSchemaVersion();
 
@@ -336,6 +344,12 @@ async function runMigrations() {
   if (version < 9) {
     await migrateToV9();
     version = 9;
+    await setSchemaVersion(version);
+  }
+
+  if (version < 10) {
+    await migrateToV10();
+    version = 10;
     await setSchemaVersion(version);
   }
 
@@ -779,6 +793,9 @@ async function createAutomationRun(input = {}) {
   const stopFlag = input.stopFlag ? 1 : 0;
   const stopOnIncomplete = input.stopOnIncomplete ? 1 : 0;
   const currentPosition = Number.parseInt(input.currentPosition ?? 1, 10);
+  const stopReason = typeof input.stopReason === "string" && input.stopReason.trim()
+    ? input.stopReason.trim()
+    : null;
 
   if (!automationType) {
     throw new Error("Automation type is required.");
@@ -805,10 +822,10 @@ async function createAutomationRun(input = {}) {
   const id = await runWithLastId(
     `
       INSERT INTO automation_runs
-      (automation_type, target_id, stop_flag, stop_on_incomplete, current_position, automation_status)
-      VALUES (?, ?, ?, ?, ?, ?)
+      (automation_type, target_id, stop_flag, stop_on_incomplete, current_position, automation_status, stop_reason)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
     `,
-    [automationType, targetId, stopFlag, stopOnIncomplete, currentPosition, automationStatus]
+    [automationType, targetId, stopFlag, stopOnIncomplete, currentPosition, automationStatus, stopReason]
   );
 
   return getAutomationRunById(id);
@@ -832,6 +849,7 @@ async function getAutomationRunById(id) {
         stop_on_incomplete,
         current_position,
         automation_status,
+        stop_reason,
         created_at,
         updated_at
       FROM automation_runs
@@ -880,6 +898,14 @@ async function updateAutomationRunMetadata(id, updates = {}) {
     }
     updateClauses.push("automation_status = ?");
     params.push(automationStatus);
+  }
+
+  if (Object.prototype.hasOwnProperty.call(updates, "stopReason")) {
+    const stopReason = typeof updates.stopReason === "string" && updates.stopReason.trim()
+      ? updates.stopReason.trim()
+      : null;
+    updateClauses.push("stop_reason = ?");
+    params.push(stopReason);
   }
 
   if (updateClauses.length === 0) {
