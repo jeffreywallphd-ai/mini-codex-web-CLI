@@ -79,6 +79,7 @@ function createServerHarness(overrides = {}) {
         automation_status: input.automationStatus,
         stop_reason: input.stopReason ?? null,
         context_bundle_id: input.contextBundleId ?? null,
+        context_bundle_title: input.contextBundleId ? `Bundle ${input.contextBundleId}` : null,
         failed_story_id: input.failedStoryId ?? null,
         failure_summary: input.failureSummary ?? null,
         created_at: "2026-04-04T00:00:00.000Z",
@@ -123,6 +124,7 @@ function createServerHarness(overrides = {}) {
         automation_status: "running",
         stop_reason: null,
         context_bundle_id: null,
+        context_bundle_title: null,
         failed_story_id: null,
         failure_summary: null,
         created_at: "2026-04-04T00:00:00.000Z",
@@ -146,6 +148,12 @@ function createServerHarness(overrides = {}) {
         stop_reason: Object.prototype.hasOwnProperty.call(updates, "stopReason")
           ? (updates.stopReason ?? null)
           : existing.stop_reason,
+        context_bundle_id: Object.prototype.hasOwnProperty.call(updates, "contextBundleId")
+          ? (updates.contextBundleId ?? null)
+          : existing.context_bundle_id,
+        context_bundle_title: Object.prototype.hasOwnProperty.call(updates, "contextBundleId")
+          ? (updates.contextBundleId ? `Bundle ${updates.contextBundleId}` : null)
+          : existing.context_bundle_title,
         failed_story_id: Object.prototype.hasOwnProperty.call(updates, "failedStoryId")
           ? (updates.failedStoryId ?? null)
           : existing.failed_story_id,
@@ -207,6 +215,7 @@ function createServerHarness(overrides = {}) {
       automation_status: "running",
       stop_reason: null,
       context_bundle_id: null,
+      context_bundle_title: null,
       failed_story_id: null,
       failure_summary: null,
       created_at: "2026-04-04T00:00:00.000Z",
@@ -377,6 +386,8 @@ test("feature/epic/story start endpoints launch automation and return tracking p
       assert.equal(payload.automationRun.baseBranch, "main");
       assert.equal(payload.automationRun.stopOnIncomplete, true);
       assert.equal(payload.automationRun.status, "running");
+      assert.equal(payload.automationRun.contextBundleId, 44);
+      assert.equal(payload.automationRun.contextBundleTitle, "Bundle 44");
       assert.equal(payload.queue.totalStories, testCase.expectedStoryIds.length);
       assert.deepEqual(payload.queue.storyIds, testCase.expectedStoryIds);
       assert.equal(payload.queue.queueStatus.isValid, true);
@@ -1718,6 +1729,7 @@ test("resume endpoint restarts stopped automation from remaining persisted queue
     base_branch: "main",
     stop_on_incomplete: 0,
     context_bundle_id: 991,
+    context_bundle_title: "Bundle 991",
     stop_flag: 1,
     current_position: 2,
     automation_status: "stopped",
@@ -1736,6 +1748,8 @@ test("resume endpoint restarts stopped automation from remaining persisted queue
     assert.equal(payload.launchMode, "resume");
     assert.equal(payload.automationRun.id, 4401);
     assert.equal(payload.automationRun.status, "running");
+    assert.equal(payload.automationRun.contextBundleId, 991);
+    assert.equal(payload.automationRun.contextBundleTitle, "Bundle 991");
     assert.equal(payload.queue.totalStories, 1);
     assert.deepEqual(payload.queue.storyIds, [302]);
     assert.equal(payload.queue.totalStoriesInRunQueue, 2);

@@ -34,6 +34,7 @@ The app is designed for personal LAN use, not for public internet exposure or mu
 - Shared automated story run pipeline that reuses manual run creation/execution persistence (`server/automatedStoryRunPipeline.js`)
 - Automated run-origin linkage persisted on each run (`automation_origin_type`, `automation_origin_id`, `automation_run_id`) for feature/epic/story traceability
 - Context bundle schema + model persistence with ordered multi-part composition (`context_bundles`, `context_bundle_parts`) and reusable metadata (`intended_use`, `tags`, `project_name`, `summary`, `updated_at`)
+- Run and automation API payloads include selected context bundle linkage (`context_bundle_id`) and resolved title metadata (`context_bundle_title` / `contextBundleTitle`) for execution traceability
 - Feature card automation control in **Not Yet Implemented** for launching feature-wide automation (`Complete with Automation`)
 - Feature/epic/story automation summaries include concise stop reasons for early stops (`execution_failed`, `story_incomplete`, `manual_stop`) when backend state provides one
 - SQLite storage with no external database
@@ -159,7 +160,8 @@ Context bundles are persisted with a parent-child data model in SQLite:
 - Bundle compilation now includes simple context-quality advisory warnings (`qualityWarnings`, `qualityWarningSummary`) for common issues such as missing high-value sections, low-signal parts, duplicate/near-duplicate content, potential contradictory directives, and oversized bundle estimates; warnings are previewed in the authoring UI and are non-blocking unless data is clearly invalid.
 - Optional compile limits (`maxCompiledChars` or token-equivalent options) apply deterministic prefix-preserving truncation: higher-priority compilation sections are preserved first, then earlier ordered parts, with explainable truncation metadata (`truncation.preservedPartIds`, `truncation.partiallyTruncatedPartIds`, `truncation.omittedPartIds`).
 - Run preparation can now accept an optional `contextBundleId`; when provided, the selected bundle is compiled during run creation using the same `compileContextBundle(...)` path used by preview.
-- Run records persist nullable `context_bundle_id` linkage so bundle-backed and non-bundle runs remain backward compatible in one explicit model.
+- Run and automation records persist nullable `context_bundle_id` linkage so bundle-backed and non-bundle executions remain backward compatible in one explicit model.
+- Run and automation APIs surface both bundle id and bundle title metadata (`context_bundle_id` + `context_bundle_title`, and camelCase variants in automation route payloads) so historical runs can be traced to bundle context selection.
 - Prompt assembly uses a stable rule: compiled bundle context is injected **before** the task prompt using `bundle_context_before_task_prompt_v1` in `server/runPromptContext.js`.
 - The index page includes a **Manage Context Bundles** navigation action that routes to `/context-bundles.html`, making it the central bundle authoring/management page.
 - Context bundle API endpoints:
@@ -238,10 +240,11 @@ Shared automation planning rules are defined in `server/automationQueue.js`.
   - `stop_flag`
   - `current_position`
   - `automation_status` (`pending`, `running`, `completed`, `failed`, or `stopped`)
-- `stop_reason` (final outcome reason, such as `all_work_complete`,
-  `execution_failed`, or `story_incomplete`)
-- `failed_story_id` (failed story identifier when the run ends in failure)
-- `failure_summary` (compact failure reason captured from the failing step/error path)
+  - `context_bundle_id` (nullable selected context bundle linkage)
+  - `stop_reason` (final outcome reason, such as `all_work_complete`,
+    `execution_failed`, or `story_incomplete`)
+  - `failed_story_id` (failed story identifier when the run ends in failure)
+  - `failure_summary` (compact failure reason captured from the failing step/error path)
 - Per-story automation execution outcomes are persisted in SQLite table
   `automation_story_executions` with:
   - `automation_run_id`

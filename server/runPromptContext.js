@@ -81,7 +81,8 @@ async function resolveRunPrompt({
       prompt: basePrompt,
       promptAssembly: {
         promptInjectionPolicy: PROMPT_INJECTION_POLICY,
-        usedContextBundleId: null
+        usedContextBundleId: null,
+        usedContextBundleTitle: null
       }
     };
   }
@@ -110,6 +111,7 @@ async function resolveRunPrompt({
     promptAssembly: {
       promptInjectionPolicy: PROMPT_INJECTION_POLICY,
       usedContextBundleId: normalizedBundleId,
+      usedContextBundleTitle: normalizePrompt(bundle?.title) || null,
       compiledBundleFormat: compiledBundle?.format || null,
       includedPartIds: Array.isArray(compiledBundle?.includedPartIds)
         ? [...compiledBundle.includedPartIds]

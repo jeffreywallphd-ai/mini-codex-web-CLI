@@ -1611,27 +1611,30 @@ function getRuns({ search = "", status = "active" } = {}) {
 
         db.all(
           `SELECT
-             id,
-             project_name,
-             prompt,
-             code,
-             created_at,
-             execution_mode,
-             branch_name,
-             merged_at,
-             change_title,
-             completion_status,
-             completion_work,
-             run_start_time,
-             run_end_time,
-             automation_origin_type,
-             automation_origin_id,
-             automation_run_id,
-             context_bundle_id,
-             COALESCE(archived, 0) AS archived
+             runs.id,
+             runs.project_name,
+             runs.prompt,
+             runs.code,
+             runs.created_at,
+             runs.execution_mode,
+             runs.branch_name,
+             runs.merged_at,
+             runs.change_title,
+             runs.completion_status,
+             runs.completion_work,
+             runs.run_start_time,
+             runs.run_end_time,
+             runs.automation_origin_type,
+             runs.automation_origin_id,
+             runs.automation_run_id,
+             runs.context_bundle_id,
+             context_bundles.title AS context_bundle_title,
+             COALESCE(runs.archived, 0) AS archived
            FROM runs
+           LEFT JOIN context_bundles
+             ON context_bundles.id = runs.context_bundle_id
            ${whereSql}
-           ORDER BY id DESC
+           ORDER BY runs.id DESC
            LIMIT 50`,
           params,
           (err, rows) => (err ? reject(err) : resolve(rows))
@@ -1646,7 +1649,15 @@ function getRunById(id) {
     dbReady
       .then(() => {
         db.get(
-          `SELECT * FROM runs WHERE id = ?`,
+          `
+            SELECT
+              runs.*,
+              context_bundles.title AS context_bundle_title
+            FROM runs
+            LEFT JOIN context_bundles
+              ON context_bundles.id = runs.context_bundle_id
+            WHERE runs.id = ?
+          `,
           [id],
           (err, row) => (err ? reject(err) : resolve(row))
         );
@@ -2165,23 +2176,26 @@ async function getAutomationRunById(id) {
   return get(
     `
       SELECT
-        id,
-        automation_type,
-        target_id,
-        project_name,
-        base_branch,
-        stop_flag,
-        stop_on_incomplete,
-        current_position,
-        automation_status,
-        stop_reason,
-        failed_story_id,
-        context_bundle_id,
-        failure_summary,
-        created_at,
-        updated_at
+        automation_runs.id,
+        automation_runs.automation_type,
+        automation_runs.target_id,
+        automation_runs.project_name,
+        automation_runs.base_branch,
+        automation_runs.stop_flag,
+        automation_runs.stop_on_incomplete,
+        automation_runs.current_position,
+        automation_runs.automation_status,
+        automation_runs.stop_reason,
+        automation_runs.failed_story_id,
+        automation_runs.context_bundle_id,
+        context_bundles.title AS context_bundle_title,
+        automation_runs.failure_summary,
+        automation_runs.created_at,
+        automation_runs.updated_at
       FROM automation_runs
-      WHERE id = ?
+      LEFT JOIN context_bundles
+        ON context_bundles.id = automation_runs.context_bundle_id
+      WHERE automation_runs.id = ?
     `,
     [runId]
   );
@@ -2460,25 +2474,28 @@ async function findRunningAutomationByScope(input = {}) {
     return get(
       `
         SELECT
-          id,
-          automation_type,
-          target_id,
-          project_name,
-          base_branch,
-          stop_flag,
-          stop_on_incomplete,
-          current_position,
-          automation_status,
-          stop_reason,
-          context_bundle_id,
-          created_at,
-          updated_at
+          automation_runs.id,
+          automation_runs.automation_type,
+          automation_runs.target_id,
+          automation_runs.project_name,
+          automation_runs.base_branch,
+          automation_runs.stop_flag,
+          automation_runs.stop_on_incomplete,
+          automation_runs.current_position,
+          automation_runs.automation_status,
+          automation_runs.stop_reason,
+          automation_runs.context_bundle_id,
+          context_bundles.title AS context_bundle_title,
+          automation_runs.created_at,
+          automation_runs.updated_at
         FROM automation_runs
-        WHERE automation_type = ?
-          AND target_id = ?
-          AND automation_status = 'running'
-          AND id <> ?
-        ORDER BY id DESC
+        LEFT JOIN context_bundles
+          ON context_bundles.id = automation_runs.context_bundle_id
+        WHERE automation_runs.automation_type = ?
+          AND automation_runs.target_id = ?
+          AND automation_runs.automation_status = 'running'
+          AND automation_runs.id <> ?
+        ORDER BY automation_runs.id DESC
         LIMIT 1
       `,
       [automationType, targetId, excludeAutomationRunId]
@@ -2488,24 +2505,27 @@ async function findRunningAutomationByScope(input = {}) {
   return get(
     `
       SELECT
-        id,
-        automation_type,
-        target_id,
-        project_name,
-        base_branch,
-        stop_flag,
-        stop_on_incomplete,
-        current_position,
-        automation_status,
-        stop_reason,
-        context_bundle_id,
-        created_at,
-        updated_at
+        automation_runs.id,
+        automation_runs.automation_type,
+        automation_runs.target_id,
+        automation_runs.project_name,
+        automation_runs.base_branch,
+        automation_runs.stop_flag,
+        automation_runs.stop_on_incomplete,
+        automation_runs.current_position,
+        automation_runs.automation_status,
+        automation_runs.stop_reason,
+        automation_runs.context_bundle_id,
+        context_bundles.title AS context_bundle_title,
+        automation_runs.created_at,
+        automation_runs.updated_at
       FROM automation_runs
-      WHERE automation_type = ?
-        AND target_id = ?
-        AND automation_status = 'running'
-      ORDER BY id DESC
+      LEFT JOIN context_bundles
+        ON context_bundles.id = automation_runs.context_bundle_id
+      WHERE automation_runs.automation_type = ?
+        AND automation_runs.target_id = ?
+        AND automation_runs.automation_status = 'running'
+      ORDER BY automation_runs.id DESC
       LIMIT 1
     `,
     [automationType, targetId]

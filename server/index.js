@@ -393,6 +393,7 @@ async function executeRunFlow({
   });
   const finalPrompt = resolvedPrompt.prompt;
   const selectedContextBundleId = resolvedPrompt?.promptAssembly?.usedContextBundleId ?? null;
+  const selectedContextBundleTitle = resolvedPrompt?.promptAssembly?.usedContextBundleTitle ?? null;
 
   publishRunEvent(streamId, { type: "branch.creating", message: "Creating branch from base..." });
   const branchInfo = await createCodexBranch(repoPath, baseBranch);
@@ -443,7 +444,8 @@ async function executeRunFlow({
     automation_origin_type: runOrigin?.automationType ?? null,
     automation_origin_id: runOrigin?.targetId ?? null,
     automation_run_id: runOrigin?.automationRunId ?? null,
-    context_bundle_id: selectedContextBundleId
+    context_bundle_id: selectedContextBundleId,
+    context_bundle_title: selectedContextBundleTitle
   });
   responsePayload.gitStatusFiles = gitSnapshot.files;
   responsePayload.gitDiffMap = gitSnapshot.diffs;
