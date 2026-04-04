@@ -130,6 +130,17 @@ Context bundles are persisted with a parent-child data model in SQLite:
 
 - `context_bundles` stores bundle-level metadata (`title`, `description`, `status`, timestamps, and nullable extensibility fields like `token_estimate`, `is_active`, `last_used_at`).
 - `context_bundle_parts` stores ordered bundle parts linked by `bundle_id` with explicit `position`, semantic fields (`part_type`, `title`, `content`), optional authoring metadata (`instructions`, `notes`), and inclusion flags (`include_in_compiled`, `include_in_preview`).
+- `part_type` is a controlled server-validated value (centralized in `server/contextBundlePartTypes.js`) with this canonical set:
+  - `repository_context`
+  - `architecture_guidance`
+  - `coding_standards`
+  - `documentation_standards`
+  - `domain_glossary`
+  - `implementation_constraints`
+  - `testing_expectations`
+  - `feature_background`
+  - `user_notes`
+- Bundle part records include `part_type_label` in model responses so UI surfaces can display the selected type with a stable human-readable label.
 - Ordering is deterministic and explicit (`position`) rather than inferred from creation order.
 - Bundle and part CRUD persistence is implemented in `server/db.js` with migration-backed schema evolution (no reset required).
 

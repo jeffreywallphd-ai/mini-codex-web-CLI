@@ -2,6 +2,7 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const path = require("node:path");
 const sqlite3 = require("sqlite3").verbose();
+const { CONTEXT_BUNDLE_PART_TYPES } = require("./contextBundlePartTypes");
 
 const {
   dbReady,
@@ -1346,6 +1347,20 @@ test("context bundle schema migration creates bundle foundation tables", async (
   assert.equal(partTable?.name, "context_bundle_parts");
 });
 
+test("context bundle part type semantics expose a controlled list", () => {
+  assert.deepEqual(CONTEXT_BUNDLE_PART_TYPES, [
+    "repository_context",
+    "architecture_guidance",
+    "coding_standards",
+    "documentation_standards",
+    "domain_glossary",
+    "implementation_constraints",
+    "testing_expectations",
+    "feature_background",
+    "user_notes"
+  ]);
+});
+
 test("context bundles support multiple bundles with deterministic ordered parts", async () => {
   await dbReady;
 
@@ -1371,7 +1386,7 @@ test("context bundles support multiple bundles with deterministic ordered parts"
 
     await createContextBundlePart({
       bundleId: bundleA.id,
-      partType: "constraints",
+      partType: "implementation_constraints",
       title: "Constraints",
       content: "Never mutate unrelated files.",
       instructions: "Enforce before planning.",
@@ -1381,7 +1396,7 @@ test("context bundles support multiple bundles with deterministic ordered parts"
     });
     await createContextBundlePart({
       bundleId: bundleA.id,
-      partType: "objective",
+      partType: "feature_background",
       title: "Objective",
       content: "Implement story scope only.",
       notes: "Primary context section.",
@@ -1391,7 +1406,7 @@ test("context bundles support multiple bundles with deterministic ordered parts"
     });
     await createContextBundlePart({
       bundleId: bundleB.id,
-      partType: "reference",
+      partType: "repository_context",
       title: "Reference",
       content: "Use existing architecture patterns.",
       position: 1,
@@ -1412,8 +1427,10 @@ test("context bundles support multiple bundles with deterministic ordered parts"
     );
 
     const loadedPartsA = await getContextBundlePartsByBundleId(bundleA.id);
-    assert.equal(loadedPartsA[0].part_type, "objective");
-    assert.equal(loadedPartsA[1].part_type, "constraints");
+    assert.equal(loadedPartsA[0].part_type, "feature_background");
+    assert.equal(loadedPartsA[0].part_type_label, "Feature Background");
+    assert.equal(loadedPartsA[1].part_type, "implementation_constraints");
+    assert.equal(loadedPartsA[1].part_type_label, "Implementation Constraints");
 
     const allBundles = await getContextBundles();
     const byId = new Map(allBundles.map((bundle) => [bundle.id, bundle]));
@@ -1461,7 +1478,7 @@ test("context bundle and part models support create update and delete", async ()
 
     const createdPart = await createContextBundlePart({
       bundleId,
-      partType: "instruction",
+      partType: "architecture_guidance",
       title: "Part Initial",
       content: "Initial content",
       instructions: "Initial instruction",
@@ -1475,7 +1492,7 @@ test("context bundle and part models support create update and delete", async ()
     partId = createdPart.id;
 
     const updatedPart = await updateContextBundlePart(partId, {
-      partType: "policy",
+      partType: "testing_expectations",
       title: "Part Updated",
       content: "Updated content",
       instructions: "",
@@ -1486,7 +1503,8 @@ test("context bundle and part models support create update and delete", async ()
       tokenEstimate: 96,
       isActive: 0
     });
-    assert.equal(updatedPart.part_type, "policy");
+    assert.equal(updatedPart.part_type, "testing_expectations");
+    assert.equal(updatedPart.part_type_label, "Testing Expectations");
     assert.equal(updatedPart.title, "Part Updated");
     assert.equal(updatedPart.content, "Updated content");
     assert.equal(updatedPart.instructions, null);
@@ -1505,7 +1523,7 @@ test("context bundle and part models support create update and delete", async ()
 
     const cascadePart = await createContextBundlePart({
       bundleId,
-      partType: "reference",
+      partType: "repository_context",
       title: "Cascade Part",
       content: "Should be removed with parent bundle.",
       position: 4
@@ -1526,6 +1544,58 @@ test("context bundle and part models support create update and delete", async ()
     }
     if (cascadePartId) {
       await deleteContextBundlePartById(cascadePartId);
+    }
+    if (bundleId) {
+      await cleanupContextBundle(bundleId);
+    }
+  }
+});
+
+test("context bundle part type validation rejects unknown types and supports canonical aliases", async () => {
+  await dbReady;
+
+  let bundleId = null;
+  let aliasedPartId = null;
+
+  try {
+    const createdBundle = await createContextBundle({
+      title: `Bundle Part Type Validation ${Date.now()}`,
+      description: "",
+      status: "draft"
+    });
+    bundleId = createdBundle.id;
+
+    const aliasedPart = await createContextBundlePart({
+      bundleId,
+      partType: "policy",
+      title: "Legacy Alias",
+      content: "Alias should normalize.",
+      position: 1
+    });
+    aliasedPartId = aliasedPart.id;
+    assert.equal(aliasedPart.part_type, "implementation_constraints");
+    assert.equal(aliasedPart.part_type_label, "Implementation Constraints");
+
+    await assert.rejects(
+      () => createContextBundlePart({
+        bundleId,
+        partType: "totally_custom_type",
+        title: "Invalid Type",
+        content: "Should fail.",
+        position: 2
+      }),
+      /Context bundle part type must be one of/
+    );
+
+    await assert.rejects(
+      () => updateContextBundlePart(aliasedPart.id, {
+        partType: "unsupported_next_type"
+      }),
+      /Context bundle part type must be one of/
+    );
+  } finally {
+    if (aliasedPartId) {
+      await deleteContextBundlePartById(aliasedPartId);
     }
     if (bundleId) {
       await cleanupContextBundle(bundleId);
