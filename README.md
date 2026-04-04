@@ -269,6 +269,9 @@ Feature Management UI integration:
 - feature cards include a `Stop Run For Incomplete Stories` checkbox that controls `stopOnIncompleteStory` in the start request (defaults to unchecked)
 - feature cards include a compact automation status summary badge sourced from backend feature automation state (`not_started`, `running`, `completed`, `stopped`, `failed`) with graceful fallback to `not_started` when status data is missing
 - the button is hidden for completed features and replaced with a lightweight hint when no incomplete stories are available in the feature
+- incomplete epic cards surface a **Complete with Automation** button
+- the epic button starts automation via `POST /api/automation/start/epic/:epicId`
+- epic cards include the same compact automation status summary badge pattern (`not_started`, `running`, `completed`, `stopped`, `failed`) and show active-run context when an epic run is in progress
 
 Automation status response (`200 OK`) includes polling-friendly state:
 

@@ -19,12 +19,32 @@ test("feature automation button starts feature-scoped automation endpoint", () =
   assert.match(source, /body:\s*JSON\.stringify\(\{\s*projectName,\s*baseBranch,\s*stopOnIncompleteStory\s*\}\)/m);
 });
 
+test("epic automation button starts epic-scoped automation endpoint with epic identifier", () => {
+  const source = readFeaturesScript();
+
+  assert.match(
+    source,
+    /fetch\(`\/api\/automation\/start\/epic\/\$\{encodeURIComponent\(String\(epicId\)\)\}`,\s*\{\s*method:\s*"POST"/m
+  );
+  assert.match(source, /body:\s*JSON\.stringify\(\{\s*projectName,\s*baseBranch\s*\}\)/m);
+  assert.match(source, /const result = await startEpicAutomation\(epic\.id\);/);
+});
+
 test("feature card automation UI keeps existing card copy and eligibility affordance", () => {
   const source = readFeaturesScript();
 
   assert.match(source, /button\.textContent\s*=\s*isActiveFeatureRun\s*\?\s*"Automation Running\.\.\."\s*:\s*"Complete with Automation"/m);
   assert.match(source, /"Stop Run For Incomplete Stories"/);
   assert.match(source, /"No incomplete stories in this feature\."/);
+});
+
+test("epic card automation UI adds complete-with-automation control and status summary", () => {
+  const source = readFeaturesScript();
+
+  assert.match(source, /function createEpicAutomationUi\(content,\s*epic\)/);
+  assert.match(source, /"No incomplete stories in this epic\."/);
+  assert.match(source, /createEpicAutomationStatusSummary\(content,\s*epic\);/);
+  assert.match(source, /button\.textContent\s*=\s*isActiveEpicRun\s*\?\s*"Automation Running\.\.\."\s*:\s*"Complete with Automation"/m);
 });
 
 test("feature card shows compact automation status summary with required states and fallback", () => {
