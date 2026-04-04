@@ -10,12 +10,17 @@ const {
   getRuns,
   createFeatureTree,
   getFeaturesTree,
+  syncStoryCompletionFromRun,
   createAutomationRun,
   getAutomationRunById,
+  findRunningAutomationByScope,
   updateAutomationRunMetadata,
+  recordAutomationRunQueueItems,
   recordAutomationStoryExecution,
   getAutomationStoryExecutionsByRunId,
-  getAutomationQueueStoriesByTarget
+  getAutomationRunQueueItemsByRunId,
+  getAutomationQueueStoriesByTarget,
+  deleteRunById
 } = require("./db");
 
 const dbPath = path.resolve(__dirname, "../data/app.db");
@@ -312,6 +317,82 @@ test("run records persist automation origin linkage with backward-compatible nul
   }
 });
 
+test("deleting an unmerged run clears linked story completion association", async () => {
+  await dbReady;
+
+  const stamp = Date.now();
+  const scope = {
+    projectName: `db-delete-link-${stamp}`,
+    baseBranch: "main"
+  };
+  let runId = null;
+
+  try {
+    await createFeatureTree(
+      {
+        name: `Feature Delete Link ${stamp}`,
+        description: "Delete linkage fixture",
+        epics: [
+          {
+            name: `Epic Delete Link ${stamp}`,
+            description: "Fixture epic",
+            stories: [{ name: `Story Delete Link ${stamp}`, description: "Fixture story" }]
+          }
+        ]
+      },
+      scope
+    );
+
+    const seededFeatures = await getFeaturesTree(scope);
+    const storyId = seededFeatures?.[0]?.epics?.[0]?.stories?.[0]?.id;
+    assert.ok(Number.isInteger(storyId) && storyId > 0);
+
+    runId = await saveRun({
+      projectName: scope.projectName,
+      prompt: "fixture prompt",
+      code: 0,
+      stdout: "",
+      stderr: "",
+      statusBefore: "",
+      statusAfter: "",
+      usageDelta: "",
+      creditsRemaining: null,
+      executionMode: "write",
+      branchName: `fixture-delete-branch-${stamp}`,
+      baseBranch: scope.baseBranch,
+      gitStatus: "",
+      gitStatusFiles: [],
+      gitDiffMap: {},
+      changeTitle: "fixture",
+      changeDescription: "fixture",
+      promptWithInstructions: "fixture",
+      executedCommand: "fixture command",
+      spawnCommand: "fixture spawn",
+      completionStatus: "complete",
+      completionWork: "none",
+      runStartTime: Date.now() - 1000,
+      runEndTime: Date.now()
+    });
+
+    await syncStoryCompletionFromRun(storyId, runId);
+
+    const linkedStoryState = (await getFeaturesTree(scope))[0].epics[0].stories[0];
+    assert.equal(linkedStoryState.run_id, runId);
+    assert.equal(linkedStoryState.is_complete, true);
+
+    const deletedCount = await deleteRunById(runId);
+    assert.equal(deletedCount, 1);
+
+    const detachedStoryState = (await getFeaturesTree(scope))[0].epics[0].stories[0];
+    assert.equal(detachedStoryState.run_id, null);
+    assert.equal(detachedStoryState.run_status, "not_started");
+    assert.equal(detachedStoryState.is_complete, false);
+  } finally {
+    await cleanupRun(runId);
+    await cleanupFeatureScope(scope);
+  }
+});
+
 test("automation metadata persistence validates required fields", async () => {
   await dbReady;
 
@@ -428,6 +509,27 @@ test("automation story execution outcomes are persisted for status displays", as
     assert.equal(outcomes[0].queue_action, "stopped");
     assert.equal(outcomes[0].completion_status, "incomplete");
     assert.equal(outcomes[0].completion_work, "Waiting on follow-up migration tasks.");
+
+    const failed = await recordAutomationStoryExecution({
+      automationRunId,
+      storyId,
+      positionInQueue: 2,
+      executionStatus: "failed",
+      queueAction: "failed",
+      runId: null,
+      completionStatus: "unknown",
+      completionWork: null,
+      error: "Prompt generation failed (cause: missing story description)."
+    });
+
+    assert.equal(failed.execution_status, "failed");
+    assert.equal(failed.story_id, storyId);
+    assert.equal(failed.error, "Prompt generation failed (cause: missing story description).");
+
+    const refreshedOutcomes = await getAutomationStoryExecutionsByRunId(automationRunId);
+    assert.equal(refreshedOutcomes.length, 2);
+    assert.equal(refreshedOutcomes[1].execution_status, "failed");
+    assert.equal(refreshedOutcomes[1].error, "Prompt generation failed (cause: missing story description).");
   } finally {
     await cleanupAutomationStoryExecutions(automationRunId);
     await cleanupAutomationRun(automationRunId);
@@ -555,6 +657,214 @@ test("automation queue stories can be resolved by feature/epic/story targets", a
 
   const invalidQueue = await getAutomationQueueStoriesByTarget("feature", 0);
   assert.deepEqual(invalidQueue, []);
+});
+
+test("automation run queue snapshot items are persisted for restart-safe progress derivation", async () => {
+  await dbReady;
+
+  const stamp = Date.now();
+  const scope = {
+    projectName: `db-queue-snapshot-${stamp}`,
+    baseBranch: "main"
+  };
+  let automationRunId = null;
+
+  try {
+    await createFeatureTree(
+      {
+        name: `Feature Snapshot ${stamp}`,
+        description: "Queue snapshot fixture",
+        epics: [
+          {
+            name: `Epic Snapshot ${stamp}`,
+            description: "Fixture epic",
+            stories: [
+              { name: `Story Snapshot 1 ${stamp}`, description: "S1" },
+              { name: `Story Snapshot 2 ${stamp}`, description: "S2" }
+            ]
+          }
+        ]
+      },
+      scope
+    );
+
+    const features = await getFeaturesTree(scope);
+    const feature = features[0];
+    const epic = feature.epics[0];
+    const [storyOne, storyTwo] = epic.stories;
+
+    const automationRun = await createAutomationRun({
+      automationType: "feature",
+      targetId: feature.id,
+      projectName: scope.projectName,
+      baseBranch: scope.baseBranch,
+      stopFlag: false,
+      stopOnIncomplete: false,
+      automationStatus: "running",
+      currentPosition: 1,
+      stopReason: null
+    });
+    automationRunId = automationRun.id;
+
+    await recordAutomationRunQueueItems({
+      automationRunId,
+      stories: [
+        {
+          positionInQueue: 1,
+          featureId: feature.id,
+          featureTitle: feature.name,
+          epicId: epic.id,
+          epicTitle: epic.name,
+          storyId: storyOne.id,
+          storyTitle: storyOne.name,
+          storyDescription: storyOne.description,
+          storyCreatedAt: storyOne.created_at
+        },
+        {
+          positionInQueue: 2,
+          featureId: feature.id,
+          featureTitle: feature.name,
+          epicId: epic.id,
+          epicTitle: epic.name,
+          storyId: storyTwo.id,
+          storyTitle: storyTwo.name,
+          storyDescription: storyTwo.description,
+          storyCreatedAt: storyTwo.created_at
+        }
+      ]
+    });
+
+    const queueSnapshot = await getAutomationRunQueueItemsByRunId(automationRunId);
+    assert.equal(queueSnapshot.length, 2);
+    assert.deepEqual(
+      queueSnapshot.map((item) => item.positionInQueue),
+      [1, 2]
+    );
+    assert.deepEqual(
+      queueSnapshot.map((item) => item.storyId),
+      [storyOne.id, storyTwo.id]
+    );
+    assert.equal(queueSnapshot[0].storyTitle, storyOne.name);
+    assert.equal(queueSnapshot[1].storyTitle, storyTwo.name);
+  } finally {
+    await cleanupAutomationRun(automationRunId);
+    await cleanupFeatureScope(scope);
+  }
+});
+
+test("findRunningAutomationByScope returns only active runs for the exact scoped target", async () => {
+  await dbReady;
+  const targetId = Date.now();
+  let runningRunId = null;
+  let completedRunId = null;
+  let otherScopeRunId = null;
+
+  try {
+    const runningRun = await createAutomationRun({
+      automationType: "feature",
+      targetId,
+      projectName: "db-conflict-project",
+      baseBranch: "main",
+      stopFlag: false,
+      stopOnIncomplete: false,
+      automationStatus: "running",
+      currentPosition: 1,
+      stopReason: null
+    });
+    runningRunId = runningRun.id;
+
+    const completedRun = await createAutomationRun({
+      automationType: "feature",
+      targetId,
+      projectName: "db-conflict-project",
+      baseBranch: "main",
+      stopFlag: true,
+      stopOnIncomplete: false,
+      automationStatus: "completed",
+      currentPosition: 1,
+      stopReason: "all_work_complete"
+    });
+    completedRunId = completedRun.id;
+
+    const otherScopeRun = await createAutomationRun({
+      automationType: "feature",
+      targetId,
+      projectName: "db-conflict-project",
+      baseBranch: "release/1.0",
+      stopFlag: false,
+      stopOnIncomplete: false,
+      automationStatus: "running",
+      currentPosition: 1,
+      stopReason: null
+    });
+    otherScopeRunId = otherScopeRun.id;
+
+    const exactScopeConflict = await findRunningAutomationByScope({
+      automationType: "feature",
+      targetId,
+      projectName: "db-conflict-project",
+      baseBranch: "main"
+    });
+    assert.equal(exactScopeConflict.id, runningRunId);
+    assert.equal(exactScopeConflict.automation_status, "running");
+
+    const excludedConflict = await findRunningAutomationByScope({
+      automationType: "feature",
+      targetId,
+      projectName: "db-conflict-project",
+      baseBranch: "main",
+      excludeAutomationRunId: runningRunId
+    });
+    assert.equal(excludedConflict, undefined);
+
+    const unrelatedScopeConflict = await findRunningAutomationByScope({
+      automationType: "feature",
+      targetId,
+      projectName: "db-conflict-project",
+      baseBranch: "release/1.0"
+    });
+    assert.equal(unrelatedScopeConflict.id, otherScopeRunId);
+  } finally {
+    await cleanupAutomationRun(otherScopeRunId);
+    await cleanupAutomationRun(completedRunId);
+    await cleanupAutomationRun(runningRunId);
+  }
+});
+
+test("automation run queue snapshot validation enforces required ids and stories", async () => {
+  await dbReady;
+
+  await assert.rejects(
+    () => recordAutomationRunQueueItems({
+      automationRunId: 0,
+      stories: [{ positionInQueue: 1, storyId: 1 }]
+    }),
+    /Automation run id must be a positive integer/
+  );
+
+  await assert.rejects(
+    () => recordAutomationRunQueueItems({
+      automationRunId: 1,
+      stories: []
+    }),
+    /Queue snapshot stories are required/
+  );
+
+  await assert.rejects(
+    () => recordAutomationRunQueueItems({
+      automationRunId: 1,
+      stories: [{ positionInQueue: 0, storyId: 1 }]
+    }),
+    /Queue snapshot position must be a positive integer/
+  );
+
+  await assert.rejects(
+    () => recordAutomationRunQueueItems({
+      automationRunId: 1,
+      stories: [{ positionInQueue: 1, storyId: 0 }]
+    }),
+    /Queue snapshot story id must be a positive integer/
+  );
 });
 
 test("feature tree includes latest feature automation status summary with safe fallback", async () => {

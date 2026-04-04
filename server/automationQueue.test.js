@@ -10,6 +10,7 @@ const {
   createAutomationRules,
   defineAutomationExecutionPlan,
   evaluateAutomationStopCondition,
+  isStoryEligibleForAutomation,
   normalizeCompletionStatus,
   withStableCreationOrdering
 } = require("./automationQueue");
@@ -29,7 +30,7 @@ const FEATURES_FIXTURE = [
             id: 221,
             name: "Story 2.2.1",
             created_at: "2026-01-02T09:06:00.000Z",
-            completion_status: "complete"
+            completion_status: "incomplete"
           }
         ]
       }
@@ -49,7 +50,7 @@ const FEATURES_FIXTURE = [
             id: 121,
             name: "Story 1.2.1",
             created_at: "2026-01-01T09:11:00.000Z",
-            completion_status: "complete"
+            completion_status: "incomplete"
           }
         ]
       },
@@ -62,14 +63,14 @@ const FEATURES_FIXTURE = [
             id: 112,
             name: "Story 1.1.2",
             created_at: "2026-01-01T09:07:00.000Z",
-            completion_status: "complete"
+            completion_status: "incomplete"
           },
           {
             id: 111,
             name: "Story 1.1.1",
             description: "Implement queue ordering helper.",
             created_at: "2026-01-01T09:06:00.000Z",
-            completion_status: "complete"
+            completion_status: "incomplete"
           }
         ]
       }
@@ -162,7 +163,7 @@ test("queue items include execution and status metadata needed for reporting", (
   assert.equal(firstStory.storyId, 111);
   assert.equal(firstStory.storyDescription, "Implement queue ordering helper.");
   assert.equal(typeof firstStory.storyCreatedAt, "string");
-  assert.equal(firstStory.completionStatus, "complete");
+  assert.equal(firstStory.completionStatus, "incomplete");
 });
 
 test("buildScopedStoryExecutionQueue surfaces target-not-found cleanly", () => {
@@ -215,6 +216,136 @@ test("buildScopedStoryExecutionQueue surfaces empty queue when scope has no stor
     code: QUEUE_BUILD_STATUS.EMPTY_QUEUE,
     message: "No runnable stories found for epic '11'."
   });
+});
+
+test("buildScopedStoryExecutionQueue excludes completed stories from feature and epic scopes", () => {
+  const featuresFixture = [
+    {
+      id: 1,
+      name: "Feature 1",
+      created_at: "2026-01-01T09:00:00.000Z",
+      epics: [
+        {
+          id: 11,
+          name: "Epic 1.1",
+          created_at: "2026-01-01T09:05:00.000Z",
+          stories: [
+            { id: 111, name: "Story 1.1.1", created_at: "2026-01-01T09:06:00.000Z", completion_status: "complete" },
+            { id: 112, name: "Story 1.1.2", created_at: "2026-01-01T09:07:00.000Z", completion_status: "incomplete" }
+          ]
+        }
+      ]
+    }
+  ];
+
+  const featureQueue = buildScopedStoryExecutionQueue(featuresFixture, {
+    automationType: AUTOMATION_SCOPE.FEATURE,
+    targetId: 1
+  });
+  assert.deepEqual(featureQueue.stories.map((item) => item.storyId), [112]);
+  assert.equal(featureQueue.queueStatus.code, QUEUE_BUILD_STATUS.READY);
+
+  const epicQueue = buildScopedStoryExecutionQueue(featuresFixture, {
+    automationType: AUTOMATION_SCOPE.EPIC,
+    targetId: 11
+  });
+  assert.deepEqual(epicQueue.stories.map((item) => item.storyId), [112]);
+  assert.equal(epicQueue.queueStatus.code, QUEUE_BUILD_STATUS.READY);
+});
+
+test("buildScopedStoryExecutionQueue rejects completed story target as ineligible", () => {
+  const featuresFixture = [
+    {
+      id: 1,
+      name: "Feature 1",
+      created_at: "2026-01-01T09:00:00.000Z",
+      epics: [
+        {
+          id: 11,
+          name: "Epic 1.1",
+          created_at: "2026-01-01T09:05:00.000Z",
+          stories: [
+            { id: 111, name: "Story 1.1.1", created_at: "2026-01-01T09:06:00.000Z", completion_status: "complete" }
+          ]
+        }
+      ]
+    }
+  ];
+
+  const queueResult = buildScopedStoryExecutionQueue(featuresFixture, {
+    automationType: AUTOMATION_SCOPE.STORY,
+    targetId: 111
+  });
+
+  assert.deepEqual(queueResult.stories, []);
+  assert.deepEqual(queueResult.queueStatus, {
+    isValid: false,
+    code: QUEUE_BUILD_STATUS.TARGET_INELIGIBLE,
+    message: "story '111' is not eligible for automation because all stories are already complete."
+  });
+});
+
+test("buildScopedStoryExecutionQueue reports validation_failed when required story prompt fields are missing", () => {
+  const featuresFixture = [
+    {
+      id: 1,
+      name: "Feature 1",
+      created_at: "2026-01-01T09:00:00.000Z",
+      epics: [
+        {
+          id: 11,
+          name: "Epic 1.1",
+          created_at: "2026-01-01T09:05:00.000Z",
+          stories: [
+            { id: 111, name: "Story Missing Description", created_at: "2026-01-01T09:06:00.000Z", description: "" }
+          ]
+        }
+      ]
+    }
+  ];
+
+  const queueResult = buildScopedStoryExecutionQueue(featuresFixture, {
+    automationType: AUTOMATION_SCOPE.STORY,
+    targetId: 111
+  });
+
+  assert.deepEqual(queueResult.stories, []);
+  assert.equal(queueResult.queueStatus.code, QUEUE_BUILD_STATUS.VALIDATION_FAILED);
+  assert.match(queueResult.queueStatus.message, /missing required prompt fields/i);
+  assert.equal(Array.isArray(queueResult.validationErrors), true);
+  assert.equal(queueResult.validationErrors.length, 1);
+  assert.deepEqual(queueResult.validationErrors[0].missingFields, ["story_description"]);
+});
+
+test("feature queue still starts when at least one story is runnable even if others fail prompt validation", () => {
+  const featuresFixture = [
+    {
+      id: 1,
+      name: "Feature 1",
+      created_at: "2026-01-01T09:00:00.000Z",
+      epics: [
+        {
+          id: 11,
+          name: "Epic 1.1",
+          created_at: "2026-01-01T09:05:00.000Z",
+          stories: [
+            { id: 111, name: "Story Valid", description: "Ready to run", created_at: "2026-01-01T09:06:00.000Z" },
+            { id: 112, name: "Story Missing Description", description: "", created_at: "2026-01-01T09:07:00.000Z" }
+          ]
+        }
+      ]
+    }
+  ];
+
+  const queueResult = buildScopedStoryExecutionQueue(featuresFixture, {
+    automationType: AUTOMATION_SCOPE.FEATURE,
+    targetId: 1
+  });
+
+  assert.equal(queueResult.queueStatus.code, QUEUE_BUILD_STATUS.READY);
+  assert.deepEqual(queueResult.stories.map((item) => item.storyId), [111]);
+  assert.equal(queueResult.validationErrors.length, 1);
+  assert.deepEqual(queueResult.validationErrors[0].missingFields, ["story_description"]);
 });
 
 test("default automation rules define explicit scope and stop-rule contract", () => {
@@ -340,6 +471,12 @@ test("normalizeCompletionStatus prefers explicit COMPLETION_STATUS field", () =>
   assert.equal(normalizeCompletionStatus({ is_complete: 1 }), "complete");
   assert.equal(normalizeCompletionStatus({ is_complete: 0 }), "incomplete");
   assert.equal(normalizeCompletionStatus({}), "unknown");
+});
+
+test("isStoryEligibleForAutomation allows unknown/incomplete but blocks complete", () => {
+  assert.equal(isStoryEligibleForAutomation({ completion_status: "complete" }), false);
+  assert.equal(isStoryEligibleForAutomation({ completion_status: "incomplete" }), true);
+  assert.equal(isStoryEligibleForAutomation({}), true);
 });
 
 test("defineAutomationExecutionPlan validates selection", () => {

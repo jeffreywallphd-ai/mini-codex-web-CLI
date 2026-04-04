@@ -645,3 +645,12 @@ details pre {
   color: var(--muted);
 }
 
+.active-story-command-box {
+  margin: 0;
+  min-height: calc(1.4em * 3 + 20px);
+  max-height: calc(1.4em * 3 + 20px);
+  overflow-x: hidden;
+  overflow-y: hidden;
+  white-space: pre-wrap;
+}
+

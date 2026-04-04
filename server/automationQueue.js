@@ -25,7 +25,9 @@ const AUTOMATION_STOP_REASON = Object.freeze({
 const QUEUE_BUILD_STATUS = Object.freeze({
   READY: "ready",
   TARGET_NOT_FOUND: "target_not_found",
-  EMPTY_QUEUE: "empty_queue"
+  EMPTY_QUEUE: "empty_queue",
+  TARGET_INELIGIBLE: "target_ineligible",
+  VALIDATION_FAILED: "validation_failed"
 });
 
 const DEFAULT_AUTOMATION_RULES = Object.freeze({
@@ -183,7 +185,79 @@ function normalizeCompletionStatus(story = {}) {
   return "unknown";
 }
 
-function createQueueBuildStatus({ code, automationType, targetId }) {
+function isStoryEligibleForAutomation(story = {}) {
+  return normalizeCompletionStatus(story) !== "complete";
+}
+
+function firstNonEmptyString(values) {
+  if (!Array.isArray(values)) {
+    return "";
+  }
+
+  for (const value of values) {
+    if (typeof value === "string" && value.trim()) {
+      return value.trim();
+    }
+  }
+
+  return "";
+}
+
+function evaluateStoryPromptReadiness(story = {}) {
+  const storyTitle = firstNonEmptyString([
+    story.story_name,
+    story.storyTitle,
+    story.story_title,
+    story.storyName,
+    story.title,
+    story.name
+  ]);
+  const storyDescription = firstNonEmptyString([
+    story.story_description,
+    story.storyDescription,
+    story.description
+  ]);
+
+  const missingFields = [];
+  if (!storyTitle) {
+    missingFields.push("story_title");
+  }
+  if (!storyDescription) {
+    missingFields.push("story_description");
+  }
+
+  return {
+    isRunnable: missingFields.length === 0,
+    missingFields
+  };
+}
+
+function toRequiredPromptFieldLabel(fieldName) {
+  if (fieldName === "story_title") return "story title";
+  if (fieldName === "story_description") return "story description";
+  return String(fieldName || "").trim();
+}
+
+function createStoryPromptValidationError(feature, epic, story, scope = {}) {
+  const readiness = evaluateStoryPromptReadiness(story);
+  const missingFieldLabels = readiness.missingFields.map((fieldName) => toRequiredPromptFieldLabel(fieldName));
+  const storyId = story?.id ?? null;
+
+  return {
+    automationType: scope.automationType ?? null,
+    targetId: scope.targetId ?? null,
+    featureId: feature?.id ?? null,
+    featureTitle: getLabel(feature),
+    epicId: epic?.id ?? null,
+    epicTitle: getLabel(epic),
+    storyId,
+    storyTitle: getLabel(story),
+    missingFields: readiness.missingFields,
+    message: `Story '${storyId ?? "unknown"}' is missing required prompt fields: ${missingFieldLabels.join(", ")}.`
+  };
+}
+
+function createQueueBuildStatus({ code, automationType, targetId, validationErrors = [] }) {
   if (code === QUEUE_BUILD_STATUS.READY) {
     return {
       isValid: true,
@@ -197,6 +271,31 @@ function createQueueBuildStatus({ code, automationType, targetId }) {
       isValid: false,
       code,
       message: `No ${automationType} found for target '${targetId}'.`
+    };
+  }
+
+  if (code === QUEUE_BUILD_STATUS.TARGET_INELIGIBLE) {
+    return {
+      isValid: false,
+      code,
+      message: `${automationType} '${targetId}' is not eligible for automation because all stories are already complete.`
+    };
+  }
+
+  if (code === QUEUE_BUILD_STATUS.VALIDATION_FAILED) {
+    const firstValidationError = validationErrors[0];
+    if (automationType === AUTOMATION_SCOPE.STORY && firstValidationError?.message) {
+      return {
+        isValid: false,
+        code,
+        message: firstValidationError.message
+      };
+    }
+
+    return {
+      isValid: false,
+      code,
+      message: `No runnable stories found for ${automationType} '${targetId}' because required story prompt fields are missing.`
     };
   }
 
@@ -358,6 +457,9 @@ function buildScopedStoryExecutionQueue(features, selection) {
   const queues = [];
   let globalPosition = 1;
   let targetFound = true;
+  let candidateStoriesCount = 0;
+  let eligibleStoriesCount = 0;
+  const validationErrors = [];
 
   if (automationType === AUTOMATION_SCOPE.FEATURE) {
     const feature = findFeatureById(orderedFeatures, targetId);
@@ -374,11 +476,25 @@ function buildScopedStoryExecutionQueue(features, selection) {
     const epics = withStableCreationOrdering(normalizeList(feature?.epics));
     for (const epic of epics) {
       const stories = withStableCreationOrdering(normalizeList(epic?.stories));
-      const queuedStories = stories.map((story) => {
+      candidateStoriesCount += stories.length;
+
+      const queuedStories = [];
+      for (const story of stories) {
+        if (!isStoryEligibleForAutomation(story)) {
+          continue;
+        }
+
+        eligibleStoriesCount += 1;
+        const readiness = evaluateStoryPromptReadiness(story);
+        if (!readiness.isRunnable) {
+          validationErrors.push(createStoryPromptValidationError(feature, epic, story, scope));
+          continue;
+        }
+
         const queueStory = createQueueStory(feature, epic, story, globalPosition, scope);
         globalPosition += 1;
-        return queueStory;
-      });
+        queuedStories.push(queueStory);
+      }
 
       if (queuedStories.length === 0) {
         continue;
@@ -407,11 +523,25 @@ function buildScopedStoryExecutionQueue(features, selection) {
     }
 
     const stories = withStableCreationOrdering(normalizeList(context.epic?.stories));
-    const queuedStories = stories.map((story) => {
+    candidateStoriesCount += stories.length;
+
+    const queuedStories = [];
+    for (const story of stories) {
+      if (!isStoryEligibleForAutomation(story)) {
+        continue;
+      }
+
+      eligibleStoriesCount += 1;
+      const readiness = evaluateStoryPromptReadiness(story);
+      if (!readiness.isRunnable) {
+        validationErrors.push(createStoryPromptValidationError(context.feature, context.epic, story, scope));
+        continue;
+      }
+
       const queueStory = createQueueStory(context.feature, context.epic, story, globalPosition, scope);
       globalPosition += 1;
-      return queueStory;
-    });
+      queuedStories.push(queueStory);
+    }
 
     if (queuedStories.length > 0) {
       queues.push({
@@ -436,28 +566,51 @@ function buildScopedStoryExecutionQueue(features, selection) {
       };
     }
 
-    queues.push({
-      featureId: context.feature?.id ?? null,
-      featureTitle: getLabel(context.feature),
-      epicId: context.epic?.id ?? null,
-      epicTitle: getLabel(context.epic),
-      stories: [createQueueStory(context.feature, context.epic, context.story, globalPosition, scope)]
-    });
+    candidateStoriesCount += 1;
+    if (isStoryEligibleForAutomation(context.story)) {
+      eligibleStoriesCount += 1;
+      const readiness = evaluateStoryPromptReadiness(context.story);
+      if (!readiness.isRunnable) {
+        validationErrors.push(createStoryPromptValidationError(context.feature, context.epic, context.story, scope));
+      } else {
+        queues.push({
+          featureId: context.feature?.id ?? null,
+          featureTitle: getLabel(context.feature),
+          epicId: context.epic?.id ?? null,
+          epicTitle: getLabel(context.epic),
+          stories: [createQueueStory(context.feature, context.epic, context.story, globalPosition, scope)]
+        });
+      }
+    }
   }
 
   const stories = flattenStoryExecutionQueues(queues);
-  const queueStatus = stories.length > 0 && targetFound
-    ? createQueueBuildStatus({ code: QUEUE_BUILD_STATUS.READY, automationType, targetId })
-    : createQueueBuildStatus({
-      code: targetFound ? QUEUE_BUILD_STATUS.EMPTY_QUEUE : QUEUE_BUILD_STATUS.TARGET_NOT_FOUND,
-      automationType,
-      targetId
-    });
+  let queueStatusCode = QUEUE_BUILD_STATUS.READY;
+
+  if (!targetFound) {
+    queueStatusCode = QUEUE_BUILD_STATUS.TARGET_NOT_FOUND;
+  } else if (stories.length <= 0 && candidateStoriesCount <= 0) {
+    queueStatusCode = QUEUE_BUILD_STATUS.EMPTY_QUEUE;
+  } else if (stories.length <= 0 && eligibleStoriesCount <= 0) {
+    queueStatusCode = QUEUE_BUILD_STATUS.TARGET_INELIGIBLE;
+  } else if (stories.length <= 0 && validationErrors.length > 0) {
+    queueStatusCode = QUEUE_BUILD_STATUS.VALIDATION_FAILED;
+  } else if (stories.length <= 0) {
+    queueStatusCode = QUEUE_BUILD_STATUS.EMPTY_QUEUE;
+  }
+
+  const queueStatus = createQueueBuildStatus({
+    code: queueStatusCode,
+    automationType,
+    targetId,
+    validationErrors
+  });
 
   return {
     queues,
     stories,
-    queueStatus
+    queueStatus,
+    validationErrors
   };
 }
 
@@ -629,6 +782,7 @@ module.exports = {
   evaluateAutomationStopCondition,
   flattenStoryExecutionQueues,
   generateStoryExecutionQueues,
+  isStoryEligibleForAutomation,
   normalizeCompletionStatus,
   withStableCreationOrdering,
   withStableOrdering

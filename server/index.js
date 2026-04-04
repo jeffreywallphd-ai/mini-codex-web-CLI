@@ -18,9 +18,12 @@ const {
   syncStoryCompletionFromRun,
   createAutomationRun,
   getAutomationRunById,
+  findRunningAutomationByScope,
   updateAutomationRunMetadata,
+  recordAutomationRunQueueItems,
   recordAutomationStoryExecution,
   getAutomationStoryExecutionsByRunId,
+  getAutomationRunQueueItemsByRunId,
   getAutomationQueueStoriesByTarget,
   getCompletionEligibleRuns,
   setRunArchived,
@@ -277,6 +280,7 @@ async function executeRunFlow({
   executionMode = "read",
   baseBranch = "main",
   streamId = null,
+  onProgressEvent = null,
   runOrigin = null
 }) {
   const repoPath = getRepoPath(projectName);
@@ -288,6 +292,9 @@ async function executeRunFlow({
 
   const result = await runCodexWithUsage(repoPath, prompt, executionMode, (event) => {
     publishRunEvent(streamId, event);
+    if (typeof onProgressEvent === "function") {
+      onProgressEvent(event);
+    }
   });
 
   publishRunEvent(streamId, { type: "snapshot.collecting", message: "Collecting git snapshot..." });
@@ -346,6 +353,30 @@ const executeAutomatedStoryRun = createAutomatedStoryRunExecutor({
   getErrorMessage
 });
 
+async function mergeAutomationStoryRun({
+  projectName,
+  baseBranch,
+  runId,
+  branchName,
+  changeTitle,
+  changeDescription
+}) {
+  const normalizedRunId = Number.parseInt(runId, 10);
+  if (!Number.isInteger(normalizedRunId) || normalizedRunId <= 0) {
+    throw new Error("Auto-merge requires a valid run id.");
+  }
+
+  const mergedResult = await mergeBranch(
+    getRepoPath(projectName),
+    branchName,
+    baseBranch || "main",
+    changeTitle || "Codex changes",
+    changeDescription || ""
+  );
+  await updateRunMerge(normalizedRunId, mergedResult);
+  return mergedResult;
+}
+
 app.use("/api/automation", createAutomationStartRouter({
   isValidProject,
   listLocalBranches,
@@ -353,11 +384,15 @@ app.use("/api/automation", createAutomationStartRouter({
   getFeaturesTree,
   createAutomationRun,
   updateAutomationRunMetadata,
+  findRunningAutomationByScope,
+  recordAutomationRunQueueItems,
   recordAutomationStoryExecution,
   executeAutomatedStoryRun,
   getAutomationRunById,
   getAutomationStoryExecutionsByRunId,
+  getAutomationRunQueueItemsByRunId,
   getAutomationQueueStoriesByTarget,
+  mergeAutomationStoryRun,
   getErrorMessage,
   runningProjects,
   getActiveAutomation: () => activeFeatureAutomation,

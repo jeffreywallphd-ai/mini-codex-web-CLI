@@ -37,9 +37,50 @@ let storyDraftId = 0;
 const epicDrafts = [];
 const stopRunForIncompleteStoriesByFeatureId = new Map();
 const stopRunForIncompleteStoriesByEpicId = new Map();
+let lastAutomationUiSignature = "";
+let lastScrolledActiveStoryId = null;
+
+function formatElapsed(ms) {
+  const totalSeconds = Math.max(0, Math.floor(ms / 1000));
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+
+  if (hours > 0) {
+    return `${hours}:${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
+  }
+  return `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
+}
 
 function isStoryComplete(story) {
-  return Boolean(story?.is_complete);
+  return normalizeStoryCompletionStatus(story) === "complete";
+}
+
+function normalizeStoryCompletionStatus(story = {}) {
+  const rawStatus = story?.COMPLETION_STATUS
+    ?? story?.completion_status
+    ?? story?.run_completion_status
+    ?? null;
+
+  if (rawStatus === "complete") {
+    return "complete";
+  }
+  if (rawStatus === "incomplete") {
+    return "incomplete";
+  }
+
+  if (story?.is_complete === true || story?.is_complete === 1) {
+    return "complete";
+  }
+  if (story?.is_complete === false || story?.is_complete === 0) {
+    return "incomplete";
+  }
+
+  return "unknown";
+}
+
+function isStoryEligibleForAutomation(story) {
+  return normalizeStoryCompletionStatus(story) !== "complete";
 }
 
 function isEpicComplete(epic) {
@@ -337,6 +378,7 @@ function createCardHeader(name, status) {
 function createCollapsibleCard({ levelClass, cardKey, name, status, renderBody }) {
   const card = document.createElement("article");
   card.className = `hier-card ${levelClass}`;
+  card.setAttribute("data-card-key", cardKey);
   const headerButton = createCardHeader(name, status);
   const content = document.createElement("div");
   content.className = "hier-card__content hidden";
@@ -412,10 +454,35 @@ async function startStoryAutomation(storyId) {
   const result = await response.json();
 
   if (!response.ok) {
-    throw new Error(result.error || "Unable to start story automation.");
+    throw new Error(formatAutomationStartError(result, "Unable to start story automation."));
   }
 
   return result;
+}
+
+function formatAutomationStartError(result, fallbackMessage) {
+  const baseMessage = typeof result?.error === "string" && result.error.trim()
+    ? result.error.trim()
+    : String(fallbackMessage || "Unable to start automation.");
+  const conflictRunId = parseRunId(result?.conflict?.automationRunId);
+  if (result?.errorType === "automation_target_conflict" && conflictRunId) {
+    return `${baseMessage} Active run #${conflictRunId}.`;
+  }
+
+  const validationErrors = Array.isArray(result?.validationErrors) ? result.validationErrors : [];
+  if (!validationErrors.length) {
+    return baseMessage;
+  }
+
+  const validationMessages = validationErrors
+    .slice(0, 3)
+    .map((item) => String(item?.message || "").trim())
+    .filter(Boolean);
+  if (!validationMessages.length) {
+    return baseMessage;
+  }
+
+  return `${baseMessage} ${validationMessages.join(" ")}`;
 }
 
 function assertAutomationStartScope(result, { automationType, targetId, enforceSingleStory = false } = {}) {
@@ -452,7 +519,7 @@ function getIncompleteStoryCountForFeature(feature) {
   let count = 0;
   for (const epic of feature.epics || []) {
     for (const story of epic.stories || []) {
-      if (!isStoryComplete(story)) {
+      if (isStoryEligibleForAutomation(story)) {
         count += 1;
       }
     }
@@ -539,6 +606,38 @@ function getCurrentExecutingStorySummary(automationType, targetId) {
   return { storyId, storyTitle };
 }
 
+function getActiveQueueStoryRuntimeContext() {
+  if (!globalAutomationLock?.isActive) {
+    return null;
+  }
+
+  const activeRun = globalAutomationStatus?.automationRun;
+  const currentItem = globalAutomationStatus?.queue?.currentItem;
+  if (!activeRun || !currentItem) {
+    return null;
+  }
+
+  if (String(activeRun.status || "").toLowerCase() !== "running") {
+    return null;
+  }
+
+  const storyId = Number.parseInt(currentItem.storyId, 10);
+  if (!Number.isInteger(storyId) || storyId <= 0) {
+    return null;
+  }
+
+  return {
+    automationRunId: Number.parseInt(activeRun.id, 10) || null,
+    automationType: String(activeRun.automationType || "").toLowerCase(),
+    targetId: Number.parseInt(activeRun.targetId, 10) || null,
+    storyId,
+    featureId: Number.parseInt(currentItem.featureId, 10) || null,
+    epicId: Number.parseInt(currentItem.epicId, 10) || null,
+    startedAt: typeof currentItem.startedAt === "string" ? currentItem.startedAt : null,
+    runningCodexCommand: String(currentItem.runningCodexCommand || "").trim()
+  };
+}
+
 function appendCurrentExecutingStoryLine(content, automationType, targetId) {
   const currentStory = getCurrentExecutingStorySummary(automationType, targetId);
   if (!currentStory) {
@@ -577,6 +676,9 @@ function getAutomationStopReasonSummary(stopReason) {
   const normalizedReason = String(stopReason || "").trim().toLowerCase();
   if (normalizedReason === "execution_failed") {
     return "Stopped because a story execution failed.";
+  }
+  if (normalizedReason === "merge_failed") {
+    return "Stopped because a story auto-merge failed.";
   }
   if (normalizedReason === "story_incomplete") {
     return "Stopped because an incomplete story was found with stop-on-incomplete enabled.";
@@ -646,9 +748,11 @@ function getAutomationExecutionHistory(automationType, targetId) {
   return [...completed, ...failed]
     .map((item) => ({
       storyId: Number.parseInt(item?.storyId, 10) || null,
+      storyTitle: String(item?.storyTitle || "").trim() || null,
       positionInQueue: Number.parseInt(item?.positionInQueue, 10) || null,
       executionStatus: String(item?.executionStatus || "").trim().toLowerCase() || "unknown",
-      runId: parseRunId(item?.runId)
+      runId: parseRunId(item?.runId),
+      error: String(item?.error || "").trim() || null
     }))
     .sort((left, right) => {
       const leftPosition = Number.isInteger(left.positionInQueue) ? left.positionInQueue : Number.MAX_SAFE_INTEGER;
@@ -671,13 +775,22 @@ function appendAutomationExecutionHistory(content, automationType, targetId) {
   for (const item of historyItems) {
     const line = document.createElement("p");
     line.className = "feature-automation-status-row feature-automation-status-row--history";
-    const storyLabel = Number.isInteger(item.storyId) && item.storyId > 0
-      ? `Story #${item.storyId}`
+    const storyLabel = item.storyTitle
+      ? `${item.storyTitle}${Number.isInteger(item.storyId) && item.storyId > 0 ? ` (#${item.storyId})` : ""}`
+      : Number.isInteger(item.storyId) && item.storyId > 0
+        ? `Story #${item.storyId}`
       : "Story";
     const statusLabel = item.executionStatus || "unknown";
     line.appendChild(document.createTextNode(`${storyLabel}: ${statusLabel} - `));
     appendRunDetailsInline(line, item.runId);
     content.appendChild(line);
+
+    if (statusLabel === "failed" && item.error) {
+      const errorLine = document.createElement("p");
+      errorLine.className = "feature-automation-status-row feature-automation-status-row--history";
+      errorLine.textContent = `Failure reason: ${item.error}`;
+      content.appendChild(errorLine);
+    }
   }
 }
 
@@ -790,7 +903,7 @@ async function startFeatureAutomation(featureId, options = {}) {
   const result = await response.json();
 
   if (!response.ok) {
-    throw new Error(result.error || "Unable to start feature automation.");
+    throw new Error(formatAutomationStartError(result, "Unable to start feature automation."));
   }
 
   return result;
@@ -819,7 +932,26 @@ async function startEpicAutomation(epicId, options = {}) {
   const result = await response.json();
 
   if (!response.ok) {
-    throw new Error(result.error || "Unable to start epic automation.");
+    throw new Error(formatAutomationStartError(result, "Unable to start epic automation."));
+  }
+
+  return result;
+}
+
+async function resumeAutomationRun(automationRunId) {
+  const normalizedRunId = parseRunId(automationRunId);
+  if (!normalizedRunId) {
+    throw new Error("Resume requires a valid automation run id.");
+  }
+
+  const response = await fetch(`/api/automation/resume/${encodeURIComponent(String(normalizedRunId))}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" }
+  });
+  const result = await response.json();
+
+  if (!response.ok) {
+    throw new Error(formatAutomationStartError(result, "Unable to resume automation."));
   }
 
   return result;
@@ -842,6 +974,9 @@ function createFeatureAutomationUi(content, feature) {
       && Number(globalAutomationLock?.targetId) === Number(feature.id)
   );
   const isFeatureStartInFlight = featureAutomationStartInFlight.has(feature.id);
+  const featureAutomationStatus = getFeatureAutomationStatus(feature);
+  const isResumeEligible = (featureAutomationStatus === "stopped" || featureAutomationStatus === "failed")
+    && parseRunId(feature?.feature_automation_run_id);
 
   if (isActiveFeatureRun) {
     const runLabel = Number.isInteger(Number(globalAutomationLock?.automationRunId))
@@ -857,7 +992,7 @@ function createFeatureAutomationUi(content, feature) {
   button.className = "secondary-button";
   button.textContent = isActiveFeatureRun || isFeatureStartInFlight
     ? "Automation Running..."
-    : "Complete with Automation";
+    : (isResumeEligible ? "Resume Automation" : "Complete with Automation");
   button.disabled = isFeatureStartInFlight
     || isActiveFeatureRun
     || (isAnyAutomationInFlight() && !isActiveFeatureRun);
@@ -899,18 +1034,25 @@ function createFeatureAutomationUi(content, feature) {
     renderFeatureLists();
 
     try {
-      const result = await startFeatureAutomation(feature.id, {
-        stopOnIncompleteStory: stopOnIncompleteCheckbox.checked
-      });
+      const result = isResumeEligible
+        ? await resumeAutomationRun(feature.feature_automation_run_id)
+        : await startFeatureAutomation(feature.id, {
+          stopOnIncompleteStory: stopOnIncompleteCheckbox.checked
+        });
       assertAutomationStartScope(result, {
         automationType: "feature",
         targetId: feature.id
       });
       const runId = result?.automationRun?.id;
       const totalStories = result?.queue?.totalStories;
+      const isResumeLaunch = String(result?.launchMode || "").toLowerCase() === "resume";
       createStatusBox.textContent = Number.isInteger(runId)
-        ? `Feature automation started for feature #${feature.id} (run #${runId}, ${totalStories} story(s) queued).`
-        : `Feature automation started for feature #${feature.id}.`;
+        ? (isResumeLaunch
+          ? `Feature automation resumed for feature #${feature.id} (run #${runId}, ${totalStories} remaining story(s) queued).`
+          : `Feature automation started for feature #${feature.id} (run #${runId}, ${totalStories} story(s) queued).`)
+        : (isResumeLaunch
+          ? `Feature automation resumed for feature #${feature.id}.`
+          : `Feature automation started for feature #${feature.id}.`);
       await refreshAutomationState();
     } catch (error) {
       createStatusBox.textContent = isAutomationAlreadyRunningError(error)
@@ -928,7 +1070,7 @@ function createFeatureAutomationUi(content, feature) {
 function getIncompleteStoryCountForEpic(epic) {
   let count = 0;
   for (const story of epic.stories || []) {
-    if (!isStoryComplete(story)) {
+    if (isStoryEligibleForAutomation(story)) {
       count += 1;
     }
   }
@@ -953,6 +1095,9 @@ function createEpicAutomationUi(content, epic) {
       && Number(globalAutomationLock?.targetId) === Number(epic.id)
   );
   const isEpicStartInFlight = epicAutomationStartInFlight.has(epic.id);
+  const epicAutomationStatus = getEpicAutomationStatus(epic);
+  const isResumeEligible = (epicAutomationStatus === "stopped" || epicAutomationStatus === "failed")
+    && parseRunId(epic?.epic_automation_run_id);
 
   if (isActiveEpicRun) {
     const runLabel = Number.isInteger(Number(globalAutomationLock?.automationRunId))
@@ -968,7 +1113,7 @@ function createEpicAutomationUi(content, epic) {
   button.className = "secondary-button";
   button.textContent = isActiveEpicRun || isEpicStartInFlight
     ? "Automation Running..."
-    : "Complete with Automation";
+    : (isResumeEligible ? "Resume Automation" : "Complete with Automation");
   button.disabled = isEpicStartInFlight
     || isActiveEpicRun
     || (isAnyAutomationInFlight() && !isActiveEpicRun);
@@ -1010,18 +1155,25 @@ function createEpicAutomationUi(content, epic) {
     renderFeatureLists();
 
     try {
-      const result = await startEpicAutomation(epic.id, {
-        stopOnIncompleteStory: stopOnIncompleteCheckbox.checked
-      });
+      const result = isResumeEligible
+        ? await resumeAutomationRun(epic.epic_automation_run_id)
+        : await startEpicAutomation(epic.id, {
+          stopOnIncompleteStory: stopOnIncompleteCheckbox.checked
+        });
       assertAutomationStartScope(result, {
         automationType: "epic",
         targetId: epic.id
       });
       const runId = result?.automationRun?.id;
       const totalStories = result?.queue?.totalStories;
+      const isResumeLaunch = String(result?.launchMode || "").toLowerCase() === "resume";
       createStatusBox.textContent = Number.isInteger(runId)
-        ? `Epic automation started for epic #${epic.id} (run #${runId}, ${totalStories} story(s) queued).`
-        : `Epic automation started for epic #${epic.id}.`;
+        ? (isResumeLaunch
+          ? `Epic automation resumed for epic #${epic.id} (run #${runId}, ${totalStories} remaining story(s) queued).`
+          : `Epic automation started for epic #${epic.id} (run #${runId}, ${totalStories} story(s) queued).`)
+        : (isResumeLaunch
+          ? `Epic automation resumed for epic #${epic.id}.`
+          : `Epic automation started for epic #${epic.id}.`);
       await refreshAutomationState();
     } catch (error) {
       createStatusBox.textContent = isAutomationAlreadyRunningError(error)
@@ -1042,7 +1194,10 @@ function createStoryAutomationUi(content, story) {
 
   appendStoryRunLinkLine(content, story);
 
-  if (isStoryComplete(story)) {
+  if (!isStoryEligibleForAutomation(story)) {
+    content.appendChild(
+      createTextNode("p", "inline-hint", "Automation unavailable: this story is already complete.")
+    );
     return;
   }
 
@@ -1053,13 +1208,16 @@ function createStoryAutomationUi(content, story) {
   );
   const isStoryStartInFlight = storyAutomationInFlight.has(story.id);
   const isGlobalRunActive = isAnyAutomationInFlight();
+  const storyAutomationStatus = getStoryAutomationStatus(story);
+  const isResumeEligible = (storyAutomationStatus === "stopped" || storyAutomationStatus === "failed")
+    && parseRunId(story?.story_automation_run_id);
 
   const automationButton = document.createElement("button");
   automationButton.type = "button";
   automationButton.className = "secondary-button";
   automationButton.textContent = isStoryStartInFlight || isActiveStoryRun
     ? "Automation Running..."
-    : "Complete with Automation";
+    : (isResumeEligible ? "Resume Automation" : "Complete with Automation");
   automationButton.disabled = isGlobalRunActive && !isStoryStartInFlight;
 
   automationButton.addEventListener("click", async () => {
@@ -1080,16 +1238,24 @@ function createStoryAutomationUi(content, story) {
     renderFeatureLists();
 
     try {
-      const result = await startStoryAutomation(story.id);
+      const result = isResumeEligible
+        ? await resumeAutomationRun(story.story_automation_run_id)
+        : await startStoryAutomation(story.id);
       assertAutomationStartScope(result, {
         automationType: "story",
         targetId: story.id,
         enforceSingleStory: true
       });
       const runId = result?.automationRun?.id;
+      const totalStories = Number(result?.queue?.totalStories) || 1;
+      const isResumeLaunch = String(result?.launchMode || "").toLowerCase() === "resume";
       createStatusBox.textContent = Number.isInteger(runId)
-        ? `Story automation started for story #${story.id} (run #${runId}, 1 story queued).`
-        : `Story automation started for story #${story.id} (1 story queued).`;
+        ? (isResumeLaunch
+          ? `Story automation resumed for story #${story.id} (run #${runId}, ${totalStories} remaining story queued).`
+          : `Story automation started for story #${story.id} (run #${runId}, 1 story queued).`)
+        : (isResumeLaunch
+          ? `Story automation resumed for story #${story.id}.`
+          : `Story automation started for story #${story.id} (1 story queued).`);
       await refreshAutomationState();
     } catch (error) {
       createStatusBox.textContent = isAutomationAlreadyRunningError(error)
@@ -1104,6 +1270,26 @@ function createStoryAutomationUi(content, story) {
   content.appendChild(automationButton);
 }
 
+function appendActiveStoryRuntime(content, story) {
+  const activeStory = getActiveQueueStoryRuntimeContext();
+  if (!activeStory || Number(activeStory.storyId) !== Number(story?.id)) {
+    return;
+  }
+
+  const startedAtMs = activeStory.startedAt ? Date.parse(activeStory.startedAt) : NaN;
+  const elapsedText = Number.isFinite(startedAtMs)
+    ? formatElapsed(Date.now() - startedAtMs)
+    : "unknown";
+
+  const elapsedLine = createTextNode("p", "inline-hint active-story-elapsed", `Time elapsed: ${elapsedText}`);
+  content.appendChild(elapsedLine);
+
+  const commandBox = document.createElement("pre");
+  commandBox.className = "active-story-command-box";
+  commandBox.textContent = activeStory.runningCodexCommand || "Waiting for command output...";
+  content.appendChild(commandBox);
+}
+
 function renderStoryCard(story, options = {}) {
   return createCollapsibleCard({
     levelClass: "hier-card--story",
@@ -1115,6 +1301,7 @@ function renderStoryCard(story, options = {}) {
       createStoryAutomationStatusSummary(content, story);
       if (options.showAutomation) {
         createStoryAutomationUi(content, story);
+        appendActiveStoryRuntime(content, story);
       } else {
         const runStatusLine = createTextNode("p", "inline-hint", getStoryRunStatusLabel(story));
         content.appendChild(runStatusLine);
@@ -1180,6 +1367,156 @@ function renderFeatureCard(feature, options = {}) {
   });
 }
 
+function removeFeatureDescendantOpenCards(featureId) {
+  const normalizedFeatureId = Number.parseInt(featureId, 10);
+  if (!Number.isInteger(normalizedFeatureId) || normalizedFeatureId <= 0) {
+    return;
+  }
+
+  for (const feature of allFeatures) {
+    if (Number(feature?.id) !== normalizedFeatureId) {
+      continue;
+    }
+
+    for (const epic of feature?.epics || []) {
+      openCards.delete(`epic:${epic.id}`);
+      for (const story of epic?.stories || []) {
+        openCards.delete(`story:${story.id}`);
+      }
+    }
+    break;
+  }
+}
+
+function getLatestProcessedStoryIdsFromAutomation() {
+  const completed = Array.isArray(globalAutomationStatus?.completedSteps)
+    ? globalAutomationStatus.completedSteps
+    : [];
+  const failed = Array.isArray(globalAutomationStatus?.failedSteps)
+    ? globalAutomationStatus.failedSteps
+    : [];
+
+  return new Set(
+    [...completed, ...failed]
+      .map((step) => Number.parseInt(step?.storyId, 10))
+      .filter((storyId) => Number.isInteger(storyId) && storyId > 0)
+  );
+}
+
+function getAutomationUiSignature() {
+  const run = globalAutomationStatus?.automationRun;
+  const queue = globalAutomationStatus?.queue;
+  const completedSteps = Array.isArray(globalAutomationStatus?.completedSteps)
+    ? globalAutomationStatus.completedSteps.length
+    : 0;
+  const failedSteps = Array.isArray(globalAutomationStatus?.failedSteps)
+    ? globalAutomationStatus.failedSteps.length
+    : 0;
+
+  return JSON.stringify({
+    runId: Number.parseInt(run?.id, 10) || null,
+    runStatus: String(run?.status || "").toLowerCase() || null,
+    runType: String(run?.automationType || "").toLowerCase() || null,
+    runTargetId: Number.parseInt(run?.targetId, 10) || null,
+    currentStoryId: Number.parseInt(queue?.currentItem?.storyId, 10) || null,
+    completedSteps,
+    failedSteps
+  });
+}
+
+function syncAutomationDrivenCardState() {
+  const activeRun = globalAutomationStatus?.automationRun || null;
+  const activeStory = getActiveQueueStoryRuntimeContext();
+
+  if (activeRun && String(activeRun.status || "").toLowerCase() === "running") {
+    if (String(activeRun.automationType || "").toLowerCase() === "feature") {
+      openCards.add(`feature:${activeRun.targetId}`);
+    }
+    if (activeStory?.featureId) {
+      openCards.add(`feature:${activeStory.featureId}`);
+    }
+    if (activeStory?.epicId) {
+      openCards.add(`epic:${activeStory.epicId}`);
+    }
+    if (activeStory?.storyId) {
+      openCards.add(`story:${activeStory.storyId}`);
+    }
+  }
+
+  const processedStoryIds = getLatestProcessedStoryIdsFromAutomation();
+  for (const storyId of processedStoryIds) {
+    openCards.delete(`story:${storyId}`);
+  }
+
+  for (const feature of allFeatures) {
+    for (const epic of feature?.epics || []) {
+      if (isEpicComplete(epic)) {
+        openCards.delete(`epic:${epic.id}`);
+      }
+    }
+  }
+
+  if (activeRun && String(activeRun.status || "").toLowerCase() !== "running") {
+    if (String(activeRun.automationType || "").toLowerCase() === "feature") {
+      openCards.delete(`feature:${activeRun.targetId}`);
+      removeFeatureDescendantOpenCards(activeRun.targetId);
+    }
+  }
+}
+
+function maybeAlertMergeFailure() {
+  const finalResult = globalAutomationStatus?.finalResult;
+  const isMergeFailure = finalResult
+    && String(finalResult.status || "").toLowerCase() === "failed"
+    && String(finalResult.stopReason || "").toLowerCase() === "merge_failed";
+  if (!isMergeFailure) {
+    return;
+  }
+
+  const runId = Number.parseInt(globalAutomationStatus?.automationRun?.id, 10);
+  const runLabel = Number.isInteger(runId) ? ` (run #${runId})` : "";
+  createStatusBox.textContent = `Automation stopped due to an auto-merge failure${runLabel}. Resolve the merge issue before restarting.`;
+}
+
+function scrollActiveStoryCardIntoView() {
+  const activeStory = getActiveQueueStoryRuntimeContext();
+  if (!activeStory?.storyId) {
+    lastScrolledActiveStoryId = null;
+    return;
+  }
+
+  if (lastScrolledActiveStoryId === activeStory.storyId) {
+    return;
+  }
+
+  const card = document.querySelector(`[data-card-key="story:${activeStory.storyId}"]`);
+  if (!card) {
+    return;
+  }
+
+  card.scrollIntoView({ block: "start", behavior: "smooth" });
+  lastScrolledActiveStoryId = activeStory.storyId;
+}
+
+function refreshActiveStoryRuntimeIndicators() {
+  const activeStory = getActiveQueueStoryRuntimeContext();
+  if (!activeStory?.storyId) {
+    return;
+  }
+
+  const startedAtMs = activeStory.startedAt ? Date.parse(activeStory.startedAt) : NaN;
+  if (!Number.isFinite(startedAtMs)) {
+    return;
+  }
+
+  const card = document.querySelector(`[data-card-key="story:${activeStory.storyId}"]`);
+  const elapsedLine = card?.querySelector?.(".active-story-elapsed");
+  if (!elapsedLine) {
+    return;
+  }
+  elapsedLine.textContent = `Time elapsed: ${formatElapsed(Date.now() - startedAtMs)}`;
+}
+
 function renderSection(container, features, options = {}) {
   container.innerHTML = "";
 
@@ -1194,6 +1531,7 @@ function renderSection(container, features, options = {}) {
 }
 
 function renderFeatureLists() {
+  syncAutomationDrivenCardState();
   const incompleteQuery = incompleteSearchInput.value.trim();
   const completeQuery = completeSearchInput.value.trim();
 
@@ -1207,6 +1545,13 @@ function renderFeatureLists() {
 
   renderSection(incompleteListContainer, incompleteFeatures, { showAutomation: true });
   renderSection(completeListContainer, completeFeatures, { showAutomation: false });
+
+  const signature = getAutomationUiSignature();
+  if (signature !== lastAutomationUiSignature) {
+    maybeAlertMergeFailure();
+    scrollActiveStoryCardIntoView();
+    lastAutomationUiSignature = signature;
+  }
 }
 
 function createStoryDraft() {
@@ -1370,10 +1715,12 @@ function clearDraftForm() {
   renderDrafts();
 }
 
-async function loadFeatures() {
+async function loadFeatures({ shouldRender = true } = {}) {
   if (!automationScope.projectName || !automationScope.baseBranch) {
     allFeatures = [];
-    renderFeatureLists();
+    if (shouldRender) {
+      renderFeatureLists();
+    }
     return;
   }
 
@@ -1389,7 +1736,9 @@ async function loadFeatures() {
   }
 
   allFeatures = result;
-  renderFeatureLists();
+  if (shouldRender) {
+    renderFeatureLists();
+  }
 }
 
 async function reloadAllData() {
@@ -1448,6 +1797,7 @@ async function loadAutomationStatus() {
 async function refreshAutomationState() {
   await loadAutomationLock();
   await loadAutomationStatus();
+  await loadFeatures({ shouldRender: false });
   renderFeatureLists();
 }
 
@@ -1584,6 +1934,10 @@ setInterval(() => {
     createStatusBox.textContent = `Automation lock refresh failed: ${error.message}`;
   });
 }, 3000);
+
+setInterval(() => {
+  refreshActiveStoryRuntimeIndicators();
+}, 1000);
 
 (async () => {
   try {

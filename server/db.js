@@ -9,7 +9,7 @@ const dbPath = path.resolve(dataDir, "app.db");
 const db = new sqlite3.Database(dbPath);
 db.run("PRAGMA foreign_keys = ON");
 
-const LATEST_SCHEMA_VERSION = 13;
+const LATEST_SCHEMA_VERSION = 14;
 const VALID_AUTOMATION_TYPES = new Set(["feature", "epic", "story"]);
 const VALID_AUTOMATION_STATUSES = new Set(["pending", "running", "completed", "failed", "stopped"]);
 const VALID_AUTOMATION_STORY_EXECUTION_STATUSES = new Set(["completed", "failed"]);
@@ -135,7 +135,11 @@ async function detectVersionFromSchema() {
               const hasRunOriginLinkage = await columnExists("runs", "automation_origin_type")
                 && await columnExists("runs", "automation_origin_id")
                 && await columnExists("runs", "automation_run_id");
-              if (hasRunOriginLinkage) return 13;
+              if (hasRunOriginLinkage) {
+                const hasQueueSnapshotTable = await tableExists("automation_run_queue_items");
+                if (hasQueueSnapshotTable) return 14;
+                return 13;
+              }
               return 12;
             }
             return 11;
@@ -396,6 +400,35 @@ async function migrateToV13() {
   `);
 }
 
+async function migrateToV14() {
+  await run(`
+    CREATE TABLE IF NOT EXISTS automation_run_queue_items (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      automation_run_id INTEGER NOT NULL REFERENCES automation_runs(id) ON DELETE CASCADE,
+      position_in_queue INTEGER NOT NULL,
+      feature_id INTEGER,
+      feature_title TEXT,
+      epic_id INTEGER,
+      epic_title TEXT,
+      story_id INTEGER NOT NULL REFERENCES stories(id) ON DELETE CASCADE,
+      story_title TEXT,
+      story_description TEXT,
+      story_created_at DATETIME,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE(automation_run_id, position_in_queue),
+      UNIQUE(automation_run_id, story_id)
+    )
+  `);
+  await run(`
+    CREATE INDEX IF NOT EXISTS idx_automation_run_queue_items_run
+    ON automation_run_queue_items(automation_run_id, position_in_queue, id)
+  `);
+  await run(`
+    CREATE INDEX IF NOT EXISTS idx_automation_run_queue_items_story
+    ON automation_run_queue_items(story_id)
+  `);
+}
+
 async function runMigrations() {
   let version = await getSchemaVersion();
 
@@ -476,6 +509,12 @@ async function runMigrations() {
   if (version < 13) {
     await migrateToV13();
     version = 13;
+    await setSchemaVersion(version);
+  }
+
+  if (version < 14) {
+    await migrateToV14();
+    version = 14;
     await setSchemaVersion(version);
   }
 
@@ -1342,6 +1381,232 @@ async function getAutomationStoryExecutionsByRunId(automationRunId) {
   );
 }
 
+async function findRunningAutomationByScope(input = {}) {
+  await dbReady;
+
+  const automationType = String(input.automationType || "").trim().toLowerCase();
+  const targetId = Number.parseInt(input.targetId, 10);
+  const projectName = String(input.projectName || "").trim();
+  const baseBranch = String(input.baseBranch || "").trim();
+  const excludeAutomationRunId = input.excludeAutomationRunId === null || input.excludeAutomationRunId === undefined || input.excludeAutomationRunId === ""
+    ? null
+    : Number.parseInt(input.excludeAutomationRunId, 10);
+
+  if (!VALID_AUTOMATION_TYPES.has(automationType)) {
+    return null;
+  }
+
+  if (!Number.isInteger(targetId) || targetId <= 0) {
+    return null;
+  }
+
+  if (!projectName || !baseBranch) {
+    return null;
+  }
+
+  if (excludeAutomationRunId !== null && (!Number.isInteger(excludeAutomationRunId) || excludeAutomationRunId <= 0)) {
+    throw new Error("Exclude automation run id must be a positive integer when provided.");
+  }
+
+  if (excludeAutomationRunId !== null) {
+    return get(
+      `
+        SELECT
+          id,
+          automation_type,
+          target_id,
+          project_name,
+          base_branch,
+          stop_flag,
+          stop_on_incomplete,
+          current_position,
+          automation_status,
+          stop_reason,
+          created_at,
+          updated_at
+        FROM automation_runs
+        WHERE automation_type = ?
+          AND target_id = ?
+          AND project_name = ?
+          AND base_branch = ?
+          AND automation_status = 'running'
+          AND id <> ?
+        ORDER BY id DESC
+        LIMIT 1
+      `,
+      [automationType, targetId, projectName, baseBranch, excludeAutomationRunId]
+    );
+  }
+
+  return get(
+    `
+      SELECT
+        id,
+        automation_type,
+        target_id,
+        project_name,
+        base_branch,
+        stop_flag,
+        stop_on_incomplete,
+        current_position,
+        automation_status,
+        stop_reason,
+        created_at,
+        updated_at
+      FROM automation_runs
+      WHERE automation_type = ?
+        AND target_id = ?
+        AND project_name = ?
+        AND base_branch = ?
+        AND automation_status = 'running'
+      ORDER BY id DESC
+      LIMIT 1
+    `,
+    [automationType, targetId, projectName, baseBranch]
+  );
+}
+
+function normalizeQueueSnapshotStory(inputStory = {}) {
+  const positionInQueue = Number.parseInt(inputStory.positionInQueue, 10);
+  const storyId = Number.parseInt(inputStory.storyId, 10);
+  const featureId = inputStory.featureId === null || inputStory.featureId === undefined || inputStory.featureId === ""
+    ? null
+    : Number.parseInt(inputStory.featureId, 10);
+  const epicId = inputStory.epicId === null || inputStory.epicId === undefined || inputStory.epicId === ""
+    ? null
+    : Number.parseInt(inputStory.epicId, 10);
+
+  if (!Number.isInteger(positionInQueue) || positionInQueue <= 0) {
+    throw new Error("Queue snapshot position must be a positive integer.");
+  }
+
+  if (!Number.isInteger(storyId) || storyId <= 0) {
+    throw new Error("Queue snapshot story id must be a positive integer.");
+  }
+
+  if (featureId !== null && (!Number.isInteger(featureId) || featureId <= 0)) {
+    throw new Error("Queue snapshot feature id must be a positive integer when provided.");
+  }
+
+  if (epicId !== null && (!Number.isInteger(epicId) || epicId <= 0)) {
+    throw new Error("Queue snapshot epic id must be a positive integer when provided.");
+  }
+
+  return {
+    positionInQueue,
+    featureId,
+    featureTitle: inputStory.featureTitle ?? null,
+    epicId,
+    epicTitle: inputStory.epicTitle ?? null,
+    storyId,
+    storyTitle: inputStory.storyTitle ?? null,
+    storyDescription: inputStory.storyDescription ?? null,
+    storyCreatedAt: inputStory.storyCreatedAt ?? null
+  };
+}
+
+async function recordAutomationRunQueueItems(input = {}) {
+  await dbReady;
+
+  const automationRunId = Number.parseInt(input.automationRunId, 10);
+  if (!Number.isInteger(automationRunId) || automationRunId <= 0) {
+    throw new Error("Automation run id must be a positive integer.");
+  }
+
+  const stories = Array.isArray(input.stories) ? input.stories : [];
+  if (stories.length <= 0) {
+    throw new Error("Queue snapshot stories are required.");
+  }
+
+  const normalizedStories = stories.map((story) => normalizeQueueSnapshotStory(story));
+  await run(
+    `
+      DELETE FROM automation_run_queue_items
+      WHERE automation_run_id = ?
+    `,
+    [automationRunId]
+  );
+
+  for (const story of normalizedStories) {
+    await runWithLastId(
+      `
+        INSERT INTO automation_run_queue_items
+        (
+          automation_run_id,
+          position_in_queue,
+          feature_id,
+          feature_title,
+          epic_id,
+          epic_title,
+          story_id,
+          story_title,
+          story_description,
+          story_created_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `,
+      [
+        automationRunId,
+        story.positionInQueue,
+        story.featureId,
+        story.featureTitle,
+        story.epicId,
+        story.epicTitle,
+        story.storyId,
+        story.storyTitle,
+        story.storyDescription,
+        story.storyCreatedAt
+      ]
+    );
+  }
+}
+
+async function getAutomationRunQueueItemsByRunId(automationRunId) {
+  await dbReady;
+
+  const runId = Number.parseInt(automationRunId, 10);
+  if (!Number.isInteger(runId) || runId <= 0) {
+    return [];
+  }
+
+  const rows = await all(
+    `
+      SELECT
+        id,
+        automation_run_id,
+        position_in_queue,
+        feature_id,
+        feature_title,
+        epic_id,
+        epic_title,
+        story_id,
+        story_title,
+        story_description,
+        story_created_at,
+        created_at
+      FROM automation_run_queue_items
+      WHERE automation_run_id = ?
+      ORDER BY position_in_queue ASC, id ASC
+    `,
+    [runId]
+  );
+
+  return rows.map((row) => ({
+    id: row.id,
+    automationRunId: row.automation_run_id,
+    positionInQueue: row.position_in_queue,
+    featureId: row.feature_id,
+    featureTitle: row.feature_title,
+    epicId: row.epic_id,
+    epicTitle: row.epic_title,
+    storyId: row.story_id,
+    storyTitle: row.story_title,
+    storyDescription: row.story_description,
+    storyCreatedAt: row.story_created_at,
+    createdAt: row.created_at
+  }));
+}
+
 async function getAutomationQueueStoriesByTarget(automationType, targetId) {
   await dbReady;
 
@@ -1471,10 +1736,35 @@ function setRunArchived(id, archived) {
 function deleteRunById(id) {
   return new Promise((resolve, reject) => {
     dbReady
-      .then(() => {
+      .then(async () => {
+        const runId = Number.parseInt(id, 10);
+        if (!Number.isInteger(runId) || runId <= 0) {
+          resolve(0);
+          return;
+        }
+
+        await run(
+          `
+            UPDATE stories
+            SET
+              run_id = CASE WHEN run_id = ? THEN NULL ELSE run_id END,
+              completion_run_id = CASE WHEN completion_run_id = ? THEN NULL ELSE completion_run_id END,
+              is_complete = CASE
+                WHEN run_id = ? OR completion_run_id = ? THEN 0
+                ELSE is_complete
+              END,
+              completed_at = CASE
+                WHEN run_id = ? OR completion_run_id = ? THEN NULL
+                ELSE completed_at
+              END
+            WHERE run_id = ? OR completion_run_id = ?
+          `,
+          [runId, runId, runId, runId, runId, runId, runId, runId]
+        );
+
         db.run(
           `DELETE FROM runs WHERE id = ?`,
-          [id],
+          [runId],
           function onDelete(err) {
             if (err) return reject(err);
             resolve(this.changes);
@@ -1497,9 +1787,12 @@ module.exports = {
   syncStoryCompletionFromRun,
   createAutomationRun,
   getAutomationRunById,
+  findRunningAutomationByScope,
   updateAutomationRunMetadata,
+  recordAutomationRunQueueItems,
   recordAutomationStoryExecution,
   getAutomationStoryExecutionsByRunId,
+  getAutomationRunQueueItemsByRunId,
   getAutomationQueueStoriesByTarget,
   getCompletionEligibleRuns,
   setRunArchived,
