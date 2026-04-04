@@ -33,6 +33,22 @@ test("context bundles authoring UI supports in-page create/edit flow with title 
   assert.match(source, /summary:\s*bundleSummaryInput\.value\.trim\(\)\s*\|\|\s*null/);
 });
 
+test("context bundles authoring UI supports part add/edit/delete/reorder controls", () => {
+  const source = readScript();
+
+  assert.match(source, /const PART_TYPE_OPTIONS = \[/);
+  assert.match(source, /fetch\(`\/api\/context-bundles\/\$\{encodeURIComponent\(String\(bundleId\)\)\}\/parts`\)/);
+  assert.match(source, /fetch\(`\/api\/context-bundles\/\$\{encodeURIComponent\(String\(bundleId\)\)\}\/parts`,\s*\{\s*method:\s*"POST"/m);
+  assert.match(source, /fetch\(`\/api\/context-bundles\/\$\{encodeURIComponent\(String\(bundleId\)\)\}\/parts\/\$\{encodeURIComponent\(String\(partId\)\)\}`,\s*\{\s*method:\s*"PATCH"/m);
+  assert.match(source, /fetch\(`\/api\/context-bundles\/\$\{encodeURIComponent\(String\(bundleId\)\)\}\/parts\/\$\{encodeURIComponent\(String\(partId\)\)\}`,\s*\{\s*method:\s*"DELETE"/m);
+  assert.match(source, /moveUpButton\.textContent = "Move Up"/);
+  assert.match(source, /moveDownButton\.textContent = "Move Down"/);
+  assert.match(source, /savePartButton\.textContent = "Save Part"/);
+  assert.match(source, /deletePartButton\.textContent = "Delete Part"/);
+  assert.match(source, /includeCopy\.textContent = "Include in compiled output"/);
+  assert.match(source, /await persistPartOrder\(reordered\)/);
+});
+
 test("context bundles authoring UI renders metadata fields including freshness indicator", () => {
   const source = readScript();
 
@@ -59,6 +75,9 @@ test("context bundles page provides central authoring and management sections", 
   assert.match(source, /id="bundleValidationBox"/);
   assert.match(source, /id="saveBundleButton"/);
   assert.match(source, /Create Bundle/);
+  assert.match(source, /<h3>Bundle Parts<\/h3>/);
+  assert.match(source, /id="addBundlePartButton"/);
+  assert.match(source, /id="bundlePartsList"/);
   assert.match(source, /<h2>Saved Bundles<\/h2>/);
   assert.match(source, /id="contextBundlesList"/);
 });

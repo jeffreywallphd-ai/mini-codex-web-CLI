@@ -18,6 +18,11 @@ const {
   getContextBundles,
   updateContextBundle,
   deleteContextBundleById,
+  createContextBundlePart,
+  getContextBundlePartById,
+  getContextBundlePartsByBundleId,
+  updateContextBundlePart,
+  deleteContextBundlePartById,
   getStoryAutomationContext,
   attachRunToStory,
   syncStoryCompletionFromRun,
@@ -412,7 +417,12 @@ app.use("/api/context-bundles", createContextBundlesRouter({
   getContextBundleById,
   getContextBundles,
   updateContextBundle,
-  deleteContextBundleById
+  deleteContextBundleById,
+  createContextBundlePart,
+  getContextBundlePartById,
+  getContextBundlePartsByBundleId,
+  updateContextBundlePart,
+  deleteContextBundlePartById
 }));
 
 app.get("/api/projects", (req, res) => {
