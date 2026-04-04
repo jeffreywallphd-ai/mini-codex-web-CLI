@@ -39,6 +39,7 @@ let storyDraftId = 0;
 const epicDrafts = [];
 const stopMergeIfIncompleteByStoryId = new Map();
 const stopRunForIncompleteStoriesByFeatureId = new Map();
+const stopRunForIncompleteStoriesByEpicId = new Map();
 
 function isStoryComplete(story) {
   return Boolean(story?.is_complete);
@@ -550,9 +551,10 @@ async function startFeatureAutomation(featureId, options = {}) {
   return result;
 }
 
-async function startEpicAutomation(epicId) {
+async function startEpicAutomation(epicId, options = {}) {
   const projectName = automationScope.projectName;
   const baseBranch = automationScope.baseBranch;
+  const stopOnIncompleteStory = Boolean(options.stopOnIncompleteStory);
   if (!projectName || !baseBranch) {
     throw new Error("Select a project and branch on the editor page first, then retry automation.");
   }
@@ -562,7 +564,8 @@ async function startEpicAutomation(epicId) {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       projectName,
-      baseBranch
+      baseBranch,
+      stopOnIncompleteStory
     })
   });
   const result = await response.json();
@@ -701,6 +704,22 @@ function createEpicAutomationUi(content, epic) {
     : "Complete with Automation";
   button.disabled = isAnyAutomationInFlight() && !isActiveEpicRun;
 
+  const stopOnIncompleteCheckbox = document.createElement("input");
+  stopOnIncompleteCheckbox.type = "checkbox";
+  stopOnIncompleteCheckbox.checked = Boolean(
+    stopRunForIncompleteStoriesByEpicId.get(epic.id)
+  );
+  stopOnIncompleteCheckbox.disabled = isActiveEpicRun;
+  stopOnIncompleteCheckbox.addEventListener("change", () => {
+    stopRunForIncompleteStoriesByEpicId.set(epic.id, stopOnIncompleteCheckbox.checked);
+  });
+
+  const stopOnIncompleteLabel = document.createElement("label");
+  stopOnIncompleteLabel.className = "story-automation-checkbox";
+  stopOnIncompleteLabel.appendChild(stopOnIncompleteCheckbox);
+  stopOnIncompleteLabel.appendChild(document.createTextNode("Stop Run For Incomplete Stories"));
+  content.appendChild(stopOnIncompleteLabel);
+
   button.addEventListener("click", async () => {
     if (isAnyAutomationInFlight() && !isActiveEpicRun) {
       createStatusBox.textContent = "Automation is already running. Wait for completion before starting another run.";
@@ -716,7 +735,9 @@ function createEpicAutomationUi(content, epic) {
     button.textContent = "Starting Automation...";
 
     try {
-      const result = await startEpicAutomation(epic.id);
+      const result = await startEpicAutomation(epic.id, {
+        stopOnIncompleteStory: stopOnIncompleteCheckbox.checked
+      });
       const runId = result?.automationRun?.id;
       const totalStories = result?.queue?.totalStories;
       createStatusBox.textContent = Number.isInteger(runId)
