@@ -1,4 +1,5 @@
 const express = require("express");
+const { ContextBundleValidationError } = require("./contextBundleValidation");
 
 function parseBooleanQuery(value, defaultValue = true) {
   if (value === undefined || value === null || value === "") {
@@ -22,6 +23,18 @@ function parsePositiveId(value) {
     return null;
   }
   return parsed;
+}
+
+function buildErrorPayload(error, fallbackMessage) {
+  const message = error?.message || fallbackMessage || "Request failed.";
+  if (error instanceof ContextBundleValidationError || Array.isArray(error?.validationErrors)) {
+    return {
+      error: message,
+      validationErrors: Array.isArray(error?.validationErrors) ? error.validationErrors : []
+    };
+  }
+
+  return { error: message };
 }
 
 async function getValidatedPartForBundle({
@@ -89,7 +102,8 @@ function createContextBundlesRouter(deps = {}) {
       const createdBundle = await createContextBundle(req.body || {});
       return res.status(201).json(createdBundle);
     } catch (error) {
-      return res.status(400).json({ error: error?.message || "Failed to create context bundle." });
+      const status = Number.isInteger(error?.status) ? error.status : 400;
+      return res.status(status).json(buildErrorPayload(error, "Failed to create context bundle."));
     }
   });
 
@@ -124,7 +138,8 @@ function createContextBundlesRouter(deps = {}) {
       }
       return res.json(updatedBundle);
     } catch (error) {
-      return res.status(400).json({ error: error?.message || "Failed to update context bundle." });
+      const status = Number.isInteger(error?.status) ? error.status : 400;
+      return res.status(status).json(buildErrorPayload(error, "Failed to update context bundle."));
     }
   });
 
@@ -164,7 +179,8 @@ function createContextBundlesRouter(deps = {}) {
       if (/not found/i.test(message)) {
         return res.status(404).json({ error: message });
       }
-      return res.status(400).json({ error: message });
+      const status = Number.isInteger(error?.status) ? error.status : 400;
+      return res.status(status).json(buildErrorPayload(error, "Failed to create context bundle part."));
     }
   });
 
@@ -220,7 +236,8 @@ function createContextBundlesRouter(deps = {}) {
       }
       return res.json(updatedPart);
     } catch (error) {
-      return res.status(400).json({ error: error?.message || "Failed to update context bundle part." });
+      const status = Number.isInteger(error?.status) ? error.status : 400;
+      return res.status(status).json(buildErrorPayload(error, "Failed to update context bundle part."));
     }
   });
 

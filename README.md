@@ -142,6 +142,11 @@ Context bundles are persisted with a parent-child data model in SQLite:
   - `user_notes`
 - Bundle part records include `part_type_label` in model responses so UI surfaces can display the selected type with a stable human-readable label.
 - Ordering is deterministic and explicit (`position`) rather than inferred from creation order.
+- Validation is centralized in `server/contextBundleValidation.js` and enforced from bundle/part persistence helpers before writes:
+  - bundle `title` and `description` are required and length-limited
+  - part `part_type`, `title`, `content`, and `position` are validated, including content-size limits
+  - part ordering must be unique within each bundle (`position` cannot collide)
+  - validation failures return frontend-friendly payloads (`error` + `validationErrors[]`) from context bundle API routes
 - Bundle and part CRUD persistence is implemented in `server/db.js` with migration-backed schema evolution (no reset required).
 - Bundle metadata authoring UI is available at `/context-bundles.html` and supports in-page create/edit/delete flows for bundle title + description, metadata display for `intended_use`, `tags`, `project_name`, `summary`, and `updated_at`, plus clear validation feedback when required fields are missing.
 - Saved bundle cards include maintenance actions for `Edit Bundle`, `Duplicate Bundle`, and `Delete Bundle`; duplicate clones the bundle plus all ordered parts into a new `(Copy)` bundle, and delete is confirmation-protected to reduce accidental removal.

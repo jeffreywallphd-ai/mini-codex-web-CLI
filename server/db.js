@@ -5,6 +5,11 @@ const {
   normalizeContextBundlePartType,
   getContextBundlePartTypeLabel
 } = require("./contextBundlePartTypes");
+const {
+  validateBundleInput,
+  validatePartInput,
+  buildDuplicatePositionValidationError
+} = require("./contextBundleValidation");
 
 const dataDir = path.resolve(__dirname, "../data");
 fs.mkdirSync(dataDir, { recursive: true });
@@ -775,6 +780,8 @@ function buildCopiedBundleTitle(title) {
 async function createContextBundle(input = {}) {
   await dbReady;
 
+  validateBundleInput(input, { partial: false });
+
   const title = String(input.title || "").trim();
   const description = typeof input.description === "string" ? input.description.trim() : "";
   const status = String(input.status || "draft").trim().toLowerCase();
@@ -937,6 +944,8 @@ async function updateContextBundle(id, updates = {}) {
   const bundleId = normalizePositiveInteger(id, "Context bundle id");
   const clauses = [];
   const params = [];
+
+  validateBundleInput(updates, { partial: true });
 
   if (Object.prototype.hasOwnProperty.call(updates, "title")) {
     const title = String(updates.title || "").trim();
@@ -1138,6 +1147,8 @@ async function duplicateContextBundleById(id) {
 async function createContextBundlePart(input = {}) {
   await dbReady;
 
+  validatePartInput(input, { partial: false });
+
   const bundleId = normalizePositiveInteger(input.bundleId, "Context bundle id");
   const partType = normalizeContextBundlePartType(
     input.partType || input.type,
@@ -1177,6 +1188,19 @@ async function createContextBundlePart(input = {}) {
   );
   if (!bundle) {
     throw new Error("Context bundle not found.");
+  }
+
+  const existingPartAtPosition = await get(
+    `
+      SELECT id
+      FROM context_bundle_parts
+      WHERE bundle_id = ? AND position = ?
+      LIMIT 1
+    `,
+    [bundleId, position]
+  );
+  if (existingPartAtPosition) {
+    throw buildDuplicatePositionValidationError(position);
   }
 
   const id = await runWithLastId(
@@ -1290,6 +1314,40 @@ async function updateContextBundlePart(id, updates = {}) {
   const partId = normalizePositiveInteger(id, "Context bundle part id");
   const clauses = [];
   const params = [];
+
+  validatePartInput(updates, { partial: true });
+
+  let existingPart = null;
+  if (Object.prototype.hasOwnProperty.call(updates, "position")) {
+    existingPart = await get(
+      `
+        SELECT id, bundle_id
+        FROM context_bundle_parts
+        WHERE id = ?
+      `,
+      [partId]
+    );
+
+    if (existingPart) {
+      const normalizedPosition = normalizePositiveInteger(
+        updates.position,
+        "Context bundle part position"
+      );
+      const conflictingPart = await get(
+        `
+          SELECT id
+          FROM context_bundle_parts
+          WHERE bundle_id = ? AND position = ? AND id <> ?
+          LIMIT 1
+        `,
+        [existingPart.bundle_id, normalizedPosition, partId]
+      );
+
+      if (conflictingPart) {
+        throw buildDuplicatePositionValidationError(normalizedPosition);
+      }
+    }
+  }
 
   if (Object.prototype.hasOwnProperty.call(updates, "partType")
     || Object.prototype.hasOwnProperty.call(updates, "type")) {

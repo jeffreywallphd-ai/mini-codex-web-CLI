@@ -1653,7 +1653,7 @@ test("context bundle part type validation rejects unknown types and supports can
   try {
     const createdBundle = await createContextBundle({
       title: `Bundle Part Type Validation ${Date.now()}`,
-      description: "",
+      description: "Part type validation coverage bundle.",
       status: "draft"
     });
     bundleId = createdBundle.id;
@@ -1690,6 +1690,106 @@ test("context bundle part type validation rejects unknown types and supports can
     if (aliasedPartId) {
       await deleteContextBundlePartById(aliasedPartId);
     }
+    if (bundleId) {
+      await cleanupContextBundle(bundleId);
+    }
+  }
+});
+
+test("context bundle validation enforces required fields, size limits, and unique ordering", async () => {
+  await dbReady;
+
+  let bundleId = null;
+  const longTitle = "x".repeat(161);
+  const longContent = "x".repeat(24001);
+
+  await assert.rejects(
+    () => createContextBundle({
+      title: "",
+      description: ""
+    }),
+    (error) => {
+      assert.match(error.message, /title is required/i);
+      assert.ok(Array.isArray(error.validationErrors));
+      assert.ok(error.validationErrors.some((item) => item.field === "title"));
+      assert.ok(error.validationErrors.some((item) => item.field === "description"));
+      return true;
+    }
+  );
+
+  await assert.rejects(
+    () => createContextBundle({
+      title: longTitle,
+      description: "Valid description"
+    }),
+    /must be 160 characters or fewer/
+  );
+
+  try {
+    const createdBundle = await createContextBundle({
+      title: `Bundle Validation ${Date.now()}`,
+      description: "Validation test bundle",
+      status: "draft"
+    });
+    bundleId = createdBundle.id;
+
+    await assert.rejects(
+      () => createContextBundlePart({
+        bundleId,
+        partType: "feature_background",
+        title: "Part A",
+        content: "",
+        position: 1
+      }),
+      /content is required/i
+    );
+
+    await assert.rejects(
+      () => createContextBundlePart({
+        bundleId,
+        partType: "feature_background",
+        title: "Part A",
+        content: longContent,
+        position: 1
+      }),
+      /24000 characters or fewer/
+    );
+
+    const partOne = await createContextBundlePart({
+      bundleId,
+      partType: "feature_background",
+      title: "Part A",
+      content: "Content A",
+      position: 1
+    });
+
+    const partTwo = await createContextBundlePart({
+      bundleId,
+      partType: "implementation_constraints",
+      title: "Part B",
+      content: "Content B",
+      position: 2
+    });
+
+    await assert.rejects(
+      () => createContextBundlePart({
+        bundleId,
+        partType: "user_notes",
+        title: "Part C",
+        content: "Content C",
+        position: 2
+      }),
+      /position 2 is already in use/
+    );
+
+    await assert.rejects(
+      () => updateContextBundlePart(partTwo.id, { position: 1 }),
+      /position 1 is already in use/
+    );
+
+    await deleteContextBundlePartById(partOne.id);
+    await deleteContextBundlePartById(partTwo.id);
+  } finally {
     if (bundleId) {
       await cleanupContextBundle(bundleId);
     }

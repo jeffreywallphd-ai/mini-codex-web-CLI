@@ -5,6 +5,7 @@ const http = require("node:http");
 const express = require("express");
 
 const { createContextBundlesRouter } = require("./contextBundlesApi");
+const { ContextBundleValidationError } = require("./contextBundleValidation");
 
 function createHarness() {
   let idSeed = 7000;
@@ -588,5 +589,62 @@ test("context bundles API duplicate returns 404 when bundle is missing", async (
     assert.equal(duplicateResponse.status, 404);
     const payload = await duplicateResponse.json();
     assert.match(payload.error, /not found/i);
+  });
+});
+
+test("context bundles API returns frontend-friendly validation errors for bundle and part input", async () => {
+  const deps = {
+    createContextBundle: async () => {
+      throw new ContextBundleValidationError(
+        [{ field: "title", code: "required", message: "Context bundle title is required." }],
+        "Context bundle title is required."
+      );
+    },
+    getContextBundleById: async () => ({ id: 1 }),
+    getContextBundles: async () => [],
+    updateContextBundle: async () => ({ id: 1 }),
+    deleteContextBundleById: async () => 1,
+    duplicateContextBundleById: async () => ({ id: 1 }),
+    createContextBundlePart: async () => {
+      throw new ContextBundleValidationError(
+        [{ field: "position", code: "duplicate", message: "Context bundle part position 1 is already in use for this bundle." }],
+        "Context bundle part position 1 is already in use for this bundle."
+      );
+    },
+    getContextBundlePartById: async () => ({ id: 10, bundle_id: 1 }),
+    getContextBundlePartsByBundleId: async () => [],
+    updateContextBundlePart: async () => ({ id: 10, bundle_id: 1 }),
+    deleteContextBundlePartById: async () => 1
+  };
+
+  const app = express();
+  app.use(express.json());
+  app.use("/api/context-bundles", createContextBundlesRouter(deps));
+  const server = http.createServer(app);
+
+  await withServer({ server }, async (baseUrl) => {
+    const bundleResponse = await fetch(`${baseUrl}/api/context-bundles`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({})
+    });
+    assert.equal(bundleResponse.status, 400);
+    const bundlePayload = await bundleResponse.json();
+    assert.equal(bundlePayload.error, "Context bundle title is required.");
+    assert.deepEqual(bundlePayload.validationErrors, [
+      { field: "title", code: "required", message: "Context bundle title is required." }
+    ]);
+
+    const partResponse = await fetch(`${baseUrl}/api/context-bundles/1/parts`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ partType: "feature_background", title: "One", content: "One", position: 1 })
+    });
+    assert.equal(partResponse.status, 400);
+    const partPayload = await partResponse.json();
+    assert.equal(partPayload.error, "Context bundle part position 1 is already in use for this bundle.");
+    assert.deepEqual(partPayload.validationErrors, [
+      { field: "position", code: "duplicate", message: "Context bundle part position 1 is already in use for this bundle." }
+    ]);
   });
 });
