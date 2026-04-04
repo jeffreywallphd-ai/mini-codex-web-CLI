@@ -1,5 +1,6 @@
 const express = require("express");
 const { ContextBundleValidationError } = require("./contextBundleValidation");
+const { compileContextBundle } = require("./contextBundleCompilation");
 
 function parseBooleanQuery(value, defaultValue = true) {
   if (value === undefined || value === null || value === "") {
@@ -122,6 +123,27 @@ function createContextBundlesRouter(deps = {}) {
       return res.json(bundle);
     } catch (error) {
       return res.status(500).json({ error: error?.message || "Failed to load context bundle." });
+    }
+  });
+
+  router.get("/:bundleId/preview", async (req, res) => {
+    const bundleId = parsePositiveId(req.params?.bundleId);
+    if (!bundleId) {
+      return res.status(400).json({ error: "Invalid context bundle id." });
+    }
+
+    try {
+      const bundle = await getContextBundleById(bundleId, { includeParts: true });
+      if (!bundle) {
+        return res.status(404).json({ error: "Context bundle not found." });
+      }
+
+      return res.json({
+        bundle,
+        preview: compileContextBundle(bundle)
+      });
+    } catch (error) {
+      return res.status(500).json({ error: error?.message || "Failed to load context bundle preview." });
     }
   });
 

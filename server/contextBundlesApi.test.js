@@ -648,3 +648,147 @@ test("context bundles API returns frontend-friendly validation errors for bundle
     ]);
   });
 });
+
+test("context bundles API returns bundle preview payload with deterministic compiled ordering", async () => {
+  const harness = createHarness();
+
+  await withServer(harness, async (baseUrl) => {
+    const createBundleResponse = await fetch(`${baseUrl}/api/context-bundles`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        title: "Preview Bundle",
+        description: "Preview description",
+        status: "draft"
+      })
+    });
+    assert.equal(createBundleResponse.status, 201);
+    const bundle = await createBundleResponse.json();
+
+    const createPartA = await fetch(`${baseUrl}/api/context-bundles/${bundle.id}/parts`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        partType: "testing_expectations",
+        title: "Tests",
+        content: "Add regression coverage.",
+        position: 3,
+        includeInCompiled: true
+      })
+    });
+    assert.equal(createPartA.status, 201);
+    const partA = await createPartA.json();
+
+    const createPartB = await fetch(`${baseUrl}/api/context-bundles/${bundle.id}/parts`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        partType: "feature_background",
+        title: "Goal",
+        content: "Build preview output.",
+        position: 1,
+        includeInCompiled: true
+      })
+    });
+    assert.equal(createPartB.status, 201);
+    const partB = await createPartB.json();
+
+    const createPartC = await fetch(`${baseUrl}/api/context-bundles/${bundle.id}/parts`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        partType: "implementation_constraints",
+        title: "Scope",
+        content: "Only implement requested story.",
+        position: 2,
+        includeInCompiled: false
+      })
+    });
+    assert.equal(createPartC.status, 201);
+    const partC = await createPartC.json();
+
+    const previewResponse = await fetch(`${baseUrl}/api/context-bundles/${bundle.id}/preview`);
+    assert.equal(previewResponse.status, 200);
+    const payload = await previewResponse.json();
+
+    assert.equal(payload.bundle.id, bundle.id);
+    assert.equal(payload.preview.format, "context_bundle_compiled_preview_v1");
+    assert.deepEqual(payload.preview.orderedPartIds, [partB.id, partC.id, partA.id]);
+    assert.deepEqual(payload.preview.includedPartIds, [partB.id, partA.id]);
+    assert.deepEqual(
+      payload.preview.sections.map((section) => section.sectionLabel),
+      ["Feature Background: Goal", "Testing Expectations: Tests"]
+    );
+    assert.match(payload.preview.compiledText, /## Feature Background: Goal/);
+    assert.match(payload.preview.compiledText, /## Testing Expectations: Tests/);
+  });
+});
+
+test("context bundles API preview reflects part content and inclusion changes", async () => {
+  const harness = createHarness();
+
+  await withServer(harness, async (baseUrl) => {
+    const createBundleResponse = await fetch(`${baseUrl}/api/context-bundles`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        title: "Mutable Preview Bundle",
+        description: "Preview mutation coverage",
+        status: "draft"
+      })
+    });
+    assert.equal(createBundleResponse.status, 201);
+    const bundle = await createBundleResponse.json();
+
+    const createPartResponse = await fetch(`${baseUrl}/api/context-bundles/${bundle.id}/parts`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        partType: "feature_background",
+        title: "Goal",
+        content: "Initial content",
+        position: 1,
+        includeInCompiled: true
+      })
+    });
+    assert.equal(createPartResponse.status, 201);
+    const part = await createPartResponse.json();
+
+    const initialPreviewResponse = await fetch(`${baseUrl}/api/context-bundles/${bundle.id}/preview`);
+    assert.equal(initialPreviewResponse.status, 200);
+    const initialPayload = await initialPreviewResponse.json();
+    assert.deepEqual(initialPayload.preview.includedPartIds, [part.id]);
+    assert.match(initialPayload.preview.compiledText, /Initial content/);
+
+    const updatePartResponse = await fetch(`${baseUrl}/api/context-bundles/${bundle.id}/parts/${part.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        content: "Updated content",
+        includeInCompiled: false
+      })
+    });
+    assert.equal(updatePartResponse.status, 200);
+
+    const updatedPreviewResponse = await fetch(`${baseUrl}/api/context-bundles/${bundle.id}/preview`);
+    assert.equal(updatedPreviewResponse.status, 200);
+    const updatedPayload = await updatedPreviewResponse.json();
+    assert.deepEqual(updatedPayload.preview.includedPartIds, []);
+    assert.equal(updatedPayload.preview.compiledText, "");
+
+    const includeAgainResponse = await fetch(`${baseUrl}/api/context-bundles/${bundle.id}/parts/${part.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        includeInCompiled: true
+      })
+    });
+    assert.equal(includeAgainResponse.status, 200);
+
+    const restoredPreviewResponse = await fetch(`${baseUrl}/api/context-bundles/${bundle.id}/preview`);
+    assert.equal(restoredPreviewResponse.status, 200);
+    const restoredPayload = await restoredPreviewResponse.json();
+    assert.deepEqual(restoredPayload.preview.includedPartIds, [part.id]);
+    assert.match(restoredPayload.preview.compiledText, /Updated content/);
+  });
+});
