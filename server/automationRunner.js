@@ -3,35 +3,22 @@ const {
   evaluateAutomationStopCondition,
   normalizeCompletionStatus
 } = require("./automationQueue");
+const { sortByPosition, toPositiveInteger } = require("./automationQueuePosition");
 
 function normalizeStories(stories) {
   if (!Array.isArray(stories)) {
     throw new TypeError("stories must be an array");
   }
 
-  return stories
-    .map((story, index) => {
-      const normalizedPosition = Number.isInteger(story?.positionInQueue) && story.positionInQueue > 0
-        ? story.positionInQueue
-        : index + 1;
+  const storiesWithPosition = stories.map((story, index) => {
+    const normalizedPosition = toPositiveInteger(story?.positionInQueue) ?? index + 1;
+    return {
+      ...story,
+      positionInQueue: normalizedPosition
+    };
+  });
 
-      return {
-        story: {
-          ...story,
-          positionInQueue: normalizedPosition
-        },
-        index,
-        positionInQueue: normalizedPosition
-      };
-    })
-    .sort((a, b) => {
-      if (a.positionInQueue !== b.positionInQueue) {
-        return a.positionInQueue - b.positionInQueue;
-      }
-
-      return a.index - b.index;
-    })
-    .map((entry) => entry.story);
+  return sortByPosition(storiesWithPosition, (story) => story?.positionInQueue);
 }
 
 function getStoryCompletionStatus(executionResult = {}) {
