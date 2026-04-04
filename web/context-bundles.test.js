@@ -15,12 +15,18 @@ function readHtml(filePath) {
   return fs.readFileSync(filePath, "utf8");
 }
 
-test("context bundles authoring UI sends metadata fields to create and update APIs", () => {
+test("context bundles authoring UI supports in-page create/edit flow with title and description validation", () => {
   const source = readScript();
 
   assert.match(source, /fetch\("\/api\/context-bundles\?includeParts=false"\)/);
   assert.match(source, /fetch\("\/api\/context-bundles",\s*\{\s*method:\s*"POST"/m);
   assert.match(source, /fetch\(`\/api\/context-bundles\/\$\{encodeURIComponent\(String\(selectedBundleId\)\)\}`,\s*\{\s*method:\s*"PATCH"/m);
+  assert.match(source, /function validateBundlePayload\(payload\)/);
+  assert.match(source, /if \(!payload\.title\)/);
+  assert.match(source, /if \(!payload\.description\)/);
+  assert.match(source, /setValidation\(error\.message\)/);
+  assert.match(source, /const createdBundle = bundles\.find\(\(bundle\) => bundle\.id === result\.id\);/);
+  assert.match(source, /const refreshedBundle = bundles\.find\(\(bundle\) => bundle\.id === result\.id\);/);
   assert.match(source, /intendedUse:\s*bundleIntendedUseInput\.value\.trim\(\)\s*\|\|\s*null/);
   assert.match(source, /projectName:\s*bundleProjectNameInput\.value\.trim\(\)\s*\|\|\s*null/);
   assert.match(source, /tags:\s*parseTags\(bundleTagsInput\.value\)/);
@@ -31,6 +37,7 @@ test("context bundles authoring UI renders metadata fields including freshness i
   const source = readScript();
 
   assert.match(source, /Status:\s*\$\{formatMetadataValue\(bundle\.status\)\}\s*\|\s*Updated:\s*\$\{formatMetadataValue\(bundle\.updated_at\)\}/);
+  assert.match(source, /Description:\s*\$\{formatMetadataValue\(bundle\.description\)\}/);
   assert.match(source, /Intended use:\s*\$\{formatMetadataValue\(bundle\.intended_use\)\}/);
   assert.match(source, /Project affinity:\s*\$\{formatMetadataValue\(bundle\.project_name\)\}/);
   assert.match(source, /Tags:\s*\$\{Array\.isArray\(bundle\.tags\)/);
@@ -49,6 +56,7 @@ test("context bundles page provides central authoring and management sections", 
 
   assert.match(source, /<h1>Context Bundles<\/h1>/);
   assert.match(source, /<h2>Bundle Metadata Authoring<\/h2>/);
+  assert.match(source, /id="bundleValidationBox"/);
   assert.match(source, /id="saveBundleButton"/);
   assert.match(source, /Create Bundle/);
   assert.match(source, /<h2>Saved Bundles<\/h2>/);

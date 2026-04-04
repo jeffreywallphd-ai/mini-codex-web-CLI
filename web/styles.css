@@ -109,6 +109,7 @@ button:disabled {
 #statusBox,
 #creditsBox,
 #automationStatusBox,
+#bundleStatusBox,
 details,
 pre {
   background: var(--panel);
@@ -148,7 +149,8 @@ pre {
 
 #statusBox,
 #creditsBox,
-#automationStatusBox {
+#automationStatusBox,
+#bundleStatusBox {
   margin: 0 0 12px;
   padding: 10px;
   color: var(--text);
@@ -444,6 +446,16 @@ details pre {
 .inline-hint {
   margin: -4px 0 12px;
   color: var(--muted);
+  font-size: 13px;
+}
+
+.inline-validation {
+  margin: -4px 0 12px;
+  color: #ffd4d4;
+  background: rgba(255, 92, 92, 0.12);
+  border: 1px solid rgba(255, 92, 92, 0.35);
+  border-radius: 8px;
+  padding: 8px 10px;
   font-size: 13px;
 }
 

@@ -1483,6 +1483,7 @@ test("context bundle and part models support create update and delete", async ()
       lastUsedAt: "2026-04-04T12:34:56.000Z"
     });
     assert.equal(updatedBundle.title, "Bundle CRUD Updated");
+    assert.equal(updatedBundle.description, "Updated description");
     assert.equal(updatedBundle.status, "active");
     assert.equal(updatedBundle.intended_use, "bug_fixes");
     assert.deepEqual(updatedBundle.tags, ["db", "migration"]);

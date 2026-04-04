@@ -1,4 +1,5 @@
 const bundleStatusBox = document.getElementById("bundleStatusBox");
+const bundleValidationBox = document.getElementById("bundleValidationBox");
 const editingHint = document.getElementById("editingHint");
 const bundleTitleInput = document.getElementById("bundleTitleInput");
 const bundleDescriptionInput = document.getElementById("bundleDescriptionInput");
@@ -52,6 +53,34 @@ function setStatus(message) {
   bundleStatusBox.textContent = message;
 }
 
+function clearValidation() {
+  bundleValidationBox.textContent = "";
+  bundleValidationBox.classList.add("hidden");
+}
+
+function setValidation(message) {
+  const normalizedMessage = String(message || "").trim();
+  if (!normalizedMessage) {
+    clearValidation();
+    return;
+  }
+
+  bundleValidationBox.textContent = normalizedMessage;
+  bundleValidationBox.classList.remove("hidden");
+}
+
+function validateBundlePayload(payload) {
+  if (!payload.title) {
+    return "Bundle title is required.";
+  }
+
+  if (!payload.description) {
+    return "Bundle description is required.";
+  }
+
+  return "";
+}
+
 function syncButtonState() {
   const isEditing = Number.isInteger(selectedBundleId) && selectedBundleId > 0;
   saveBundleButton.disabled = isEditing;
@@ -71,6 +100,7 @@ function clearBundleForm() {
   bundleProjectNameInput.value = "";
   bundleTagsInput.value = "";
   bundleSummaryInput.value = "";
+  clearValidation();
   syncButtonState();
 }
 
@@ -83,6 +113,7 @@ function setBundleForm(bundle) {
   bundleProjectNameInput.value = bundle.project_name || "";
   bundleTagsInput.value = Array.isArray(bundle.tags) ? bundle.tags.join(", ") : "";
   bundleSummaryInput.value = bundle.summary || "";
+  clearValidation();
   syncButtonState();
 }
 
@@ -110,6 +141,10 @@ function renderBundles() {
     const statusRow = document.createElement("p");
     statusRow.className = "card-description";
     statusRow.textContent = `Status: ${formatMetadataValue(bundle.status)} | Updated: ${formatMetadataValue(bundle.updated_at)}`;
+
+    const descriptionRow = document.createElement("p");
+    descriptionRow.className = "card-description";
+    descriptionRow.textContent = `Description: ${formatMetadataValue(bundle.description)}`;
 
     const intendedUseRow = document.createElement("p");
     intendedUseRow.className = "card-description";
@@ -142,6 +177,7 @@ function renderBundles() {
     actions.appendChild(editButton);
     content.appendChild(heading);
     content.appendChild(statusRow);
+    content.appendChild(descriptionRow);
     content.appendChild(intendedUseRow);
     content.appendChild(projectRow);
     content.appendChild(tagsRow);
@@ -166,9 +202,11 @@ async function loadBundles() {
 saveBundleButton.addEventListener("click", async () => {
   try {
     const payload = buildBundlePayload();
-    if (!payload.title) {
-      throw new Error("Bundle title is required.");
+    const validationError = validateBundlePayload(payload);
+    if (validationError) {
+      throw new Error(validationError);
     }
+    clearValidation();
 
     const response = await fetch("/api/context-bundles", {
       method: "POST",
@@ -180,10 +218,16 @@ saveBundleButton.addEventListener("click", async () => {
       throw new Error(result?.error || "Failed to create bundle.");
     }
 
-    setStatus(`Created bundle #${result.id}.`);
-    clearBundleForm();
     await loadBundles();
+    const createdBundle = bundles.find((bundle) => bundle.id === result.id);
+    if (createdBundle) {
+      setBundleForm(createdBundle);
+    } else {
+      clearBundleForm();
+    }
+    setStatus(`Created bundle #${result.id}.`);
   } catch (error) {
+    setValidation(error.message);
     setStatus(`Create failed: ${error.message}`);
   }
 });
@@ -196,6 +240,12 @@ updateBundleButton.addEventListener("click", async () => {
 
   try {
     const payload = buildBundlePayload();
+    const validationError = validateBundlePayload(payload);
+    if (validationError) {
+      throw new Error(validationError);
+    }
+    clearValidation();
+
     const response = await fetch(`/api/context-bundles/${encodeURIComponent(String(selectedBundleId))}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
@@ -206,9 +256,14 @@ updateBundleButton.addEventListener("click", async () => {
       throw new Error(result?.error || "Failed to update bundle.");
     }
 
-    setStatus(`Updated bundle #${result.id}.`);
     await loadBundles();
+    const refreshedBundle = bundles.find((bundle) => bundle.id === result.id);
+    if (refreshedBundle) {
+      setBundleForm(refreshedBundle);
+    }
+    setStatus(`Updated bundle #${result.id}.`);
   } catch (error) {
+    setValidation(error.message);
     setStatus(`Update failed: ${error.message}`);
   }
 });
@@ -228,10 +283,12 @@ deleteBundleButton.addEventListener("click", async () => {
       throw new Error(result?.error || "Failed to delete bundle.");
     }
 
+    clearValidation();
     setStatus(`Deleted bundle #${selectedBundleId}.`);
     clearBundleForm();
     await loadBundles();
   } catch (error) {
+    setValidation(error.message);
     setStatus(`Delete failed: ${error.message}`);
   }
 });
