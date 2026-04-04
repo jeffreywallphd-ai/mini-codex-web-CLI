@@ -38,12 +38,14 @@ function createFeaturesFixture() {
 function createServerHarness(overrides = {}) {
   let activeAutomation = null;
   let automationRunIdSeed = 1000;
+  const automationRuns = new Map();
 
   const calls = {
     createAutomationRun: [],
     listLocalBranches: [],
     getFeaturesTree: [],
-    detachedTasks: []
+    detachedTasks: [],
+    updateAutomationRunMetadata: []
   };
 
   const deps = {
@@ -60,7 +62,7 @@ function createServerHarness(overrides = {}) {
     createAutomationRun: async (input) => {
       calls.createAutomationRun.push(input);
       automationRunIdSeed += 1;
-      return {
+      const runRecord = {
         id: automationRunIdSeed,
         automation_type: input.automationType,
         target_id: Number(input.targetId),
@@ -72,8 +74,47 @@ function createServerHarness(overrides = {}) {
         created_at: "2026-04-04T00:00:00.000Z",
         updated_at: "2026-04-04T00:00:00.000Z"
       };
+      automationRuns.set(runRecord.id, runRecord);
+      return runRecord;
     },
-    updateAutomationRunMetadata: async () => ({}),
+    updateAutomationRunMetadata: async (automationRunId, updates = {}) => {
+      calls.updateAutomationRunMetadata.push({ automationRunId, updates });
+      const existing = automationRuns.get(Number(automationRunId)) || {
+        id: Number(automationRunId),
+        automation_type: "feature",
+        target_id: 100,
+        stop_on_incomplete: 0,
+        stop_flag: 0,
+        current_position: 1,
+        automation_status: "running",
+        stop_reason: null,
+        created_at: "2026-04-04T00:00:00.000Z",
+        updated_at: "2026-04-04T00:00:00.000Z"
+      };
+
+      const next = {
+        ...existing,
+        stop_flag: Object.prototype.hasOwnProperty.call(updates, "stopFlag")
+          ? (updates.stopFlag ? 1 : 0)
+          : existing.stop_flag,
+        stop_on_incomplete: Object.prototype.hasOwnProperty.call(updates, "stopOnIncomplete")
+          ? (updates.stopOnIncomplete ? 1 : 0)
+          : existing.stop_on_incomplete,
+        current_position: Object.prototype.hasOwnProperty.call(updates, "currentPosition")
+          ? Number(updates.currentPosition)
+          : existing.current_position,
+        automation_status: Object.prototype.hasOwnProperty.call(updates, "automationStatus")
+          ? String(updates.automationStatus)
+          : existing.automation_status,
+        stop_reason: Object.prototype.hasOwnProperty.call(updates, "stopReason")
+          ? (updates.stopReason ?? null)
+          : existing.stop_reason,
+        updated_at: "2026-04-04T00:02:00.000Z"
+      };
+
+      automationRuns.set(next.id, next);
+      return next;
+    },
     recordAutomationStoryExecution: async () => ({}),
     getStoryAutomationContext: async () => ({
       story_id: 301,
@@ -94,7 +135,7 @@ function createServerHarness(overrides = {}) {
         completion_work: "none"
       }
     }),
-    getAutomationRunById: async (automationRunId) => ({
+    getAutomationRunById: async (automationRunId) => automationRuns.get(Number(automationRunId)) || ({
       id: Number(automationRunId),
       automation_type: "feature",
       target_id: 100,
@@ -171,6 +212,7 @@ function createServerHarness(overrides = {}) {
     server,
     calls,
     deps,
+    automationRuns,
     runDetachedTasks: async () => {
       for (const task of calls.detachedTasks.splice(0)) {
         await task();
@@ -396,5 +438,108 @@ test("status endpoint returns final result and handles invalid or missing ids", 
     assert.equal(missingResponse.status, 404);
     const missingPayload = await missingResponse.json();
     assert.match(missingPayload.error, /Automation run not found/);
+  });
+});
+
+test("stop endpoint marks running automation as manually stopped", async () => {
+  const harness = createServerHarness();
+  let automationRunId = null;
+
+  await withServer(harness, async (baseUrl) => {
+    const startResponse = await fetch(`${baseUrl}/api/automation/start/feature/100`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        projectName: "demo-project",
+        baseBranch: "main"
+      })
+    });
+
+    assert.equal(startResponse.status, 202);
+    const startPayload = await startResponse.json();
+    automationRunId = startPayload.automationRun.id;
+
+    const stopResponse = await fetch(`${baseUrl}/api/automation/stop/${automationRunId}`, {
+      method: "POST"
+    });
+    assert.equal(stopResponse.status, 200);
+    const stopPayload = await stopResponse.json();
+
+    assert.equal(stopPayload.automationRun.status, "stopped");
+    assert.equal(stopPayload.automationRun.stopFlag, true);
+    assert.equal(stopPayload.automationRun.stopReason, "manual_stop");
+    assert.equal(stopPayload.finalResult.status, "stopped");
+    assert.equal(stopPayload.finalResult.stopReason, "manual_stop");
+  });
+
+  assert.equal(harness.calls.updateAutomationRunMetadata.length >= 1, true);
+  const stopUpdateCall = harness.calls.updateAutomationRunMetadata.find(
+    (call) => Number(call.automationRunId) === Number(automationRunId)
+      && call.updates?.automationStatus === "stopped"
+      && call.updates?.stopReason === "manual_stop"
+  );
+  assert.ok(stopUpdateCall);
+});
+
+test("manual stop prevents automation from starting the next queued story", async () => {
+  const firstStoryGate = {};
+  firstStoryGate.promise = new Promise((resolve) => {
+    firstStoryGate.resolve = resolve;
+  });
+
+  let executeRunFlowCalls = 0;
+  const harness = createServerHarness({
+    executeRunFlow: async () => {
+      executeRunFlowCalls += 1;
+      if (executeRunFlowCalls === 1) {
+        await firstStoryGate.promise;
+      }
+      return {
+        runId: 800 + executeRunFlowCalls,
+        responsePayload: {
+          completion_status: "complete",
+          completion_work: "none"
+        }
+      };
+    },
+    runDetached: (task) => {
+      harness.backgroundTaskPromise = task();
+    }
+  });
+  harness.backgroundTaskPromise = Promise.resolve();
+
+  await withServer(harness, async (baseUrl) => {
+    const startResponse = await fetch(`${baseUrl}/api/automation/start/feature/100`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        projectName: "demo-project",
+        baseBranch: "main"
+      })
+    });
+
+    assert.equal(startResponse.status, 202);
+    const startPayload = await startResponse.json();
+    const automationRunId = startPayload.automationRun.id;
+
+    const stopResponse = await fetch(`${baseUrl}/api/automation/stop/${automationRunId}`, {
+      method: "POST"
+    });
+    assert.equal(stopResponse.status, 200);
+
+    firstStoryGate.resolve();
+    await harness.backgroundTaskPromise;
+
+    assert.equal(executeRunFlowCalls, 1);
+
+    const statusResponse = await fetch(`${baseUrl}/api/automation/status/${automationRunId}`);
+    assert.equal(statusResponse.status, 200);
+    const statusPayload = await statusResponse.json();
+    assert.equal(statusPayload.finalResult.status, "stopped");
+    assert.equal(statusPayload.finalResult.stopReason, "manual_stop");
   });
 });

@@ -164,6 +164,36 @@ test("runner stops when stopOnIncompleteStory is enabled and story is incomplete
   assert.equal(result.storyResults[0].queueAction, "stopped");
 });
 
+test("runner stops before advancing when manual stop is requested", async () => {
+  const stories = [
+    { storyId: 421, positionInQueue: 1 },
+    { storyId: 422, positionInQueue: 2 }
+  ];
+  const callOrder = [];
+  let stopRequested = false;
+
+  const result = await runSequentialStoryQueue({
+    stories,
+    shouldStop: async () => stopRequested,
+    executeStory: async (story) => {
+      callOrder.push(story.storyId);
+      if (story.storyId === 421) {
+        stopRequested = true;
+      }
+      return {
+        runId: story.storyId * 10,
+        completionStatus: "complete"
+      };
+    }
+  });
+
+  assert.deepEqual(callOrder, [421]);
+  assert.equal(result.status, "stopped");
+  assert.equal(result.stopReason, AUTOMATION_STOP_REASON.MANUAL_STOP);
+  assert.equal(result.processedStories, 1);
+  assert.equal(result.storyResults[0].queueAction, "stopped");
+});
+
 test("runner continues past incomplete stories when stopOnIncompleteStory is disabled", async () => {
   const stories = [
     { storyId: 451, positionInQueue: 1 },

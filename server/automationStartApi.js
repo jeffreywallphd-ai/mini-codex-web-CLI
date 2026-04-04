@@ -85,6 +85,31 @@ function toStatusApiExecutionSummary(execution = {}) {
   };
 }
 
+function resolveFinalCurrentPosition(runnerResult, stories, finalState) {
+  const totalStories = Array.isArray(stories) ? stories.length : 0;
+  const processedStories = Number.isInteger(runnerResult?.processedStories)
+    ? runnerResult.processedStories
+    : 0;
+
+  if (totalStories <= 0) {
+    return 1;
+  }
+
+  if (finalState.automationStatus === "completed") {
+    return totalStories;
+  }
+
+  if (finalState.stopReason === "manual_stop") {
+    return Math.min(totalStories, Math.max(1, processedStories + 1));
+  }
+
+  if (finalState.automationStatus === "failed") {
+    return Math.min(totalStories, Math.max(1, processedStories));
+  }
+
+  return Math.min(totalStories, Math.max(1, processedStories));
+}
+
 function createAutomationStartRouter(deps = {}) {
   const {
     isValidProject,
@@ -141,6 +166,16 @@ function createAutomationStartRouter(deps = {}) {
       const runnerResult = await runSequentialStoryQueue({
         stories,
         stopOnIncompleteStory,
+        shouldStop: async () => {
+          const latestAutomationRun = await getAutomationRunById(automationRun.id);
+          if (!latestAutomationRun) {
+            return false;
+          }
+
+          const isManualStopRequested = latestAutomationRun.stop_flag === 1
+            && latestAutomationRun.stop_reason === "manual_stop";
+          return isManualStopRequested;
+        },
         executeStory: async (storyQueueItem) => {
           const storyId = Number.parseInt(storyQueueItem?.storyId, 10);
           if (!Number.isInteger(storyId) || storyId <= 0) {
@@ -205,7 +240,7 @@ function createAutomationStartRouter(deps = {}) {
       const finalState = mapFinalAutomationState(runnerResult);
       await updateAutomationRunMetadata(automationRun.id, {
         stopFlag: finalState.stopFlag,
-        currentPosition: Math.max(1, runnerResult?.processedStories || stories.length || 1),
+        currentPosition: resolveFinalCurrentPosition(runnerResult, stories, finalState),
         automationStatus: finalState.automationStatus,
         stopReason: finalState.stopReason
       });
@@ -410,6 +445,50 @@ function createAutomationStartRouter(deps = {}) {
             status: automationRun.automation_status,
             stopReason: automationRun.stop_reason ?? null
           }
+      });
+    } catch (error) {
+      return res.status(500).json({
+        error: getErrorMessage(error)
+      });
+    }
+  });
+
+  router.post("/stop/:automationRunId", async (req, res) => {
+    const automationRunId = parseTargetId(req.params?.automationRunId);
+    if (!automationRunId) {
+      return res.status(400).json({ error: "Invalid automation id." });
+    }
+
+    try {
+      const automationRun = await getAutomationRunById(automationRunId);
+      if (!automationRun) {
+        return res.status(404).json({ error: "Automation run not found." });
+      }
+
+      if (automationRun.automation_status !== "running") {
+        return res.status(409).json({
+          error: "Automation run is not running.",
+          automationRun: toStatusApiAutomationRun(automationRun),
+          finalResult: {
+            status: automationRun.automation_status,
+            stopReason: automationRun.stop_reason ?? null
+          }
+        });
+      }
+
+      const updatedAutomationRun = await updateAutomationRunMetadata(automationRunId, {
+        stopFlag: true,
+        automationStatus: "stopped",
+        stopReason: "manual_stop"
+      });
+
+      return res.json({
+        automationRun: toStatusApiAutomationRun(updatedAutomationRun),
+        finalResult: {
+          status: updatedAutomationRun.automation_status,
+          stopReason: updatedAutomationRun.stop_reason ?? null
+        },
+        message: "Stop requested. Automation will not continue to the next queued story."
       });
     } catch (error) {
       return res.status(500).json({
