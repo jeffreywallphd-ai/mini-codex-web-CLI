@@ -442,6 +442,7 @@ test("status endpoint returns queue progress and current item for running automa
     assert.equal(payload.queue.remainingStories, 1);
     assert.equal(payload.queue.currentPosition, 2);
     assert.equal(payload.queue.currentItem.storyId, 302);
+    assert.equal(payload.queue.currentItem.storyTitle, "Story 302");
     assert.equal(payload.summary.completedCount, 1);
     assert.equal(payload.summary.failedCount, 0);
     assert.equal(payload.completedSteps.length, 1);
@@ -505,6 +506,7 @@ test("status endpoint returns final result and handles invalid or missing ids", 
     const completedPayload = await completedResponse.json();
     assert.equal(completedPayload.finalResult.status, "stopped");
     assert.equal(completedPayload.finalResult.stopReason, "story_incomplete");
+    assert.equal(completedPayload.queue.currentItem, null);
     assert.equal(completedPayload.automationRun.projectName, "demo-project");
     assert.equal(completedPayload.automationRun.baseBranch, "main");
 
