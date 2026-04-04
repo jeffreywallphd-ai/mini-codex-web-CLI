@@ -22,6 +22,12 @@ const AUTOMATION_STOP_REASON = Object.freeze({
   STORY_INCOMPLETE: "story_incomplete"
 });
 
+const QUEUE_BUILD_STATUS = Object.freeze({
+  READY: "ready",
+  TARGET_NOT_FOUND: "target_not_found",
+  EMPTY_QUEUE: "empty_queue"
+});
+
 const DEFAULT_AUTOMATION_RULES = Object.freeze({
   ordering: {
     strategy: "original-creation-asc-stable",
@@ -177,17 +183,45 @@ function normalizeCompletionStatus(story = {}) {
   return "unknown";
 }
 
-function createQueueStory(feature, epic, story, positionInQueue) {
+function createQueueBuildStatus({ code, automationType, targetId }) {
+  if (code === QUEUE_BUILD_STATUS.READY) {
+    return {
+      isValid: true,
+      code,
+      message: "Queue is ready."
+    };
+  }
+
+  if (code === QUEUE_BUILD_STATUS.TARGET_NOT_FOUND) {
+    return {
+      isValid: false,
+      code,
+      message: `No ${automationType} found for target '${targetId}'.`
+    };
+  }
+
+  return {
+    isValid: false,
+    code: QUEUE_BUILD_STATUS.EMPTY_QUEUE,
+    message: `No runnable stories found for ${automationType} '${targetId}'.`
+  };
+}
+
+function createQueueStory(feature, epic, story, positionInQueue, scope = {}) {
   const storyOrder = toOrderKey(story?.order);
 
   return {
     positionInQueue,
+    automationType: scope.automationType ?? null,
+    targetId: scope.targetId ?? null,
     featureId: feature?.id ?? null,
     featureTitle: getLabel(feature),
     epicId: epic?.id ?? null,
     epicTitle: getLabel(epic),
     storyId: story?.id ?? null,
     storyTitle: getLabel(story),
+    storyDescription: String(story?.description ?? ""),
+    storyCreatedAt: story?.created_at ?? null,
     completionStatus: normalizeCompletionStatus(story),
     storyOrder: storyOrder === Number.MAX_SAFE_INTEGER ? null : storyOrder
   };
@@ -308,6 +342,7 @@ function buildScopedStoryExecutionQueue(features, selection) {
 
   const automationType = String(selection?.automationType || "").trim().toLowerCase();
   const targetId = normalizeTargetId(selection?.targetId);
+  const scope = { automationType, targetId };
 
   if (!automationType) {
     throw new TypeError("selection.automationType is required");
@@ -322,19 +357,25 @@ function buildScopedStoryExecutionQueue(features, selection) {
   const orderedFeatures = withStableCreationOrdering(features);
   const queues = [];
   let globalPosition = 1;
+  let targetFound = true;
 
   if (automationType === AUTOMATION_SCOPE.FEATURE) {
     const feature = findFeatureById(orderedFeatures, targetId);
 
     if (!feature) {
-      return { queues, stories: [] };
+      targetFound = false;
+      return {
+        queues,
+        stories: [],
+        queueStatus: createQueueBuildStatus({ code: QUEUE_BUILD_STATUS.TARGET_NOT_FOUND, automationType, targetId })
+      };
     }
 
     const epics = withStableCreationOrdering(normalizeList(feature?.epics));
     for (const epic of epics) {
       const stories = withStableCreationOrdering(normalizeList(epic?.stories));
       const queuedStories = stories.map((story) => {
-        const queueStory = createQueueStory(feature, epic, story, globalPosition);
+        const queueStory = createQueueStory(feature, epic, story, globalPosition, scope);
         globalPosition += 1;
         return queueStory;
       });
@@ -357,12 +398,17 @@ function buildScopedStoryExecutionQueue(features, selection) {
     const context = findEpicContextById(orderedFeatures, targetId);
 
     if (!context) {
-      return { queues, stories: [] };
+      targetFound = false;
+      return {
+        queues,
+        stories: [],
+        queueStatus: createQueueBuildStatus({ code: QUEUE_BUILD_STATUS.TARGET_NOT_FOUND, automationType, targetId })
+      };
     }
 
     const stories = withStableCreationOrdering(normalizeList(context.epic?.stories));
     const queuedStories = stories.map((story) => {
-      const queueStory = createQueueStory(context.feature, context.epic, story, globalPosition);
+      const queueStory = createQueueStory(context.feature, context.epic, story, globalPosition, scope);
       globalPosition += 1;
       return queueStory;
     });
@@ -382,7 +428,12 @@ function buildScopedStoryExecutionQueue(features, selection) {
     const context = findStoryContextById(orderedFeatures, targetId);
 
     if (!context) {
-      return { queues, stories: [] };
+      targetFound = false;
+      return {
+        queues,
+        stories: [],
+        queueStatus: createQueueBuildStatus({ code: QUEUE_BUILD_STATUS.TARGET_NOT_FOUND, automationType, targetId })
+      };
     }
 
     queues.push({
@@ -390,13 +441,23 @@ function buildScopedStoryExecutionQueue(features, selection) {
       featureTitle: getLabel(context.feature),
       epicId: context.epic?.id ?? null,
       epicTitle: getLabel(context.epic),
-      stories: [createQueueStory(context.feature, context.epic, context.story, globalPosition)]
+      stories: [createQueueStory(context.feature, context.epic, context.story, globalPosition, scope)]
     });
   }
 
+  const stories = flattenStoryExecutionQueues(queues);
+  const queueStatus = stories.length > 0 && targetFound
+    ? createQueueBuildStatus({ code: QUEUE_BUILD_STATUS.READY, automationType, targetId })
+    : createQueueBuildStatus({
+      code: targetFound ? QUEUE_BUILD_STATUS.EMPTY_QUEUE : QUEUE_BUILD_STATUS.TARGET_NOT_FOUND,
+      automationType,
+      targetId
+    });
+
   return {
     queues,
-    stories: flattenStoryExecutionQueues(queues)
+    stories,
+    queueStatus
   };
 }
 
@@ -551,7 +612,8 @@ function defineAutomationExecutionPlan(features, selection, overrides = {}) {
     scope,
     rules,
     queues: queueResult.queues,
-    stories: queueResult.stories
+    stories: queueResult.stories,
+    queueStatus: queueResult.queueStatus
   };
 }
 
@@ -560,6 +622,7 @@ module.exports = {
   AUTOMATION_SCOPE,
   AUTOMATION_STOP_REASON,
   DEFAULT_AUTOMATION_RULES,
+  QUEUE_BUILD_STATUS,
   buildScopedStoryExecutionQueue,
   createAutomationRules,
   defineAutomationExecutionPlan,
