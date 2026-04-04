@@ -49,10 +49,25 @@ test("compileContextBundle creates deterministic section ordering and labels", (
       "Testing Expectations: Coverage"
     ]
   );
+  assert.deepEqual(compiled.typeGroups, [
+    {
+      partType: "feature_background",
+      partTypeLabel: "Feature Background",
+      includedPartIds: [101],
+      sectionLabels: ["Feature Background: Goal"]
+    },
+    {
+      partType: "testing_expectations",
+      partTypeLabel: "Testing Expectations",
+      includedPartIds: [103],
+      sectionLabels: ["Testing Expectations: Coverage"]
+    }
+  ]);
   assert.match(
     compiled.compiledText,
     /## Feature Background: Goal[\s\S]*## Testing Expectations: Coverage/
   );
+  assert.equal(compiled.compiledString, compiled.compiledText);
 });
 
 test("compileContextBundle updates output when included parts or content changes", () => {
@@ -81,10 +96,54 @@ test("compileContextBundle updates output when included parts or content changes
   });
   assert.deepEqual(excluded.includedPartIds, []);
   assert.equal(excluded.compiledText, "");
+  assert.deepEqual(excluded.typeGroups, []);
 
   const updated = compileContextBundle({
     ...sourceBundle,
     parts: [{ ...sourceBundle.parts[0], content: "Updated goal text" }]
   });
   assert.match(updated.compiledText, /Updated goal text/);
+});
+
+test("compileContextBundle is deterministic across repeated compiles and ties", () => {
+  const input = {
+    id: 21,
+    parts: [
+      {
+        id: 4,
+        part_type: "user_notes",
+        title: "B",
+        content: "second",
+        position: 5,
+        include_in_compiled: 1
+      },
+      {
+        id: 3,
+        part_type: "feature_background",
+        title: "A",
+        content: "first",
+        position: 5,
+        include_in_compiled: 1
+      },
+      {
+        id: 7,
+        part_type: "feature_background",
+        title: "Hidden",
+        content: "hidden",
+        position: 6,
+        include_in_compiled: 0
+      }
+    ]
+  };
+
+  const first = compileContextBundle(input);
+  const second = compileContextBundle(input);
+
+  assert.deepEqual(second, first);
+  assert.deepEqual(first.orderedPartIds, [3, 4, 7]);
+  assert.deepEqual(first.includedPartIds, [3, 4]);
+  assert.deepEqual(first.typeGroups.map((group) => group.partType), [
+    "feature_background",
+    "user_notes"
+  ]);
 });
