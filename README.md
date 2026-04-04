@@ -32,6 +32,7 @@ The app is designed for personal LAN use, not for public internet exposure or mu
 - Shared automated story run pipeline that reuses manual run creation/execution persistence (`server/automatedStoryRunPipeline.js`)
 - Automated run-origin linkage persisted on each run (`automation_origin_type`, `automation_origin_id`, `automation_run_id`) for feature/epic/story traceability
 - Feature card automation control in **Not Yet Implemented** for launching feature-wide automation (`Complete with Automation`)
+- Feature/epic/story automation summaries include concise stop reasons for early stops (`execution_failed`, `story_incomplete`, `manual_stop`) when backend state provides one
 - SQLite storage with no external database
 - Mobile-friendly, lightweight UI intended for LAN access
 

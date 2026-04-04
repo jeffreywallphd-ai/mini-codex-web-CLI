@@ -377,6 +377,36 @@ function appendCurrentExecutingStoryLine(content, automationType, targetId) {
   content.appendChild(row);
 }
 
+function getAutomationStopReasonSummary(stopReason) {
+  const normalizedReason = String(stopReason || "").trim().toLowerCase();
+  if (normalizedReason === "execution_failed") {
+    return "Stopped because a story execution failed.";
+  }
+  if (normalizedReason === "story_incomplete") {
+    return "Stopped because an incomplete story was found with stop-on-incomplete enabled.";
+  }
+  if (normalizedReason === "manual_stop") {
+    return "Stopped because a manual stop was requested.";
+  }
+  return null;
+}
+
+function appendAutomationStopReasonLine(content, { status, stopReason } = {}) {
+  if (status !== "stopped" && status !== "failed") {
+    return;
+  }
+
+  const summary = getAutomationStopReasonSummary(stopReason);
+  if (!summary) {
+    return;
+  }
+
+  const row = document.createElement("p");
+  row.className = "feature-automation-status-row";
+  row.textContent = `Stop reason: ${summary}`;
+  content.appendChild(row);
+}
+
 function getStoryAutomationStatus(story) {
   const activeStoryRun = Boolean(
     globalAutomationLock?.isActive
@@ -415,6 +445,10 @@ function createFeatureAutomationStatusSummary(content, feature) {
   }
 
   content.appendChild(row);
+  appendAutomationStopReasonLine(content, {
+    status,
+    stopReason: feature?.feature_automation_stop_reason
+  });
   appendCurrentExecutingStoryLine(content, "feature", feature?.id);
 }
 
@@ -437,6 +471,10 @@ function createEpicAutomationStatusSummary(content, epic) {
   }
 
   content.appendChild(row);
+  appendAutomationStopReasonLine(content, {
+    status,
+    stopReason: epic?.epic_automation_stop_reason
+  });
   appendCurrentExecutingStoryLine(content, "epic", epic?.id);
 }
 
@@ -459,6 +497,10 @@ function createStoryAutomationStatusSummary(content, story) {
   }
 
   content.appendChild(row);
+  appendAutomationStopReasonLine(content, {
+    status,
+    stopReason: story?.story_automation_stop_reason
+  });
 }
 
 async function startFeatureAutomation(featureId, options = {}) {

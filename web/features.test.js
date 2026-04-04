@@ -96,6 +96,24 @@ test("story card automation UI stays lightweight without story-level stop-on-inc
   assert.doesNotMatch(source, /Stop Merge if Story Implementation is Incomplete/);
 });
 
+test("automation status summaries show persisted stop reasons for failure, incomplete stop, and manual stop", () => {
+  const source = readFeaturesScript();
+
+  assert.match(source, /function getAutomationStopReasonSummary\(stopReason\)/);
+  assert.match(source, /if \(normalizedReason === "execution_failed"\)/);
+  assert.match(source, /if \(normalizedReason === "story_incomplete"\)/);
+  assert.match(source, /if \(normalizedReason === "manual_stop"\)/);
+  assert.match(source, /Stopped because a story execution failed\./);
+  assert.match(source, /Stopped because an incomplete story was found with stop-on-incomplete enabled\./);
+  assert.match(source, /Stopped because a manual stop was requested\./);
+  assert.match(source, /if \(status !== "stopped" && status !== "failed"\)/);
+  assert.match(source, /if \(!summary\)/);
+  assert.match(source, /row\.textContent = `Stop reason: \$\{summary\}`;/);
+  assert.match(source, /stopReason: feature\?\.feature_automation_stop_reason/);
+  assert.match(source, /stopReason: epic\?\.epic_automation_stop_reason/);
+  assert.match(source, /stopReason: story\?\.story_automation_stop_reason/);
+});
+
 test("automation summaries render current executing story from backend status payload", () => {
   const source = readFeaturesScript();
 
