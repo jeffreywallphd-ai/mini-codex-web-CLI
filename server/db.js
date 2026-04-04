@@ -14,6 +14,7 @@ const VALID_AUTOMATION_TYPES = new Set(["feature", "epic", "story"]);
 const VALID_AUTOMATION_STATUSES = new Set(["pending", "running", "completed", "failed", "stopped"]);
 const VALID_AUTOMATION_STORY_EXECUTION_STATUSES = new Set(["completed", "failed"]);
 const VALID_AUTOMATION_STORY_QUEUE_ACTIONS = new Set(["advanced", "stopped", "failed"]);
+const FEATURE_AUTOMATION_STATUS_FOR_SUMMARY = new Set(["running", "completed", "failed", "stopped"]);
 
 function normalizeRunOrigin(runInput = {}) {
   const rawType = runInput.automationOriginType ?? runInput.originEntityType ?? null;
@@ -774,7 +775,66 @@ async function getFeaturesTree(scope = {}) {
     `, [projectName, baseBranch])
   ]);
 
-  const featuresById = new Map(features.map((feature) => [feature.id, { ...feature, epics: [] }]));
+  const featureIds = features.map((feature) => feature.id).filter((id) => Number.isInteger(id) && id > 0);
+  let latestFeatureAutomationByFeatureId = new Map();
+
+  if (featureIds.length > 0) {
+    const placeholders = featureIds.map(() => "?").join(", ");
+    const automationRows = await all(
+      `
+        SELECT
+          id,
+          target_id,
+          automation_status,
+          stop_reason,
+          created_at,
+          updated_at
+        FROM automation_runs
+        WHERE automation_type = 'feature'
+          AND target_id IN (${placeholders})
+          AND (
+            (project_name = ? AND base_branch = ?)
+            OR (COALESCE(project_name, '') = '' AND COALESCE(base_branch, '') = '')
+          )
+        ORDER BY datetime(COALESCE(updated_at, created_at)) DESC, id DESC
+      `,
+      [...featureIds, projectName, baseBranch]
+    );
+
+    latestFeatureAutomationByFeatureId = new Map();
+    for (const row of automationRows) {
+      const targetId = Number.parseInt(row?.target_id, 10);
+      if (!Number.isInteger(targetId) || targetId <= 0) {
+        continue;
+      }
+
+      if (!latestFeatureAutomationByFeatureId.has(targetId)) {
+        const rawStatus = String(row?.automation_status || "").trim().toLowerCase();
+        const normalizedStatus = FEATURE_AUTOMATION_STATUS_FOR_SUMMARY.has(rawStatus)
+          ? rawStatus
+          : "not_started";
+
+        latestFeatureAutomationByFeatureId.set(targetId, {
+          feature_automation_run_id: Number.parseInt(row?.id, 10) || null,
+          feature_automation_status: normalizedStatus,
+          feature_automation_stop_reason: row?.stop_reason || null,
+          feature_automation_updated_at: row?.updated_at || row?.created_at || null
+        });
+      }
+    }
+  }
+
+  const featuresById = new Map(features.map((feature) => {
+    const latestFeatureAutomation = latestFeatureAutomationByFeatureId.get(feature.id) || null;
+    return [feature.id, {
+      ...feature,
+      feature_automation_run_id: latestFeatureAutomation?.feature_automation_run_id ?? null,
+      feature_automation_status: latestFeatureAutomation?.feature_automation_status || "not_started",
+      feature_automation_stop_reason: latestFeatureAutomation?.feature_automation_stop_reason ?? null,
+      feature_automation_updated_at: latestFeatureAutomation?.feature_automation_updated_at ?? null,
+      epics: []
+    }];
+  }));
   const epicsById = new Map();
 
   for (const epic of epics) {

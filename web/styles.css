@@ -575,6 +575,46 @@ details pre {
   color: #ffc7c7;
 }
 
+.feature-automation-status-row {
+  margin: -4px 0 12px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.automation-status-pill {
+  display: inline-block;
+  border-radius: 999px;
+  padding: 2px 8px;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.automation-status-pill--not_started {
+  background: rgba(160, 164, 171, 0.2);
+  color: #cbd0d7;
+}
+
+.automation-status-pill--running {
+  background: rgba(79, 140, 255, 0.22);
+  color: #b9d2ff;
+}
+
+.automation-status-pill--completed {
+  background: rgba(46, 204, 113, 0.18);
+  color: #aef0c9;
+}
+
+.automation-status-pill--stopped {
+  background: rgba(255, 179, 0, 0.2);
+  color: #ffe0a3;
+}
+
+.automation-status-pill--failed {
+  background: rgba(255, 92, 92, 0.18);
+  color: #ffc7c7;
+}
+
 .draft-actions {
   display: flex;
   gap: 8px;

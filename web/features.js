@@ -428,6 +428,54 @@ function getIncompleteStoryCountForFeature(feature) {
   return count;
 }
 
+function getFeatureAutomationStatus(feature) {
+  const activeFeatureRun = Boolean(
+    globalAutomationLock?.isActive
+      && globalAutomationLock?.automationType === "feature"
+      && Number(globalAutomationLock?.targetId) === Number(feature?.id)
+  );
+  if (activeFeatureRun) {
+    return "running";
+  }
+
+  const rawStatus = String(feature?.feature_automation_status || "").trim().toLowerCase();
+  if (rawStatus === "running") return "running";
+  if (rawStatus === "completed") return "completed";
+  if (rawStatus === "stopped") return "stopped";
+  if (rawStatus === "failed") return "failed";
+
+  return "not_started";
+}
+
+function getFeatureAutomationStatusLabel(status) {
+  if (status === "running") return "Running";
+  if (status === "completed") return "Completed";
+  if (status === "stopped") return "Stopped";
+  if (status === "failed") return "Failed";
+  return "Not Started";
+}
+
+function createFeatureAutomationStatusSummary(content, feature) {
+  const status = getFeatureAutomationStatus(feature);
+  const label = getFeatureAutomationStatusLabel(status);
+
+  const row = document.createElement("p");
+  row.className = "feature-automation-status-row";
+  row.appendChild(document.createTextNode("Automation: "));
+
+  const badge = document.createElement("span");
+  badge.className = `automation-status-pill automation-status-pill--${status}`;
+  badge.textContent = label;
+  row.appendChild(badge);
+
+  const runId = Number.parseInt(feature?.feature_automation_run_id, 10);
+  if (Number.isInteger(runId) && runId > 0 && status !== "not_started") {
+    row.appendChild(document.createTextNode(` (#${runId})`));
+  }
+
+  content.appendChild(row);
+}
+
 async function startFeatureAutomation(featureId, options = {}) {
   const projectName = automationScope.projectName;
   const baseBranch = automationScope.baseBranch;
@@ -655,6 +703,7 @@ function renderFeatureCard(feature, options = {}) {
     status: getFeatureStatus(feature),
     renderBody: (content) => {
       createDescription(content, feature.description);
+      createFeatureAutomationStatusSummary(content, feature);
       if (options.showAutomation) {
         createFeatureAutomationUi(content, feature);
       }
