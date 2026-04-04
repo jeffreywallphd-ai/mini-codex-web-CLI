@@ -41,6 +41,7 @@ test("automated story runner reuses existing run flow and links run to story", a
     projectName: "demo-project",
     baseBranch: "main",
     executionMode: "write",
+    contextBundleId: 77,
     streamId: "stream-1"
   });
 
@@ -57,6 +58,7 @@ test("automated story runner reuses existing run flow and links run to story", a
   assert.equal(calls.executeRunFlow[0].projectName, "demo-project");
   assert.equal(calls.executeRunFlow[0].baseBranch, "main");
   assert.equal(calls.executeRunFlow[0].executionMode, "write");
+  assert.equal(calls.executeRunFlow[0].contextBundleId, 77);
   assert.equal(calls.executeRunFlow[0].streamId, "stream-1");
   assert.match(calls.executeRunFlow[0].prompt, /Story A/);
   assert.deepEqual(calls.executeRunFlow[0].runOrigin, {
@@ -156,4 +158,26 @@ test("automated story runner forwards feature or epic automation origin context"
     targetId: 100,
     automationRunId: 555
   });
+});
+
+test("automated story runner rejects invalid context bundle id", async () => {
+  const executeAutomatedStoryRun = createAutomatedStoryRunExecutor({
+    getStoryAutomationContext: async () => ({
+      story_id: 1,
+      story_name: "Story",
+      story_description: "Description"
+    }),
+    executeRunFlow: async () => ({ runId: 1, responsePayload: {} }),
+    attachRunToStory: async () => {}
+  });
+
+  await assert.rejects(
+    () => executeAutomatedStoryRun({
+      storyId: 1,
+      projectName: "demo-project",
+      baseBranch: "main",
+      contextBundleId: "bad-id"
+    }),
+    /Context bundle id must be a positive integer/
+  );
 });

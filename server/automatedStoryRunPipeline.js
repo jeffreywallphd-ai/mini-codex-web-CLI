@@ -42,6 +42,9 @@ function createAutomatedStoryRunExecutor(deps = {}) {
     const projectName = String(input.projectName || "").trim();
     const baseBranch = String(input.baseBranch || "").trim();
     const executionMode = String(input.executionMode || "write").trim() || "write";
+    const contextBundleId = input.contextBundleId === null || input.contextBundleId === undefined || input.contextBundleId === ""
+      ? null
+      : Number.parseInt(input.contextBundleId, 10);
     const streamId = input.streamId ?? null;
     const onProgressEvent = typeof input.onProgressEvent === "function"
       ? input.onProgressEvent
@@ -64,6 +67,9 @@ function createAutomatedStoryRunExecutor(deps = {}) {
     }
     if (automationRunId !== null && (!Number.isInteger(automationRunId) || automationRunId <= 0)) {
       throw new Error("Automation run id must be a positive integer when provided.");
+    }
+    if (contextBundleId !== null && (!Number.isInteger(contextBundleId) || contextBundleId <= 0)) {
+      throw new Error("Context bundle id must be a positive integer when provided.");
     }
 
     const storyContext = await getStoryAutomationContext(storyId, {
@@ -88,6 +94,7 @@ function createAutomatedStoryRunExecutor(deps = {}) {
       projectName,
       prompt,
       executionMode,
+      contextBundleId,
       baseBranch,
       streamId,
       onProgressEvent,
