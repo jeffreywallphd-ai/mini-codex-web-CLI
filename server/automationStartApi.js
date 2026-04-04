@@ -549,6 +549,46 @@ function buildFallbackAutomationConflict({
   };
 }
 
+function buildContextBundleErrorResponse(error) {
+  const errorCode = String(error?.code || "").trim().toLowerCase();
+  if (!errorCode) {
+    return null;
+  }
+
+  if (errorCode === "context_bundle_invalid_id") {
+    return {
+      status: 400,
+      payload: {
+        error: String(error?.message || "Invalid context bundle id in request body."),
+        errorType: "context_bundle_invalid_id"
+      }
+    };
+  }
+
+  if (errorCode === "context_bundle_not_found") {
+    return {
+      status: 404,
+      payload: {
+        error: String(error?.message || "Context bundle not found."),
+        errorType: "context_bundle_not_found"
+      }
+    };
+  }
+
+  if (errorCode === "context_bundle_compile_failed") {
+    return {
+      status: 422,
+      payload: {
+        error: String(error?.message || "Selected context bundle cannot be compiled for execution."),
+        errorType: "context_bundle_compile_failed",
+        validationErrors: Array.isArray(error?.validationErrors) ? error.validationErrors : []
+      }
+    };
+  }
+
+  return null;
+}
+
 function getLatestFailedStoryResult(runnerResult) {
   const storyResults = Array.isArray(runnerResult?.storyResults)
     ? runnerResult.storyResults
@@ -581,6 +621,7 @@ function createAutomationStartRouter(deps = {}) {
     getAutomationRunQueueItemsByRunId,
     getAutomationQueueStoriesByTarget,
     mergeAutomationStoryRun,
+    validateContextBundleSelection,
     getErrorMessage,
     runningProjects,
     getActiveAutomation,
@@ -604,6 +645,7 @@ function createAutomationStartRouter(deps = {}) {
   if (typeof getAutomationRunQueueItemsByRunId !== "function") throw new Error("getAutomationRunQueueItemsByRunId dependency is required.");
   if (typeof getAutomationQueueStoriesByTarget !== "function") throw new Error("getAutomationQueueStoriesByTarget dependency is required.");
   if (typeof mergeAutomationStoryRun !== "function") throw new Error("mergeAutomationStoryRun dependency is required.");
+  if (typeof validateContextBundleSelection !== "function") throw new Error("validateContextBundleSelection dependency is required.");
   if (typeof getErrorMessage !== "function") throw new Error("getErrorMessage dependency is required.");
   if (!runningProjects || typeof runningProjects.has !== "function") throw new Error("runningProjects dependency is required.");
   if (typeof getActiveAutomation !== "function") throw new Error("getActiveAutomation dependency is required.");
@@ -1037,6 +1079,10 @@ function createAutomationStartRouter(deps = {}) {
         return res.status(branchValidationError.status).json(branchValidationError.payload);
       }
 
+      await validateContextBundleSelection({
+        contextBundleId: contextBundleSelection.contextBundleId
+      });
+
       const features = await getFeaturesTree({ projectName, baseBranch });
       const plan = defineAutomationExecutionPlan(features, {
         automationType,
@@ -1126,6 +1172,11 @@ function createAutomationStartRouter(deps = {}) {
         })
       );
     } catch (error) {
+      const contextBundleError = buildContextBundleErrorResponse(error);
+      if (contextBundleError) {
+        return res.status(contextBundleError.status).json(contextBundleError.payload);
+      }
+
       if (isAutomationTargetConflictError(error)) {
         const conflictingRun = await findRunningAutomationByScope({
           automationType,
@@ -1248,6 +1299,13 @@ function createAutomationStartRouter(deps = {}) {
         return res.status(branchValidationError.status).json(branchValidationError.payload);
       }
 
+      const requestedContextBundleId = contextBundleSelection.provided
+        ? contextBundleSelection.contextBundleId
+        : normalizePersistedContextBundleId(automationRun.context_bundle_id);
+      await validateContextBundleSelection({
+        contextBundleId: requestedContextBundleId
+      });
+
       const persistedQueueStories = sortQueueStoriesByPosition(
         await getAutomationRunQueueItemsByRunId(automationRun.id)
       );
@@ -1325,6 +1383,11 @@ function createAutomationStartRouter(deps = {}) {
         })
       );
     } catch (error) {
+      const contextBundleError = buildContextBundleErrorResponse(error);
+      if (contextBundleError) {
+        return res.status(contextBundleError.status).json(contextBundleError.payload);
+      }
+
       if (isAutomationTargetConflictError(error)) {
         const conflictingRun = await findRunningAutomationByScope({
           automationType: automationRun?.automation_type,

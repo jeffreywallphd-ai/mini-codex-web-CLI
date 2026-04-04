@@ -50,7 +50,8 @@ function createServerHarness(overrides = {}) {
     updateAutomationRunMetadata: [],
     executeAutomatedStoryRun: [],
     mergeAutomationStoryRun: [],
-    automationLifecycleLogs: []
+    automationLifecycleLogs: [],
+    validateContextBundleSelection: []
   };
 
   const deps = {
@@ -290,6 +291,12 @@ function createServerHarness(overrides = {}) {
         storyCreatedAt: "2026-01-01T10:05:00.000Z"
       }
     ]),
+    validateContextBundleSelection: async (input = {}) => {
+      calls.validateContextBundleSelection.push(input);
+      return {
+        contextBundleId: input.contextBundleId ?? null
+      };
+    },
     getErrorMessage: (error) => error?.message || String(error),
     runningProjects: new Set(),
     getActiveAutomation: () => activeAutomation,
@@ -864,6 +871,50 @@ test("start endpoint rejects ineligible targets with no runnable stories", async
     assert.equal(payload.errorType, "target_ineligible");
     assert.equal(payload.queueStatus?.code, "empty_queue");
     assert.match(payload.error, /No runnable stories found for epic '201'/);
+  });
+
+  assert.equal(harness.calls.createAutomationRun.length, 0);
+  assert.equal(harness.calls.detachedTasks.length, 0);
+});
+
+test("start endpoint rejects selected context bundle when compilation validation fails", async () => {
+  const harness = createServerHarness({
+    validateContextBundleSelection: async () => {
+      const error = new Error("Context bundle #88 is unusable and cannot be compiled for execution.");
+      error.code = "context_bundle_compile_failed";
+      error.validationErrors = [
+        {
+          code: "invalid_part_required_field_missing",
+          message: "Part 200 is missing content.",
+          severity: "error",
+          partIds: [200],
+          sectionKeys: ["background_context"]
+        }
+      ];
+      throw error;
+    }
+  });
+
+  await withServer(harness, async (baseUrl) => {
+    const response = await fetch(`${baseUrl}/api/automation/start/story/301`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        projectName: "demo-project",
+        baseBranch: "main",
+        contextBundleId: 88
+      })
+    });
+
+    assert.equal(response.status, 422);
+    const payload = await response.json();
+    assert.equal(payload.errorType, "context_bundle_compile_failed");
+    assert.match(payload.error, /cannot be compiled/i);
+    assert.equal(Array.isArray(payload.validationErrors), true);
+    assert.equal(payload.validationErrors.length, 1);
+    assert.equal(payload.validationErrors[0].code, "invalid_part_required_field_missing");
   });
 
   assert.equal(harness.calls.createAutomationRun.length, 0);
@@ -1843,6 +1894,48 @@ test("resume endpoint rejects requests with multiple context bundle references",
     const payload = await response.json();
     assert.match(payload.error, /Multiple context bundle references are not allowed/i);
   });
+});
+
+test("resume endpoint rejects persisted context bundle when bundle no longer exists", async () => {
+  const harness = createServerHarness({
+    validateContextBundleSelection: async (input = {}) => {
+      if (Number.parseInt(input?.contextBundleId, 10) === 991) {
+        const error = new Error("Context bundle #991 was not found.");
+        error.code = "context_bundle_not_found";
+        throw error;
+      }
+      return { contextBundleId: input.contextBundleId ?? null };
+    }
+  });
+  harness.automationRuns.set(4702, {
+    id: 4702,
+    automation_type: "feature",
+    target_id: 100,
+    project_name: "demo-project",
+    base_branch: "main",
+    stop_on_incomplete: 0,
+    context_bundle_id: 991,
+    context_bundle_title: "Bundle 991",
+    stop_flag: 1,
+    current_position: 2,
+    automation_status: "stopped",
+    stop_reason: "manual_stop",
+    created_at: "2026-04-04T00:00:00.000Z",
+    updated_at: "2026-04-04T00:02:00.000Z"
+  });
+
+  await withServer(harness, async (baseUrl) => {
+    const response = await fetch(`${baseUrl}/api/automation/resume/4702`, {
+      method: "POST"
+    });
+
+    assert.equal(response.status, 404);
+    const payload = await response.json();
+    assert.equal(payload.errorType, "context_bundle_not_found");
+    assert.match(payload.error, /not found/i);
+  });
+
+  assert.equal(harness.calls.detachedTasks.length, 0);
 });
 
 test("resume endpoint restarts failed automation from remaining persisted queue items", async () => {

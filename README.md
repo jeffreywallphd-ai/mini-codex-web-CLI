@@ -164,6 +164,7 @@ Context bundles are persisted with a parent-child data model in SQLite:
 - Bundle compilation now includes simple context-quality advisory warnings (`qualityWarnings`, `qualityWarningSummary`) for common issues such as missing high-value sections, low-signal parts, duplicate/near-duplicate content, potential contradictory directives, and oversized bundle estimates; warnings are previewed in the authoring UI and are non-blocking unless data is clearly invalid.
 - Optional compile limits (`maxCompiledChars` or token-equivalent options) apply deterministic prefix-preserving truncation: higher-priority compilation sections are preserved first, then earlier ordered parts, with explainable truncation metadata (`truncation.preservedPartIds`, `truncation.partiallyTruncatedPartIds`, `truncation.omittedPartIds`).
 - Run preparation can now accept an optional `contextBundleId`; when provided, the selected bundle is compiled during run creation using the same `compileContextBundle(...)` path used by preview.
+- Run preparation now validates selected bundles before execution starts (manual run and story automation): bundle id shape, bundle existence, and compile-readiness are checked up front; unusable bundles return `errorType: "context_bundle_compile_failed"` with optional `validationErrors[]` for UI rendering.
 - The index page manual run form now includes a lightweight single-select context bundle control (`No context bundle` or exactly one saved bundle) that lists bundle title plus concise metadata hints (intended use and summary when available).
 - When a bundle is selected on the index page, a compact metadata summary card appears under the selector and updates on selection changes, showing summary/intended use/project affinity with safe `(none)` fallbacks when optional metadata is missing.
 - Run and automation records persist nullable `context_bundle_id` linkage so bundle-backed and non-bundle executions remain backward compatible in one explicit model.
@@ -383,6 +384,7 @@ Request body fields:
 - `contextBundleId` (optional positive integer; when provided, each queued run compiles and injects that bundle into final run prompt context)
 - automation execution uses the persisted automation-run bundle selection for every queued story run, so one automation run maps to one bundle context with no per-story bundle override
 - automation start/resume requests enforce a single-bundle API shape: `contextBundleId` only (plural/multi-reference payload fields are rejected)
+- automation start/resume performs bundle preflight validation before queue launch: missing bundles are rejected with `404` (`errorType: "context_bundle_not_found"`), invalid ids with `400` (`errorType: "context_bundle_invalid_id"`), and compile-usability failures with `422` (`errorType: "context_bundle_compile_failed"` + optional `validationErrors[]`)
 
 Success response (`202 Accepted`) includes tracking metadata for the UI:
 
