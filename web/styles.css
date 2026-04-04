@@ -663,6 +663,16 @@ details pre {
   padding-top: 12px;
 }
 
+.bundle-detail-section {
+  border-top: 1px solid var(--border);
+  margin-top: 12px;
+  padding-top: 12px;
+}
+
+.bundle-detail-section h3 {
+  margin: 0;
+}
+
 .bundle-parts-section h3 {
   margin: 0;
 }

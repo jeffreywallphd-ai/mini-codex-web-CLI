@@ -8,6 +8,7 @@ const bundleIntendedUseInput = document.getElementById("bundleIntendedUseInput")
 const bundleProjectNameInput = document.getElementById("bundleProjectNameInput");
 const bundleTagsInput = document.getElementById("bundleTagsInput");
 const bundleSummaryInput = document.getElementById("bundleSummaryInput");
+const bundleDetailSummary = document.getElementById("bundleDetailSummary");
 const saveBundleButton = document.getElementById("saveBundleButton");
 const updateBundleButton = document.getElementById("updateBundleButton");
 const deleteBundleButton = document.getElementById("deleteBundleButton");
@@ -54,6 +55,62 @@ function formatPartTypeLabel(partType) {
   const normalized = String(partType || "").trim().toLowerCase();
   const match = PART_TYPE_OPTIONS.find((option) => option.value === normalized);
   return match ? match.label : "Unknown";
+}
+
+function buildIntentGuidance(bundle = {}) {
+  const hasIntendedUse = Boolean(String(bundle.intended_use || "").trim());
+  const hasSummary = Boolean(String(bundle.summary || "").trim());
+
+  if (hasIntendedUse && hasSummary) {
+    return "Ready for selection: intended use and concise summary are set.";
+  }
+
+  if (!hasIntendedUse && !hasSummary) {
+    return "Add intended use and a concise summary to improve selection clarity.";
+  }
+
+  if (!hasIntendedUse) {
+    return "Add intended use so this bundle is easier to match to run goals.";
+  }
+
+  return "Add a concise summary so this bundle is easier to scan in lists.";
+}
+
+function renderBundleDetailSummary(bundle) {
+  if (!bundleDetailSummary) {
+    return;
+  }
+
+  if (!bundle) {
+    bundleDetailSummary.innerHTML = "";
+    const cell = document.createElement("div");
+    const label = document.createElement("strong");
+    label.textContent = "Selection Guidance";
+    const value = document.createElement("span");
+    value.textContent = "Select a bundle to inspect metadata guidance.";
+    cell.appendChild(label);
+    cell.appendChild(value);
+    bundleDetailSummary.appendChild(cell);
+    return;
+  }
+
+  const cells = [
+    { label: "Intended Use", value: formatMetadataValue(bundle.intended_use) },
+    { label: "Summary", value: formatMetadataValue(bundle.summary) },
+    { label: "Selection Guidance", value: buildIntentGuidance(bundle) }
+  ];
+
+  bundleDetailSummary.innerHTML = "";
+  for (const item of cells) {
+    const cell = document.createElement("div");
+    const label = document.createElement("strong");
+    label.textContent = item.label;
+    const value = document.createElement("span");
+    value.textContent = item.value;
+    cell.appendChild(label);
+    cell.appendChild(value);
+    bundleDetailSummary.appendChild(cell);
+  }
 }
 
 function buildBundlePayload() {
@@ -202,6 +259,7 @@ function clearBundleForm() {
   clearValidation();
   syncButtonState();
   renderBundleParts();
+  renderBundleDetailSummary(null);
 }
 
 function setBundleForm(bundle) {
@@ -215,6 +273,7 @@ function setBundleForm(bundle) {
   bundleSummaryInput.value = bundle.summary || "";
   clearValidation();
   syncButtonState();
+  renderBundleDetailSummary(bundle);
 }
 
 async function loadBundlePreview(bundleId, options = {}) {
@@ -296,6 +355,10 @@ function renderBundles() {
     summaryRow.className = "card-description";
     summaryRow.textContent = `Summary: ${formatMetadataValue(bundle.summary)}`;
 
+    const guidanceRow = document.createElement("p");
+    guidanceRow.className = "card-description";
+    guidanceRow.textContent = `Selection guidance: ${buildIntentGuidance(bundle)}`;
+
     const actions = document.createElement("div");
     actions.className = "draft-actions";
 
@@ -339,6 +402,7 @@ function renderBundles() {
     content.appendChild(projectRow);
     content.appendChild(tagsRow);
     content.appendChild(summaryRow);
+    content.appendChild(guidanceRow);
     content.appendChild(actions);
     card.appendChild(content);
     contextBundlesList.appendChild(card);
