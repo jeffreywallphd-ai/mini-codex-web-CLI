@@ -309,6 +309,33 @@ function formatContextBundleOption(bundle) {
   return meta ? `${title} - ${meta}` : title;
 }
 
+function normalizeProjectAffinityValue(value) {
+  const normalized = String(value || "").trim().toLowerCase().replace(/\\/g, "/").replace(/\.git$/, "");
+  if (!normalized) {
+    return null;
+  }
+
+  const segments = normalized.split("/").filter(Boolean);
+  return {
+    full: normalized,
+    leaf: segments[segments.length - 1] || normalized
+  };
+}
+
+function resolveContextBundleProjectAffinityWarning(bundleProjectName, selectedProjectName) {
+  const bundleAffinity = normalizeProjectAffinityValue(bundleProjectName);
+  const selectedProjectAffinity = normalizeProjectAffinityValue(selectedProjectName);
+  if (!bundleAffinity || !selectedProjectAffinity) {
+    return "";
+  }
+
+  if (bundleAffinity.full === selectedProjectAffinity.full || bundleAffinity.leaf === selectedProjectAffinity.leaf) {
+    return "";
+  }
+
+  return `Warning: bundle project affinity is "${bundleProjectName}", but current project is "${selectedProjectName}". You can still proceed.`;
+}
+
 function parseSelectedContextBundleId(value) {
   const parsed = Number.parseInt(value, 10);
   if (!Number.isInteger(parsed) || parsed <= 0) {
@@ -350,6 +377,25 @@ function createAutomationContextBundleSelector({ idPrefix, automationLabel, disa
     ? `Choose one bundle for this ${automationLabel} automation, or leave unselected.`
     : "No saved bundles yet. Automation runs will proceed without bundle context.";
   selectorWrap.appendChild(hint);
+
+  const warning = document.createElement("p");
+  warning.className = "inline-validation inline-validation--warning hidden";
+  warning.textContent = "";
+  selectorWrap.appendChild(warning);
+
+  const refreshAffinityWarning = () => {
+    const selectedBundleId = parseSelectedContextBundleId(select.value);
+    const selectedBundle = automationContextBundleOptions.find((bundle) => bundle.id === selectedBundleId) || null;
+    const bundleProjectAffinity = String(selectedBundle?.project_name || "").trim();
+    const selectedProjectName = String(automationScope.projectName || "").trim();
+    const message = resolveContextBundleProjectAffinityWarning(bundleProjectAffinity, selectedProjectName);
+
+    warning.textContent = message;
+    warning.classList.toggle("hidden", !message);
+  };
+
+  select.addEventListener("change", refreshAffinityWarning);
+  refreshAffinityWarning();
 
   return { selectorWrap, select };
 }
