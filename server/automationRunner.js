@@ -57,12 +57,31 @@ async function notifyProgress(onProgress, snapshot) {
   }
 }
 
+async function evaluateManualStop(shouldStop) {
+  if (typeof shouldStop !== "function") {
+    return null;
+  }
+
+  const stopRequested = await shouldStop();
+  if (!stopRequested) {
+    return null;
+  }
+
+  const stopEvaluation = evaluateAutomationStopCondition({ type: "manual_stop" });
+  if (!stopEvaluation.shouldStop) {
+    return null;
+  }
+
+  return stopEvaluation;
+}
+
 async function runSequentialStoryQueue(input = {}) {
   const stories = normalizeStories(input.stories);
   const executeStory = input.executeStory;
   const stopOnIncompleteStory = Boolean(input.stopOnIncompleteStory);
   const onProgress = input.onProgress;
   const onStoryResult = input.onStoryResult;
+  const shouldStop = input.shouldStop;
 
   if (typeof executeStory !== "function") {
     throw new TypeError("executeStory must be a function");
@@ -83,6 +102,13 @@ async function runSequentialStoryQueue(input = {}) {
   }
 
   for (const story of stories) {
+    const stopBeforeStory = await evaluateManualStop(shouldStop);
+    if (stopBeforeStory) {
+      result.status = "stopped";
+      result.stopReason = stopBeforeStory.reason;
+      return result;
+    }
+
     try {
       const executionResult = await executeStory(story);
       const completionStatus = getStoryCompletionStatus(executionResult);
@@ -127,6 +153,18 @@ async function runSequentialStoryQueue(input = {}) {
         }
         return result;
       }
+
+      const stopAfterStory = await evaluateManualStop(shouldStop);
+      if (stopAfterStory) {
+        storyResult.queueAction = "stopped";
+        result.status = "stopped";
+        result.stopReason = stopAfterStory.reason;
+        if (typeof onStoryResult === "function") {
+          await onStoryResult(storyResult, result);
+        }
+        return result;
+      }
+
       if (typeof onStoryResult === "function") {
         await onStoryResult(storyResult, result);
       }

@@ -207,6 +207,7 @@ automation runs by scope:
 - `POST /api/automation/start/feature/:featureId`
 - `POST /api/automation/start/epic/:epicId`
 - `POST /api/automation/start/story/:storyId`
+- `POST /api/automation/stop/:automationRunId`
 - `GET /api/automation/status/:automationRunId`
 
 Each endpoint:
@@ -239,6 +240,17 @@ Automation status response (`200 OK`) includes polling-friendly state:
 - `summary` (completed/failed/stopped execution counts)
 - `completedSteps` and `failedSteps` (per-story summarized outcomes with run linkage)
 - `finalResult` (`status` + `stopReason`) when automation is no longer running
+
+Automation stop behavior (`POST /api/automation/stop/:automationRunId`):
+
+- valid running runs are marked as stopped immediately in persisted metadata
+- stop metadata is explicitly user-initiated (`automation_status: stopped`,
+  `stop_flag: true`, `stop_reason: manual_stop`)
+- the currently executing story is allowed to finish, but the next queued story
+  is not started
+- UI polling via `GET /api/automation/status/:automationRunId` can distinguish
+  manual stop (`manual_stop`) from failure (`execution_failed`) and
+  incomplete-story stop (`story_incomplete`)
 
 ## Story Automation Prompt Generation
 
