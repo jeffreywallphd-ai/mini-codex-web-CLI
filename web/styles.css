@@ -693,6 +693,25 @@ details pre {
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 }
 
+.bundle-preview-warnings {
+  margin: 0 0 10px;
+  min-height: 0;
+  max-height: 180px;
+  overflow: auto;
+  color: #ffe6b0;
+  background: rgba(255, 179, 0, 0.1);
+  border: 1px solid rgba(255, 179, 0, 0.35);
+  font-size: 12px;
+  line-height: 1.4;
+  white-space: pre-wrap;
+}
+
+.bundle-preview-warnings--error {
+  color: #ffd4d4;
+  background: rgba(255, 92, 92, 0.12);
+  border-color: rgba(255, 92, 92, 0.35);
+}
+
 .bundle-preview-status--muted {
   color: var(--muted);
   background: rgba(79, 140, 255, 0.08);

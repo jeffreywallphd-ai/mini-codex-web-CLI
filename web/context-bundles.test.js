@@ -49,6 +49,9 @@ test("context bundles authoring UI supports part add/edit/delete/reorder control
   assert.match(source, /await persistPartOrder\(reordered\)/);
   assert.match(source, /await loadBundlePreview\(bundleId\)/);
   assert.match(source, /fetch\(`\/api\/context-bundles\/\$\{encodeURIComponent\(String\(bundleId\)\)\}\/preview`\)/);
+  assert.match(source, /function setPreviewWarnings\(warnings\)/);
+  assert.match(source, /setPreviewWarnings\(preview\.qualityWarnings\)/);
+  assert.match(source, /Context quality advisories:/);
 });
 
 test("context bundles authoring UI renders metadata fields including freshness indicator", () => {
@@ -95,6 +98,7 @@ test("context bundles page provides central authoring and management sections", 
   assert.match(source, /<h3>Compiled Preview<\/h3>/);
   assert.match(source, /id="refreshBundlePreviewButton"/);
   assert.match(source, /id="bundlePreviewStatus"/);
+  assert.match(source, /id="bundlePreviewWarnings"/);
   assert.match(source, /id="bundlePreviewBox"/);
   assert.match(source, /<h2>Saved Bundles<\/h2>/);
   assert.match(source, /id="contextBundlesList"/);

@@ -46,6 +46,12 @@ const PART_TYPE_TO_COMPILATION_SECTION = (() => {
 const DEFAULT_COMPILATION_SECTION_KEY = "background_context";
 const DEFAULT_APPROX_CHARS_PER_TOKEN = 4;
 const DEFAULT_WARNING_THRESHOLD_CHARS = 12000;
+const LOW_SIGNAL_CONTENT_CHARS_THRESHOLD = 40;
+const OVERSIZED_PART_MIN_CHARS = 600;
+const OVERSIZED_PART_WARNING_RATIO = 0.5;
+const MIN_DUPLICATE_CONTENT_CHARS = 80;
+const TITLE_NEAR_DUPLICATE_SIMILARITY_THRESHOLD = 0.8;
+const HIGH_VALUE_SECTION_KEYS = ["implementation_constraints", "architecture_guidance"];
 const TRUNCATION_NOTICE = "[...truncated by context bundle compiler due to size limit]";
 const TRUNCATION_STRATEGY = "prefix-preserving by compilation section priority and deterministic part order";
 
@@ -79,6 +85,21 @@ function normalizePositiveInteger(value, fallback = null) {
   }
 
   return Math.floor(numeric);
+}
+
+function normalizeForComparison(value) {
+  return String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function tokenizeComparisonText(value) {
+  return normalizeForComparison(value)
+    .split(" ")
+    .filter((token) => token.length > 0);
 }
 
 function estimateTokenCount(characterCount, approxCharsPerToken = DEFAULT_APPROX_CHARS_PER_TOKEN) {
@@ -308,6 +329,254 @@ function summarizeTruncation(entries, preservedSourceChars) {
   };
 }
 
+function buildWarning({
+  code,
+  message,
+  severity = "warning",
+  partIds = [],
+  sectionKeys = []
+}) {
+  return {
+    code,
+    severity,
+    message,
+    partIds: [...new Set((Array.isArray(partIds) ? partIds : []).filter(Number.isFinite))],
+    sectionKeys: [...new Set((Array.isArray(sectionKeys) ? sectionKeys : []).filter(Boolean))]
+  };
+}
+
+function getTitleSimilarity(leftTitle, rightTitle) {
+  const leftTokens = new Set(tokenizeComparisonText(leftTitle));
+  const rightTokens = new Set(tokenizeComparisonText(rightTitle));
+  if (leftTokens.size <= 0 || rightTokens.size <= 0) {
+    return 0;
+  }
+
+  let overlap = 0;
+  for (const token of leftTokens) {
+    if (rightTokens.has(token)) {
+      overlap += 1;
+    }
+  }
+
+  const denominator = Math.max(leftTokens.size, rightTokens.size);
+  return denominator > 0 ? overlap / denominator : 0;
+}
+
+function extractDirectiveSignals(content) {
+  const directives = [];
+  const text = String(content || "").trim();
+  if (!text) {
+    return directives;
+  }
+
+  const candidateLines = text
+    .split(/\n|[.!?]/g)
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0);
+
+  for (const line of candidateLines) {
+    const normalized = line.toLowerCase();
+    const negative = /(must not|should not|do not|don't|never)\b/.test(normalized);
+    const positive = !negative && /(must|should|always|required|require)\b/.test(normalized);
+    if (!negative && !positive) {
+      continue;
+    }
+
+    const target = normalizeForComparison(line)
+      .replace(/\b(must|must not|should|should not|always|required|require|do not|don t|never)\b/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+    if (target.length < 10) {
+      continue;
+    }
+
+    directives.push({
+      polarity: negative ? "negative" : "positive",
+      target
+    });
+  }
+
+  return directives;
+}
+
+function buildContextQualityWarnings({
+  sections,
+  compilationGroups,
+  sizeEstimate
+}) {
+  const warnings = [];
+  const sectionKeyByPartId = new Map();
+  for (const group of compilationGroups) {
+    for (const section of group.sections) {
+      if (Number.isFinite(section.partId)) {
+        sectionKeyByPartId.set(section.partId, group.sectionKey);
+      }
+    }
+  }
+
+  for (const highValueSectionKey of HIGH_VALUE_SECTION_KEYS) {
+    const hasSection = compilationGroups.some((group) => group.sectionKey === highValueSectionKey);
+    if (!hasSection) {
+      const layout = COMPILATION_SECTION_LAYOUT.find((entry) => entry.key === highValueSectionKey);
+      warnings.push(buildWarning({
+        code: "empty_high_value_section",
+        message: `${layout ? layout.label : highValueSectionKey} has no included parts. Add at least one focused part for stronger execution guidance.`,
+        sectionKeys: [highValueSectionKey]
+      }));
+    }
+  }
+
+  for (const section of sections) {
+    const title = normalizeText(section.title);
+    const content = String(section.content || "");
+    const contentTrimmed = content.trim();
+    if (!title || !contentTrimmed) {
+      warnings.push(buildWarning({
+        code: "invalid_part_required_field_missing",
+        severity: "error",
+        message: `Part ${section.partId} is missing ${!title ? "a title" : "content"}. Update this part before using the bundle for runs.`,
+        partIds: [section.partId],
+        sectionKeys: [sectionKeyByPartId.get(section.partId)]
+      }));
+      continue;
+    }
+
+    if (contentTrimmed.length < LOW_SIGNAL_CONTENT_CHARS_THRESHOLD) {
+      warnings.push(buildWarning({
+        code: "low_signal_part_content",
+        message: `Part "${section.sectionLabel}" is very short (${contentTrimmed.length} chars). Expand it to improve context quality.`,
+        partIds: [section.partId],
+        sectionKeys: [sectionKeyByPartId.get(section.partId)]
+      }));
+    }
+  }
+
+  const normalizedContentMap = new Map();
+  for (const section of sections) {
+    const normalizedContent = normalizeForComparison(section.content);
+    if (normalizedContent.length < MIN_DUPLICATE_CONTENT_CHARS) {
+      continue;
+    }
+    if (!normalizedContentMap.has(normalizedContent)) {
+      normalizedContentMap.set(normalizedContent, []);
+    }
+    normalizedContentMap.get(normalizedContent).push(section);
+  }
+
+  for (const duplicateSections of normalizedContentMap.values()) {
+    if (duplicateSections.length < 2) {
+      continue;
+    }
+    warnings.push(buildWarning({
+      code: "duplicate_part_content",
+      message: `Multiple parts contain duplicate content (${duplicateSections.map((section) => `"${section.sectionLabel}"`).join(", ")}). Consolidate or differentiate these sections.`,
+      partIds: duplicateSections.map((section) => section.partId),
+      sectionKeys: duplicateSections.map((section) => sectionKeyByPartId.get(section.partId))
+    }));
+  }
+
+  for (let leftIndex = 0; leftIndex < sections.length; leftIndex += 1) {
+    for (let rightIndex = leftIndex + 1; rightIndex < sections.length; rightIndex += 1) {
+      const left = sections[leftIndex];
+      const right = sections[rightIndex];
+      const leftTitle = normalizeText(left.title);
+      const rightTitle = normalizeText(right.title);
+      if (!leftTitle || !rightTitle) {
+        continue;
+      }
+      const leftNormalizedTitle = normalizeForComparison(leftTitle);
+      const rightNormalizedTitle = normalizeForComparison(rightTitle);
+      const similarity = getTitleSimilarity(leftTitle, rightTitle);
+      const isPrefixDuplicate = leftNormalizedTitle.length > 6 && rightNormalizedTitle.length > 6
+        && (leftNormalizedTitle.startsWith(rightNormalizedTitle)
+          || rightNormalizedTitle.startsWith(leftNormalizedTitle));
+      if (similarity >= TITLE_NEAR_DUPLICATE_SIMILARITY_THRESHOLD || isPrefixDuplicate) {
+        warnings.push(buildWarning({
+          code: "near_duplicate_titles",
+          message: `Part titles "${leftTitle}" and "${rightTitle}" appear near-duplicate. Differentiate titles to reduce ambiguity.`,
+          partIds: [left.partId, right.partId],
+          sectionKeys: [sectionKeyByPartId.get(left.partId), sectionKeyByPartId.get(right.partId)]
+        }));
+      }
+    }
+  }
+
+  for (const section of sections) {
+    const warningThresholdChars = Number(sizeEstimate?.warningThresholdChars) || DEFAULT_WARNING_THRESHOLD_CHARS;
+    const oversizedThreshold = Math.max(
+      OVERSIZED_PART_MIN_CHARS,
+      Math.floor(warningThresholdChars * OVERSIZED_PART_WARNING_RATIO)
+    );
+    if (String(section.content || "").length > oversizedThreshold) {
+      warnings.push(buildWarning({
+        code: "oversized_part_content",
+        message: `Part "${section.sectionLabel}" is large (${String(section.content || "").length} chars). Consider splitting it for better signal density.`,
+        partIds: [section.partId],
+        sectionKeys: [sectionKeyByPartId.get(section.partId)]
+      }));
+    }
+  }
+
+  const directiveSignals = [];
+  for (const section of sections) {
+    for (const signal of extractDirectiveSignals(section.content)) {
+      directiveSignals.push({
+        ...signal,
+        partId: section.partId,
+        sectionLabel: section.sectionLabel,
+        sectionKey: sectionKeyByPartId.get(section.partId)
+      });
+    }
+  }
+
+  const directiveTargets = new Map();
+  for (const signal of directiveSignals) {
+    if (!directiveTargets.has(signal.target)) {
+      directiveTargets.set(signal.target, { positive: [], negative: [] });
+    }
+    directiveTargets.get(signal.target)[signal.polarity].push(signal);
+  }
+
+  for (const [target, groupedSignals] of directiveTargets.entries()) {
+    if (groupedSignals.positive.length <= 0 || groupedSignals.negative.length <= 0) {
+      continue;
+    }
+    const conflictingSignals = [...groupedSignals.positive, ...groupedSignals.negative];
+    warnings.push(buildWarning({
+      code: "contradictory_guidance",
+      message: `Potential contradictory guidance detected around "${target}". Align directive phrasing across parts before execution.`,
+      partIds: conflictingSignals.map((signal) => signal.partId),
+      sectionKeys: conflictingSignals.map((signal) => signal.sectionKey)
+    }));
+  }
+
+  if (sizeEstimate?.isOverWarningThreshold) {
+    warnings.push(buildWarning({
+      code: "oversized_bundle_estimate",
+      message: `Compiled context size (${sizeEstimate.estimatedCompiledChars} chars) exceeds warning threshold (${sizeEstimate.warningThresholdChars} chars). Reduce or split bundle content.`
+    }));
+  }
+
+  const dedupedWarnings = [];
+  const seen = new Set();
+  for (const warning of warnings) {
+    const signature = JSON.stringify({
+      code: warning.code,
+      severity: warning.severity,
+      message: warning.message,
+      partIds: warning.partIds,
+      sectionKeys: warning.sectionKeys
+    });
+    if (!seen.has(signature)) {
+      seen.add(signature);
+      dedupedWarnings.push(warning);
+    }
+  }
+
+  return dedupedWarnings;
+}
+
 function compileContextBundle(bundle = {}, options = {}) {
   const sizingOptions = resolveSizingOptions(options);
   const orderedParts = getDeterministicOrderedParts(bundle?.parts);
@@ -363,6 +632,16 @@ function compileContextBundle(bundle = {}, options = {}) {
     );
   }
 
+  const qualityWarnings = buildContextQualityWarnings({
+    sections,
+    compilationGroups,
+    sizeEstimate: {
+      warningThresholdChars: sizingOptions.warningThresholdChars,
+      estimatedCompiledChars,
+      isOverWarningThreshold
+    }
+  });
+
   return {
     format: "context_bundle_compiled_preview_v1",
     bundleId: Number(bundle?.id) || null,
@@ -404,7 +683,14 @@ function compileContextBundle(bundle = {}, options = {}) {
       partiallyTruncatedSectionLabels: truncationSummary.partiallyTruncatedSectionLabels,
       omittedSectionLabels: truncationSummary.omittedSectionLabels
     },
-    compilerNotes
+    compilerNotes,
+    qualityWarnings,
+    qualityWarningSummary: {
+      total: qualityWarnings.length,
+      warningCount: qualityWarnings.filter((warning) => warning.severity === "warning").length,
+      errorCount: qualityWarnings.filter((warning) => warning.severity === "error").length,
+      hasErrors: qualityWarnings.some((warning) => warning.severity === "error")
+    }
   };
 }
 

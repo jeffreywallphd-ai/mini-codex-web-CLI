@@ -727,6 +727,9 @@ test("context bundles API returns bundle preview payload with deterministic comp
     assert.match(payload.preview.compiledText, /### Testing Expectations: Tests/);
     assert.match(payload.preview.compiledText, /## Background Context/);
     assert.match(payload.preview.compiledText, /### Feature Background: Goal/);
+    assert.ok(Array.isArray(payload.preview.qualityWarnings));
+    assert.ok(payload.preview.qualityWarnings.length > 0);
+    assert.equal(payload.preview.qualityWarningSummary.total, payload.preview.qualityWarnings.length);
   });
 });
 

@@ -19,6 +19,7 @@ const bundlePartsList = document.getElementById("bundlePartsList");
 const refreshBundlePreviewButton = document.getElementById("refreshBundlePreviewButton");
 const bundlePreviewHint = document.getElementById("bundlePreviewHint");
 const bundlePreviewStatus = document.getElementById("bundlePreviewStatus");
+const bundlePreviewWarnings = document.getElementById("bundlePreviewWarnings");
 const bundlePreviewBox = document.getElementById("bundlePreviewBox");
 
 const PART_TYPE_OPTIONS = [
@@ -104,6 +105,33 @@ function setPreviewText(text) {
   bundlePreviewBox.textContent = String(text || "").trim() || "(compiled preview is empty)";
 }
 
+function setPreviewWarnings(warnings) {
+  const normalizedWarnings = Array.isArray(warnings)
+    ? warnings.filter((warning) => warning && typeof warning.message === "string" && warning.message.trim())
+    : [];
+
+  if (normalizedWarnings.length <= 0) {
+    bundlePreviewWarnings.textContent = "";
+    bundlePreviewWarnings.classList.add("hidden");
+    bundlePreviewWarnings.classList.remove("bundle-preview-warnings--error");
+    return;
+  }
+
+  const lines = normalizedWarnings.map((warning, index) => {
+    const level = String(warning.severity || "warning").trim().toLowerCase() === "error"
+      ? "Error"
+      : "Warning";
+    return `${index + 1}. [${level}] ${warning.message}`;
+  });
+
+  bundlePreviewWarnings.textContent = `Context quality advisories:\n${lines.join("\n")}`;
+  bundlePreviewWarnings.classList.remove("hidden");
+  bundlePreviewWarnings.classList.toggle(
+    "bundle-preview-warnings--error",
+    normalizedWarnings.some((warning) => String(warning.severity || "").trim().toLowerCase() === "error")
+  );
+}
+
 function confirmBundleDelete(bundleId, bundleTitle) {
   const label = String(bundleTitle || "").trim() || `bundle #${bundleId}`;
   if (typeof window !== "undefined" && typeof window.confirm === "function") {
@@ -169,6 +197,7 @@ function clearBundleForm() {
   bundleSummaryInput.value = "";
   bundleParts = [];
   setPreviewStatus("");
+  setPreviewWarnings([]);
   setPreviewText("Select a bundle to load compiled preview.");
   clearValidation();
   syncButtonState();
@@ -198,10 +227,14 @@ async function loadBundlePreview(bundleId, options = {}) {
 
   const preview = result?.preview || {};
   setPreviewText(preview.compiledText || "");
+  setPreviewWarnings(preview.qualityWarnings);
 
   if (!silent) {
     const includedCount = Array.isArray(preview.includedPartIds) ? preview.includedPartIds.length : 0;
-    setPreviewStatus(`Preview refreshed from saved state (${includedCount} included part${includedCount === 1 ? "" : "s"}).`);
+    const warningCount = Array.isArray(preview.qualityWarnings) ? preview.qualityWarnings.length : 0;
+    setPreviewStatus(
+      `Preview refreshed from saved state (${includedCount} included part${includedCount === 1 ? "" : "s"}, ${warningCount} advisory warning${warningCount === 1 ? "" : "s"}).`
+    );
   } else {
     setPreviewStatus("");
   }
@@ -213,6 +246,7 @@ async function refreshPreviewSafely(bundleId) {
     return "";
   } catch (error) {
     setPreviewStatus(`Preview unavailable: ${error.message}`, true);
+    setPreviewWarnings([]);
     return error.message;
   }
 }
@@ -481,6 +515,7 @@ async function selectBundleForEditing(bundleId) {
     await loadBundlePreview(bundleId, { silent: true });
   } catch (error) {
     setPreviewStatus(`Preview unavailable: ${error.message}`, true);
+    setPreviewWarnings([]);
     setPreviewText("Unable to load compiled preview.");
   }
 }
