@@ -136,10 +136,12 @@ automation domain.
   - flattened story execution list
 - `generateStoryExecutionQueues(features)` transforms a feature/epic/story hierarchy
   into ordered epic-level story queues.
+  - supports both planning-style labels (`title`) and persisted feature-tree labels (`name`)
 - Ordering is deterministic and stable:
   - features sort by `order` ascending, then original input position
   - epics sort by `order` ascending, then original input position
   - stories sort by `order` ascending, then original input position
+  - numeric-string order values are coerced (for example, `"2"` sorts before `"10"`)
 - `flattenStoryExecutionQueues(queues)` returns one flat execution list with
   `positionInQueue` for strict run sequencing.
 - Stop-condition defaults are fail-fast for these outcomes:
