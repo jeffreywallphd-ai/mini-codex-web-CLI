@@ -3,6 +3,8 @@ const crypto = require("crypto");
 const fs = require("fs");
 const path = require("path");
 
+const CODEX_BRANCH_PATTERN = /^(codex\/[A-Za-z0-9._/-]+|codex-[a-f0-9]{10})$/u;
+
 function quoteForDisplay(arg) {
   if (arg === "") return '""';
   if (!/[\s"]/u.test(arg)) return arg;
@@ -235,6 +237,171 @@ async function checkoutBranch(repoPath, branchName) {
   }
 }
 
+function shouldAutoDeleteCodexBranch({ sourceBranch, targetBranch }) {
+  const normalizedSourceBranch = String(sourceBranch || "").trim();
+  const normalizedTargetBranch = String(targetBranch || "").trim();
+
+  if (!normalizedSourceBranch) {
+    return {
+      shouldDelete: false,
+      reason: "missing_source_branch",
+      sourceBranch: normalizedSourceBranch,
+      targetBranch: normalizedTargetBranch
+    };
+  }
+
+  if (!normalizedTargetBranch) {
+    return {
+      shouldDelete: false,
+      reason: "missing_target_branch",
+      sourceBranch: normalizedSourceBranch,
+      targetBranch: normalizedTargetBranch
+    };
+  }
+
+  if (normalizedSourceBranch === normalizedTargetBranch) {
+    return {
+      shouldDelete: false,
+      reason: "source_equals_target",
+      sourceBranch: normalizedSourceBranch,
+      targetBranch: normalizedTargetBranch
+    };
+  }
+
+  if (!CODEX_BRANCH_PATTERN.test(normalizedSourceBranch)) {
+    return {
+      shouldDelete: false,
+      reason: "source_not_codex_branch",
+      sourceBranch: normalizedSourceBranch,
+      targetBranch: normalizedTargetBranch
+    };
+  }
+
+  return {
+    shouldDelete: true,
+    reason: null,
+    sourceBranch: normalizedSourceBranch,
+    targetBranch: normalizedTargetBranch
+  };
+}
+
+async function cleanupMergedCodexBranch(repoPath, {
+  sourceBranch,
+  targetBranch,
+  remoteName = "origin"
+}) {
+  const policy = shouldAutoDeleteCodexBranch({ sourceBranch, targetBranch });
+  const result = {
+    eligible: policy.shouldDelete,
+    reason: policy.reason,
+    sourceBranch: policy.sourceBranch,
+    targetBranch: policy.targetBranch,
+    local: {
+      attempted: false,
+      succeeded: false,
+      skippedReason: policy.shouldDelete ? null : policy.reason,
+      code: null,
+      stdout: "",
+      stderr: "",
+      command: null
+    },
+    remote: {
+      attempted: false,
+      succeeded: false,
+      skippedReason: policy.shouldDelete ? null : policy.reason,
+      code: null,
+      stdout: "",
+      stderr: "",
+      command: null
+    },
+    warnings: []
+  };
+
+  if (!policy.shouldDelete) {
+    console.log("merge.cleanup.skipped", {
+      sourceBranch: policy.sourceBranch,
+      targetBranch: policy.targetBranch,
+      reason: policy.reason
+    });
+    return result;
+  }
+
+  const currentBranchResult = await runGit(repoPath, ["branch", "--show-current"]);
+  const currentBranch = currentBranchResult.code === 0
+    ? currentBranchResult.stdout.trim()
+    : "";
+
+  if (currentBranchResult.code !== 0) {
+    const warning = `Failed to detect current branch before local cleanup of '${policy.sourceBranch}'.`;
+    result.warnings.push(warning);
+    console.warn("merge.cleanup.local.precheck_failed", {
+      sourceBranch: policy.sourceBranch,
+      targetBranch: policy.targetBranch,
+      stderr: currentBranchResult.stderr || currentBranchResult.stdout || ""
+    });
+  }
+
+  if (currentBranch && currentBranch === policy.sourceBranch) {
+    result.local.skippedReason = "source_is_current_branch";
+    const warning = `Skipped local deletion because '${policy.sourceBranch}' is currently checked out.`;
+    result.warnings.push(warning);
+    console.warn("merge.cleanup.local.skipped_current_branch", {
+      sourceBranch: policy.sourceBranch,
+      targetBranch: policy.targetBranch
+    });
+  } else {
+    result.local.attempted = true;
+    result.local.command = `git branch -d ${policy.sourceBranch}`;
+    const localDeleteResult = await runGit(repoPath, ["branch", "-d", policy.sourceBranch]);
+    result.local.code = localDeleteResult.code;
+    result.local.stdout = localDeleteResult.stdout;
+    result.local.stderr = localDeleteResult.stderr;
+    result.local.succeeded = localDeleteResult.code === 0;
+
+    if (localDeleteResult.code !== 0) {
+      const warning = `Local cleanup failed for '${policy.sourceBranch}'.`;
+      result.warnings.push(warning);
+      console.warn("merge.cleanup.local.failed", {
+        sourceBranch: policy.sourceBranch,
+        targetBranch: policy.targetBranch,
+        stderr: localDeleteResult.stderr || localDeleteResult.stdout || ""
+      });
+    } else {
+      console.log("merge.cleanup.local.succeeded", {
+        sourceBranch: policy.sourceBranch,
+        targetBranch: policy.targetBranch
+      });
+    }
+  }
+
+  result.remote.attempted = true;
+  result.remote.command = `git push ${remoteName} --delete ${policy.sourceBranch}`;
+  const remoteDeleteResult = await runGit(repoPath, ["push", remoteName, "--delete", policy.sourceBranch]);
+  result.remote.code = remoteDeleteResult.code;
+  result.remote.stdout = remoteDeleteResult.stdout;
+  result.remote.stderr = remoteDeleteResult.stderr;
+  result.remote.succeeded = remoteDeleteResult.code === 0;
+
+  if (remoteDeleteResult.code !== 0) {
+    const warning = `Remote cleanup failed for '${policy.sourceBranch}' on '${remoteName}'.`;
+    result.warnings.push(warning);
+    console.warn("merge.cleanup.remote.failed", {
+      sourceBranch: policy.sourceBranch,
+      targetBranch: policy.targetBranch,
+      remoteName,
+      stderr: remoteDeleteResult.stderr || remoteDeleteResult.stdout || ""
+    });
+  } else {
+    console.log("merge.cleanup.remote.succeeded", {
+      sourceBranch: policy.sourceBranch,
+      targetBranch: policy.targetBranch,
+      remoteName
+    });
+  }
+
+  return result;
+}
+
 async function createCodexBranch(repoPath, baseBranch = "main") {
   await assertLocalBranchExists(repoPath, baseBranch);
   await checkoutBranch(repoPath, baseBranch);
@@ -303,13 +470,23 @@ async function mergeBranch(
     throw new Error(`Failed to push '${baseBranch}' to origin.\n${pushResult.stderr || pushResult.stdout}`.trim());
   }
 
-  const deleteResult = await runGit(repoPath, ["branch", "-d", branchName]);
-
-  if (deleteResult.code !== 0) {
-    throw new Error(`Failed to delete branch '${branchName}'.\n${deleteResult.stderr || deleteResult.stdout}`.trim());
-  }
+  const cleanupResult = await cleanupMergedCodexBranch(repoPath, {
+    sourceBranch: branchName,
+    targetBranch: baseBranch,
+    remoteName: "origin"
+  });
 
   const gitStatus = await getGitStatus(repoPath);
+  const localCleanupSummary = cleanupResult.local.attempted
+    ? (cleanupResult.local.succeeded ? "succeeded" : "failed")
+    : `skipped (${cleanupResult.local.skippedReason || "not_applicable"})`;
+  const remoteCleanupSummary = cleanupResult.remote.attempted
+    ? (cleanupResult.remote.succeeded ? "succeeded" : "failed")
+    : `skipped (${cleanupResult.remote.skippedReason || "not_applicable"})`;
+  const warningsSummary = cleanupResult.warnings.length > 0
+    ? cleanupResult.warnings.map((warning, index) => `${index + 1}. ${warning}`).join("\n")
+    : "(none)";
+
   const stdout = [
     "Branch Commit",
     "--------",
@@ -327,16 +504,31 @@ async function mergeBranch(
     "--------",
     pushResult.stdout || "(none)",
     "",
-    "Delete Branch",
+    "Cleanup Policy",
     "--------",
-    deleteResult.stdout || "(none)"
+    cleanupResult.eligible
+      ? "eligible"
+      : `skipped (${cleanupResult.reason || "unknown"})`,
+    "",
+    "Local Branch Cleanup",
+    "--------",
+    `Result: ${localCleanupSummary}`,
+    cleanupResult.local.stdout || "(none)",
+    "",
+    "Remote Branch Cleanup",
+    "--------",
+    `Result: ${remoteCleanupSummary}`,
+    cleanupResult.remote.stdout || "(none)",
+    "",
+    "Cleanup Warnings",
+    "--------",
+    warningsSummary
   ].join("\n").trim();
   const stderr = [
     branchCommit.stderr,
     mergeResult.stderr,
     postMergeCommit.stderr,
-    pushResult.stderr,
-    deleteResult.stderr
+    pushResult.stderr
   ].filter(Boolean).join("\n\n").trim();
 
   return {
@@ -346,13 +538,29 @@ async function mergeBranch(
     gitStatus,
     pushStdout: pushResult.stdout,
     pushStderr: pushResult.stderr,
-    deleteStdout: deleteResult.stdout,
-    deleteStderr: deleteResult.stderr
+    deleteStdout: cleanupResult.local.stdout,
+    deleteStderr: cleanupResult.local.stderr,
+    mergeResult: {
+      code: mergeResult.code,
+      stdout: mergeResult.stdout,
+      stderr: mergeResult.stderr,
+      succeeded: mergeResult.code === 0
+    },
+    pushResult: {
+      code: pushResult.code,
+      stdout: pushResult.stdout,
+      stderr: pushResult.stderr,
+      succeeded: pushResult.code === 0
+    },
+    cleanupResult,
+    cleanupWarnings: cleanupResult.warnings,
+    hasCleanupWarnings: cleanupResult.warnings.length > 0
   };
 }
 
 module.exports = {
   buildSpawnContext,
+  cleanupMergedCodexBranch,
   commitAllChanges,
   createCodexBranch,
   formatCommand,
@@ -362,5 +570,6 @@ module.exports = {
   mergeBranch,
   parseStatusEntries,
   pullRepository,
-  runProcess
+  runProcess,
+  shouldAutoDeleteCodexBranch
 };

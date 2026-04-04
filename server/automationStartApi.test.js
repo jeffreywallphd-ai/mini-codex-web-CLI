@@ -634,6 +634,62 @@ test("automation run stops with merge_failed when auto-merge fails for a story",
   assert.ok(failedPositionUpdate);
 });
 
+test("automation run remains successful when auto-merge returns cleanup warnings", async () => {
+  const harness = createServerHarness({
+    mergeAutomationStoryRun: async (input) => {
+      harness.calls.mergeAutomationStoryRun.push(input);
+      return {
+        code: 0,
+        stdout: "merged",
+        stderr: "",
+        gitStatus: "",
+        hasCleanupWarnings: true,
+        cleanupWarnings: [
+          "Local cleanup failed for 'codex/story-301'.",
+          "Remote cleanup failed for 'codex/story-301' on 'origin'."
+        ]
+      };
+    }
+  });
+  let automationRunId = null;
+
+  await withServer(harness, async (baseUrl) => {
+    const response = await fetch(`${baseUrl}/api/automation/start/feature/100`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        projectName: "demo-project",
+        baseBranch: "main"
+      })
+    });
+
+    assert.equal(response.status, 202);
+    const payload = await response.json();
+    automationRunId = payload.automationRun.id;
+  });
+
+  await harness.runDetachedTasks();
+
+  const updatedRun = harness.automationRuns.get(automationRunId);
+  assert.equal(updatedRun?.automation_status, "completed");
+  assert.equal(updatedRun?.stop_reason, "all_work_complete");
+  assert.equal(harness.calls.mergeAutomationStoryRun.length, 2);
+
+  const finalEvent = harness.calls.automationLifecycleLogs.find(
+    (entry) => entry.payload?.eventType === "automation_final_result"
+      && entry.payload?.automationRunId === automationRunId
+  );
+  assert.equal(finalEvent?.payload?.status, "completed");
+  assert.equal(finalEvent?.payload?.stopReason, "all_work_complete");
+  const cleanupWarningEvents = harness.calls.automationLifecycleLogs.filter(
+    (entry) => entry.payload?.eventType === "story_merge_cleanup_warnings"
+      && entry.payload?.automationRunId === automationRunId
+  );
+  assert.equal(cleanupWarningEvents.length, 2);
+});
+
 test("feature automation executes stories in the same deterministic order returned by queue generation", async () => {
   const harness = createServerHarness({
     getFeaturesTree: async () => ([

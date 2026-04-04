@@ -526,6 +526,14 @@ async function mergeAutomationStoryRun({
     throw new Error("Auto-merge requires a valid run id.");
   }
 
+  if (!projectName || !String(projectName).trim()) {
+    throw new Error("Auto-merge requires a valid project name.");
+  }
+
+  if (!branchName || !String(branchName).trim()) {
+    throw new Error("Auto-merge requires a valid source branch.");
+  }
+
   const mergedResult = await mergeBranch(
     getRepoPath(projectName),
     branchName,
@@ -870,14 +878,14 @@ app.post("/api/stories/:storyId/complete-with-automation", async (req, res) => {
       });
 
       try {
-        const mergeResult = await mergeBranch(
-          getRepoPath(projectName),
-          responsePayload.branchName,
+        const mergeResult = await mergeAutomationStoryRun({
+          projectName,
           baseBranch,
-          responsePayload.changeTitle || "Codex changes",
-          responsePayload.changeDescription || ""
-        );
-        await updateRunMerge(runId, mergeResult);
+          runId,
+          branchName: responsePayload.branchName,
+          changeTitle: responsePayload.changeTitle || "Codex changes",
+          changeDescription: responsePayload.changeDescription || ""
+        });
         if (automationRunRecord?.id) {
           await updateAutomationRunMetadata(automationRunRecord.id, {
             stopFlag: false,
@@ -1171,15 +1179,14 @@ app.post("/api/runs/:id/merge", async (req, res) => {
   }
 
   try {
-    const mergeResult = await mergeBranch(
-      getRepoPath(run.project_name),
-      run.branch_name,
-      run.base_branch || "main",
-      run.change_title || "Codex changes",
-      run.change_description || ""
-    );
-
-    await updateRunMerge(run.id, mergeResult);
+    await mergeAutomationStoryRun({
+      projectName: run.project_name,
+      baseBranch: run.base_branch || "main",
+      runId: run.id,
+      branchName: run.branch_name,
+      changeTitle: run.change_title || "Codex changes",
+      changeDescription: run.change_description || ""
+    });
 
     const updatedRun = hydrateRun(await getRunById(run.id));
     res.json(updatedRun);

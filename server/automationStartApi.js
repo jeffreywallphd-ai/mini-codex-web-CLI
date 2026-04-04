@@ -754,7 +754,7 @@ function createAutomationStartRouter(deps = {}) {
           }
 
           try {
-            await mergeAutomationStoryRun({
+            const mergeResult = await mergeAutomationStoryRun({
               projectName,
               baseBranch,
               runId: normalizedRunId,
@@ -762,6 +762,32 @@ function createAutomationStartRouter(deps = {}) {
               changeTitle,
               changeDescription
             });
+
+            if (mergeResult?.hasCleanupWarnings) {
+              const cleanupWarnings = Array.isArray(mergeResult?.cleanupWarnings)
+                ? mergeResult.cleanupWarnings
+                : [];
+              logger.warn?.("automation merge cleanup warnings", {
+                automationRunId: automationRun.id,
+                automationType,
+                targetId,
+                projectName,
+                baseBranch,
+                runId: normalizedRunId,
+                branchName,
+                cleanupWarnings
+              });
+              logAutomationLifecycle(logger, "story_merge_cleanup_warnings", {
+                automationRunId: automationRun.id,
+                automationType,
+                targetId,
+                projectName,
+                baseBranch,
+                runId: normalizedRunId,
+                branchName,
+                cleanupWarnings
+              });
+            }
           } catch (error) {
             const wrappedMergeError = new Error(getErrorMessage(error));
             wrappedMergeError.code = "merge_failed";
