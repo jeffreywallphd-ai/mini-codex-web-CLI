@@ -78,6 +78,8 @@ function createServerHarness(overrides = {}) {
         current_position: input.currentPosition,
         automation_status: input.automationStatus,
         stop_reason: input.stopReason ?? null,
+        failed_story_id: input.failedStoryId ?? null,
+        failure_summary: input.failureSummary ?? null,
         created_at: "2026-04-04T00:00:00.000Z",
         updated_at: "2026-04-04T00:00:00.000Z"
       };
@@ -123,6 +125,8 @@ function createServerHarness(overrides = {}) {
         current_position: 1,
         automation_status: "running",
         stop_reason: null,
+        failed_story_id: null,
+        failure_summary: null,
         created_at: "2026-04-04T00:00:00.000Z",
         updated_at: "2026-04-04T00:00:00.000Z"
       };
@@ -144,6 +148,12 @@ function createServerHarness(overrides = {}) {
         stop_reason: Object.prototype.hasOwnProperty.call(updates, "stopReason")
           ? (updates.stopReason ?? null)
           : existing.stop_reason,
+        failed_story_id: Object.prototype.hasOwnProperty.call(updates, "failedStoryId")
+          ? (updates.failedStoryId ?? null)
+          : existing.failed_story_id,
+        failure_summary: Object.prototype.hasOwnProperty.call(updates, "failureSummary")
+          ? (updates.failureSummary ?? null)
+          : existing.failure_summary,
         updated_at: "2026-04-04T00:02:00.000Z"
       };
 
@@ -198,6 +208,8 @@ function createServerHarness(overrides = {}) {
       current_position: 2,
       automation_status: "running",
       stop_reason: null,
+      failed_story_id: null,
+      failure_summary: null,
       created_at: "2026-04-04T00:00:00.000Z",
       updated_at: "2026-04-04T00:01:00.000Z"
     }),
@@ -506,6 +518,8 @@ test("automation lifecycle logging records failure stop reason and error details
   );
   assert.ok(finalEvent);
   assert.equal(finalEvent.payload.stopReason, "execution_failed");
+  assert.equal(finalEvent.payload.failedStoryId, 301);
+  assert.equal(finalEvent.payload.failureSummary, "codex execution timeout");
   assert.match(finalEvent.payload.error, /codex execution timeout/);
 });
 
@@ -1166,6 +1180,8 @@ test("status endpoint surfaces failed step story and failure reason for troubles
       current_position: 1,
       automation_status: "failed",
       stop_reason: "execution_failed",
+      failed_story_id: 301,
+      failure_summary: "Prompt generation failed (cause: missing story description)",
       created_at: "2026-04-04T00:00:00.000Z",
       updated_at: "2026-04-04T00:01:00.000Z"
     }),
@@ -1193,6 +1209,11 @@ test("status endpoint surfaces failed step story and failure reason for troubles
     const payload = await response.json();
     assert.equal(payload.finalResult.status, "failed");
     assert.equal(payload.finalResult.stopReason, "execution_failed");
+    assert.equal(payload.finalResult.failedStoryId, 301);
+    assert.equal(payload.finalResult.failedStoryTitle, "Story 301");
+    assert.equal(payload.finalResult.failureSummary, "Prompt generation failed (cause: missing story description)");
+    assert.equal(payload.automationRun.failedStoryId, 301);
+    assert.equal(payload.automationRun.failureSummary, "Prompt generation failed (cause: missing story description)");
     assert.equal(payload.failedSteps.length, 1);
     assert.equal(payload.failedSteps[0].storyId, 301);
     assert.equal(payload.failedSteps[0].storyTitle, "Story 301");

@@ -183,6 +183,8 @@ test("automation metadata is persisted and updateable in sqlite", async () => {
     assert.equal(created.current_position, 1);
     assert.equal(created.automation_status, "running");
     assert.equal(created.stop_reason, null);
+    assert.equal(created.failed_story_id, null);
+    assert.equal(created.failure_summary, null);
 
     const loaded = await getAutomationRunById(automationRunId);
     assert.equal(loaded.id, automationRunId);
@@ -193,19 +195,25 @@ test("automation metadata is persisted and updateable in sqlite", async () => {
     assert.equal(loaded.stop_on_incomplete, 1);
     assert.equal(loaded.automation_status, "running");
     assert.equal(loaded.stop_reason, null);
+    assert.equal(loaded.failed_story_id, null);
+    assert.equal(loaded.failure_summary, null);
 
     const updated = await updateAutomationRunMetadata(automationRunId, {
       stopFlag: true,
       stopOnIncomplete: false,
       currentPosition: 2,
-      automationStatus: "completed",
-      stopReason: "all_work_complete"
+      automationStatus: "failed",
+      stopReason: "execution_failed",
+      failedStoryId: 123,
+      failureSummary: "Prompt parse failed."
     });
     assert.equal(updated.stop_flag, 1);
     assert.equal(updated.stop_on_incomplete, 0);
     assert.equal(updated.current_position, 2);
-    assert.equal(updated.automation_status, "completed");
-    assert.equal(updated.stop_reason, "all_work_complete");
+    assert.equal(updated.automation_status, "failed");
+    assert.equal(updated.stop_reason, "execution_failed");
+    assert.equal(updated.failed_story_id, 123);
+    assert.equal(updated.failure_summary, "Prompt parse failed.");
   } finally {
     await cleanupAutomationRun(automationRunId);
   }
@@ -459,6 +467,11 @@ test("automation metadata persistence validates required fields", async () => {
   await assert.rejects(
     () => updateAutomationRunMetadata(1, {}),
     /At least one automation metadata field must be provided/
+  );
+
+  await assert.rejects(
+    () => updateAutomationRunMetadata(1, { failedStoryId: 0 }),
+    /Failed story id must be a positive integer when provided/
   );
 });
 
