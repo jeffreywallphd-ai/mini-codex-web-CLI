@@ -35,6 +35,8 @@ let globalAutomationStatus = null;
 let epicDraftId = 0;
 let storyDraftId = 0;
 const epicDrafts = [];
+let automationContextBundleOptions = [];
+let loadAutomationContextBundlesRequestId = 0;
 const stopRunForIncompleteStoriesByFeatureId = new Map();
 const stopRunForIncompleteStoriesByEpicId = new Map();
 let lastAutomationUiSignature = "";
@@ -299,6 +301,59 @@ function createDescription(content, text) {
   content.appendChild(createTextNode("p", "card-description", text || "(no description)"));
 }
 
+function formatContextBundleOption(bundle) {
+  const title = String(bundle?.title || "").trim() || "Untitled Bundle";
+  const intendedUse = String(bundle?.intended_use || "").trim();
+  const summary = String(bundle?.summary || "").trim();
+  const meta = [intendedUse, summary].filter(Boolean).join(" | ");
+  return meta ? `${title} - ${meta}` : title;
+}
+
+function parseSelectedContextBundleId(value) {
+  const parsed = Number.parseInt(value, 10);
+  if (!Number.isInteger(parsed) || parsed <= 0) {
+    return null;
+  }
+  return parsed;
+}
+
+function createAutomationContextBundleSelector({ idPrefix, automationLabel, disabled = false } = {}) {
+  const selectorWrap = document.createElement("div");
+  selectorWrap.className = "stack-gap";
+
+  const selectId = `${idPrefix}-context-bundle-select`;
+  const label = document.createElement("label");
+  label.setAttribute("for", selectId);
+  label.textContent = "Context Bundle (Optional)";
+  selectorWrap.appendChild(label);
+
+  const select = document.createElement("select");
+  select.id = selectId;
+  select.disabled = disabled;
+  const defaultOption = document.createElement("option");
+  defaultOption.value = "";
+  defaultOption.textContent = "No context bundle";
+  select.appendChild(defaultOption);
+
+  for (const bundle of automationContextBundleOptions) {
+    const option = document.createElement("option");
+    option.value = String(bundle.id);
+    option.textContent = formatContextBundleOption(bundle);
+    select.appendChild(option);
+  }
+
+  selectorWrap.appendChild(select);
+
+  const hint = document.createElement("p");
+  hint.className = "inline-hint";
+  hint.textContent = automationContextBundleOptions.length > 0
+    ? `Choose one bundle for this ${automationLabel} automation, or leave unselected.`
+    : "No saved bundles yet. Automation runs will proceed without bundle context.";
+  selectorWrap.appendChild(hint);
+
+  return { selectorWrap, select };
+}
+
 function parseRunId(value) {
   const runId = Number.parseInt(value, 10);
   if (!Number.isInteger(runId) || runId <= 0) {
@@ -433,9 +488,12 @@ function wireStaticCardToggle(toggleButton, contentNode, { defaultOpen = false }
   applyState();
 }
 
-async function startStoryAutomation(storyId) {
+async function startStoryAutomation(storyId, options = {}) {
   const projectName = automationScope.projectName;
   const baseBranch = automationScope.baseBranch;
+  const contextBundleId = Number.isInteger(options?.contextBundleId) && options.contextBundleId > 0
+    ? options.contextBundleId
+    : null;
   if (!projectName || !baseBranch) {
     throw new Error("Select a project and branch on the editor page first, then retry automation.");
   }
@@ -448,7 +506,8 @@ async function startStoryAutomation(storyId) {
       baseBranch,
       automationType: "story",
       targetId: storyId,
-      storyId
+      storyId,
+      contextBundleId
     })
   });
   const result = await response.json();
@@ -901,6 +960,9 @@ async function startFeatureAutomation(featureId, options = {}) {
   const projectName = automationScope.projectName;
   const baseBranch = automationScope.baseBranch;
   const stopOnIncompleteStory = Boolean(options.stopOnIncompleteStory);
+  const contextBundleId = Number.isInteger(options?.contextBundleId) && options.contextBundleId > 0
+    ? options.contextBundleId
+    : null;
   if (!projectName || !baseBranch) {
     throw new Error("Select a project and branch on the editor page first, then retry automation.");
   }
@@ -914,7 +976,8 @@ async function startFeatureAutomation(featureId, options = {}) {
       stopOnIncompleteStory,
       automationType: "feature",
       targetId: featureId,
-      featureId
+      featureId,
+      contextBundleId
     })
   });
   const result = await response.json();
@@ -930,6 +993,9 @@ async function startEpicAutomation(epicId, options = {}) {
   const projectName = automationScope.projectName;
   const baseBranch = automationScope.baseBranch;
   const stopOnIncompleteStory = Boolean(options.stopOnIncompleteStory);
+  const contextBundleId = Number.isInteger(options?.contextBundleId) && options.contextBundleId > 0
+    ? options.contextBundleId
+    : null;
   if (!projectName || !baseBranch) {
     throw new Error("Select a project and branch on the editor page first, then retry automation.");
   }
@@ -943,7 +1009,8 @@ async function startEpicAutomation(epicId, options = {}) {
       stopOnIncompleteStory,
       automationType: "epic",
       targetId: epicId,
-      epicId
+      epicId,
+      contextBundleId
     })
   });
   const result = await response.json();
@@ -955,15 +1022,21 @@ async function startEpicAutomation(epicId, options = {}) {
   return result;
 }
 
-async function resumeAutomationRun(automationRunId) {
+async function resumeAutomationRun(automationRunId, options = {}) {
   const normalizedRunId = parseRunId(automationRunId);
+  const contextBundleId = Number.isInteger(options?.contextBundleId) && options.contextBundleId > 0
+    ? options.contextBundleId
+    : null;
   if (!normalizedRunId) {
     throw new Error("Resume requires a valid automation run id.");
   }
 
   const response = await fetch(`/api/automation/resume/${encodeURIComponent(String(normalizedRunId))}`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" }
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      contextBundleId
+    })
   });
   const result = await response.json();
 
@@ -1034,6 +1107,12 @@ function createFeatureAutomationUi(content, feature) {
   stopOnIncompleteLabel.appendChild(stopOnIncompleteCheckbox);
   stopOnIncompleteLabel.appendChild(document.createTextNode("Stop Run For Incomplete Stories"));
   content.appendChild(stopOnIncompleteLabel);
+  const { selectorWrap, select: contextBundleSelect } = createAutomationContextBundleSelector({
+    idPrefix: `feature-${feature.id}`,
+    automationLabel: "feature",
+    disabled: isActiveFeatureRun || isFeatureStartInFlight
+  });
+  content.appendChild(selectorWrap);
 
   button.addEventListener("click", async () => {
     if (featureAutomationStartInFlight.has(feature.id)) {
@@ -1056,10 +1135,14 @@ function createFeatureAutomationUi(content, feature) {
     renderFeatureLists();
 
     try {
+      const selectedContextBundleId = parseSelectedContextBundleId(contextBundleSelect.value);
       const result = isResumeEligible
-        ? await resumeAutomationRun(feature.feature_automation_run_id)
+        ? await resumeAutomationRun(feature.feature_automation_run_id, {
+          contextBundleId: selectedContextBundleId
+        })
         : await startFeatureAutomation(feature.id, {
-          stopOnIncompleteStory: stopOnIncompleteCheckbox.checked
+          stopOnIncompleteStory: stopOnIncompleteCheckbox.checked,
+          contextBundleId: selectedContextBundleId
         });
       assertAutomationStartScope(result, {
         automationType: "feature",
@@ -1151,6 +1234,12 @@ function createEpicAutomationUi(content, epic) {
   stopOnIncompleteLabel.appendChild(stopOnIncompleteCheckbox);
   stopOnIncompleteLabel.appendChild(document.createTextNode("Stop Run For Incomplete Stories"));
   content.appendChild(stopOnIncompleteLabel);
+  const { selectorWrap, select: contextBundleSelect } = createAutomationContextBundleSelector({
+    idPrefix: `epic-${epic.id}`,
+    automationLabel: "epic",
+    disabled: isActiveEpicRun || isEpicStartInFlight
+  });
+  content.appendChild(selectorWrap);
 
   button.addEventListener("click", async () => {
     if (epicAutomationStartInFlight.has(epic.id)) {
@@ -1173,10 +1262,14 @@ function createEpicAutomationUi(content, epic) {
     renderFeatureLists();
 
     try {
+      const selectedContextBundleId = parseSelectedContextBundleId(contextBundleSelect.value);
       const result = isResumeEligible
-        ? await resumeAutomationRun(epic.epic_automation_run_id)
+        ? await resumeAutomationRun(epic.epic_automation_run_id, {
+          contextBundleId: selectedContextBundleId
+        })
         : await startEpicAutomation(epic.id, {
-          stopOnIncompleteStory: stopOnIncompleteCheckbox.checked
+          stopOnIncompleteStory: stopOnIncompleteCheckbox.checked,
+          contextBundleId: selectedContextBundleId
         });
       assertAutomationStartScope(result, {
         automationType: "epic",
@@ -1238,6 +1331,13 @@ function createStoryAutomationUi(content, story) {
     : (isResumeEligible ? "Resume Automation" : "Complete with Automation");
   automationButton.disabled = isGlobalRunActive && !isStoryStartInFlight;
 
+  const { selectorWrap, select: contextBundleSelect } = createAutomationContextBundleSelector({
+    idPrefix: `story-${story.id}`,
+    automationLabel: "story",
+    disabled: isStoryStartInFlight || isActiveStoryRun
+  });
+  content.appendChild(selectorWrap);
+
   automationButton.addEventListener("click", async () => {
     if (storyAutomationInFlight.has(story.id)) {
       createStatusBox.textContent = "Story automation start is already being requested for this story.";
@@ -1256,9 +1356,14 @@ function createStoryAutomationUi(content, story) {
     renderFeatureLists();
 
     try {
+      const selectedContextBundleId = parseSelectedContextBundleId(contextBundleSelect.value);
       const result = isResumeEligible
-        ? await resumeAutomationRun(story.story_automation_run_id)
-        : await startStoryAutomation(story.id);
+        ? await resumeAutomationRun(story.story_automation_run_id, {
+          contextBundleId: selectedContextBundleId
+        })
+        : await startStoryAutomation(story.id, {
+          contextBundleId: selectedContextBundleId
+        });
       assertAutomationStartScope(result, {
         automationType: "story",
         targetId: story.id,
@@ -1759,6 +1864,40 @@ async function loadFeatures({ shouldRender = true } = {}) {
   }
 }
 
+async function loadAutomationContextBundles() {
+  const requestId = ++loadAutomationContextBundlesRequestId;
+
+  try {
+    const response = await fetch("/api/context-bundles?includeParts=false");
+    const result = await response.json();
+    if (requestId !== loadAutomationContextBundlesRequestId) {
+      return;
+    }
+
+    if (!response.ok) {
+      throw new Error(result.error || "Failed to load context bundles.");
+    }
+
+    automationContextBundleOptions = (Array.isArray(result) ? result : [])
+      .map((bundle) => ({
+        ...bundle,
+        id: Number.parseInt(bundle?.id, 10)
+      }))
+      .filter((bundle) => Number.isInteger(bundle.id) && bundle.id > 0);
+  } catch (error) {
+    if (requestId !== loadAutomationContextBundlesRequestId) {
+      return;
+    }
+
+    automationContextBundleOptions = [];
+    createStatusBox.textContent = `Context bundle load failed: ${error.message}`;
+  } finally {
+    if (requestId === loadAutomationContextBundlesRequestId) {
+      renderFeatureLists();
+    }
+  }
+}
+
 async function reloadAllData() {
   await loadFeatures();
 }
@@ -1967,6 +2106,7 @@ setInterval(() => {
     renderScopeHint();
     renderFeatureLists();
     await reloadAllData();
+    await loadAutomationContextBundles();
     await refreshAutomationState();
     renderDrafts();
   } catch (error) {

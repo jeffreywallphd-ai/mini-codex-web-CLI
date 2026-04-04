@@ -37,6 +37,7 @@ The app is designed for personal LAN use, not for public internet exposure or mu
 - Run and automation API payloads include selected context bundle linkage (`context_bundle_id`) and resolved title metadata (`context_bundle_title` / `contextBundleTitle`) for execution traceability
 - Index page run form includes an optional single-bundle selector with concise metadata hints (title/intended use/summary) plus a compact selected-bundle summary card (summary/intended use/project affinity) so manual runs can include one bundle or none
 - Feature card automation control in **Not Yet Implemented** for launching feature-wide automation (`Complete with Automation`)
+- Feature-management automation launch controls (feature/epic/story) include a compact optional single-bundle selector powered by the same context-bundle list API as the index page (`/api/context-bundles?includeParts=false`), and send the selected `contextBundleId` with start/resume requests
 - Feature/epic/story automation summaries include concise stop reasons for early stops (`execution_failed`, `story_incomplete`, `manual_stop`) when backend state provides one
 - SQLite storage with no external database
 - Mobile-friendly, lightweight UI intended for LAN access
@@ -422,6 +423,7 @@ Feature Management UI integration:
 - incomplete feature cards surface a **Complete with Automation** button
 - the feature button starts automation via `POST /api/automation/start/feature/:featureId`
 - feature automation requests include explicit scope metadata (`automationType`, `targetId`, `featureId`) so backend scope validation can reject mismatched launches
+- feature launch controls include a compact optional single-bundle selector (`No context bundle` or one saved bundle) so each automation start/resume can explicitly attach one bundle
 - feature cards include a `Stop Run For Incomplete Stories` checkbox that controls `stopOnIncompleteStory` in the start request (defaults to unchecked)
 - feature cards include a compact automation status summary badge sourced from backend feature automation state (`not_started`, `running`, `completed`, `stopped`, `failed`) with graceful fallback to `not_started` when status data is missing
 - running feature/epic automation summaries include a concise `Current story` line sourced from `GET /api/automation/status/:automationRunId` queue status data (`queue.currentItem`)
@@ -432,6 +434,7 @@ Feature Management UI integration:
 - incomplete epic cards surface a **Complete with Automation** button
 - the epic button starts automation via `POST /api/automation/start/epic/:epicId`
 - epic automation requests include explicit scope metadata (`automationType`, `targetId`, `epicId`) so backend scope validation can reject mismatched launches
+- epic launch controls use the same optional single-bundle selector pattern and send `contextBundleId` with start/resume requests
 - epic cards include a `Stop Run For Incomplete Stories` checkbox that controls `stopOnIncompleteStory` in the start request (defaults to unchecked)
 - epic cards include the same compact automation status summary badge pattern (`not_started`, `running`, `completed`, `stopped`, `failed`) and show active-run context when an epic run is in progress
 - epic cards show the same ineligible hint pattern when the epic has no stories
@@ -441,6 +444,7 @@ Feature Management UI integration:
   automation control
 - the story button starts automation via `POST /api/automation/start/story/:storyId`
 - story automation requests include explicit scope metadata (`automationType`, `targetId`, `storyId`) so backend scope validation can reject mismatched launches
+- story launch controls use the same optional single-bundle selector pattern and send `contextBundleId` with start/resume requests
 - story-card automation startup validates that exactly one story is queued for the selected story target
 - frontend validates the start response scope (`automationRun.automationType` + `automationRun.targetId`) before reporting launch success
 - feature/epic/story automation start controls keep a lightweight per-target in-flight guard to prevent duplicate start clicks while a start request is pending
