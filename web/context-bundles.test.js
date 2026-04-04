@@ -63,6 +63,10 @@ test("context bundles authoring UI renders metadata fields including freshness i
   assert.match(source, /Project affinity:\s*\$\{formatMetadataValue\(bundle\.project_name\)\}/);
   assert.match(source, /Tags:\s*\$\{Array\.isArray\(bundle\.tags\)/);
   assert.match(source, /Summary:\s*\$\{formatMetadataValue\(bundle\.summary\)\}/);
+  assert.match(source, /Selection guidance:\s*\$\{buildIntentGuidance\(bundle\)\}/);
+  assert.match(source, /function buildIntentGuidance\(bundle = \{\}\)/);
+  assert.match(source, /renderBundleDetailSummary\(bundle\)/);
+  assert.match(source, /renderBundleDetailSummary\(null\)/);
 });
 
 test("context bundles authoring UI exposes bundle maintenance actions in list cards", () => {
@@ -92,6 +96,10 @@ test("context bundles page provides central authoring and management sections", 
   assert.match(source, /id="bundleValidationBox"/);
   assert.match(source, /id="saveBundleButton"/);
   assert.match(source, /Create Bundle/);
+  assert.match(source, /Optional but recommended: state the run type this bundle is optimized for\./);
+  assert.match(source, /Optional but recommended: keep this concise so bundle selection stays fast\./);
+  assert.match(source, /<h3>Selected Bundle Detail<\/h3>/);
+  assert.match(source, /id="bundleDetailSummary"/);
   assert.match(source, /<h3>Bundle Parts<\/h3>/);
   assert.match(source, /id="addBundlePartButton"/);
   assert.match(source, /id="bundlePartsList"/);

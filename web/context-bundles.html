@@ -36,6 +36,7 @@
 
       <label for="bundleIntendedUseInput">Intended Use</label>
       <input id="bundleIntendedUseInput" type="text" placeholder="e.g. story_implementation, bugfix" />
+      <p class="inline-hint">Optional but recommended: state the run type this bundle is optimized for.</p>
 
       <label for="bundleProjectNameInput">Default Project Affinity</label>
       <input id="bundleProjectNameInput" type="text" placeholder="Optional project name" />
@@ -45,6 +46,15 @@
 
       <label for="bundleSummaryInput">Summary</label>
       <textarea id="bundleSummaryInput" rows="3" placeholder="Optional summary for quick selection context"></textarea>
+      <p class="inline-hint">Optional but recommended: keep this concise so bundle selection stays fast.</p>
+
+      <div class="bundle-detail-section">
+        <h3>Selected Bundle Detail</h3>
+        <p class="inline-hint">Shows selection-facing metadata for the currently selected bundle.</p>
+        <div id="bundleDetailSummary" class="detail-summary">
+          <div><strong>Selection Guidance</strong><span>Select a bundle to inspect metadata guidance.</span></div>
+        </div>
+      </div>
 
       <div class="bundle-parts-section">
         <div class="section-heading-row">
