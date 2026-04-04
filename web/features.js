@@ -21,6 +21,8 @@ const scopeHint = document.getElementById("scopeHint");
 const EDITOR_STATE_KEY = "mini-codex-editor-state";
 
 let allFeatures = [];
+const featureAutomationStartInFlight = new Set();
+const epicAutomationStartInFlight = new Set();
 const storyAutomationInFlight = new Set();
 const openCards = new Set();
 let automationScope = {
@@ -124,8 +126,15 @@ function renderScopeHint() {
 }
 
 function isAnyAutomationInFlight() {
-  return storyAutomationInFlight.size > 0
+  return featureAutomationStartInFlight.size > 0
+    || epicAutomationStartInFlight.size > 0
+    || storyAutomationInFlight.size > 0
     || Boolean(globalAutomationLock?.isActive);
+}
+
+function isAutomationAlreadyRunningError(error) {
+  const message = String(error?.message || "").toLowerCase();
+  return message.includes("already running");
 }
 
 function matchesQuery(feature, query) {
@@ -708,28 +717,33 @@ function createFeatureAutomationUi(content, feature) {
       && globalAutomationLock?.automationType === "feature"
       && Number(globalAutomationLock?.targetId) === Number(feature.id)
   );
+  const isFeatureStartInFlight = featureAutomationStartInFlight.has(feature.id);
 
   if (isActiveFeatureRun) {
     const runLabel = Number.isInteger(Number(globalAutomationLock?.automationRunId))
       ? `Feature automation run #${globalAutomationLock.automationRunId} is in progress.`
       : "Feature automation is in progress.";
     content.appendChild(createTextNode("p", "inline-hint", runLabel));
+  } else if (isFeatureStartInFlight) {
+    content.appendChild(createTextNode("p", "inline-hint", "Feature automation start request is in progress."));
   }
 
   const button = document.createElement("button");
   button.type = "button";
   button.className = "secondary-button";
-  button.textContent = isActiveFeatureRun
+  button.textContent = isActiveFeatureRun || isFeatureStartInFlight
     ? "Automation Running..."
     : "Complete with Automation";
-  button.disabled = isAnyAutomationInFlight() && !isActiveFeatureRun;
+  button.disabled = isFeatureStartInFlight
+    || isActiveFeatureRun
+    || (isAnyAutomationInFlight() && !isActiveFeatureRun);
 
   const stopOnIncompleteCheckbox = document.createElement("input");
   stopOnIncompleteCheckbox.type = "checkbox";
   stopOnIncompleteCheckbox.checked = Boolean(
     stopRunForIncompleteStoriesByFeatureId.get(feature.id)
   );
-  stopOnIncompleteCheckbox.disabled = isActiveFeatureRun;
+  stopOnIncompleteCheckbox.disabled = isActiveFeatureRun || isFeatureStartInFlight;
   stopOnIncompleteCheckbox.addEventListener("change", () => {
     stopRunForIncompleteStoriesByFeatureId.set(feature.id, stopOnIncompleteCheckbox.checked);
   });
@@ -741,6 +755,11 @@ function createFeatureAutomationUi(content, feature) {
   content.appendChild(stopOnIncompleteLabel);
 
   button.addEventListener("click", async () => {
+    if (featureAutomationStartInFlight.has(feature.id)) {
+      createStatusBox.textContent = "Feature automation start is already being requested for this feature.";
+      return;
+    }
+
     if (isAnyAutomationInFlight() && !isActiveFeatureRun) {
       createStatusBox.textContent = "Automation is already running. Wait for completion before starting another run.";
       return;
@@ -751,8 +770,9 @@ function createFeatureAutomationUi(content, feature) {
       return;
     }
 
-    button.disabled = true;
-    button.textContent = "Starting Automation...";
+    openCards.add(`feature:${feature.id}`);
+    featureAutomationStartInFlight.add(feature.id);
+    renderFeatureLists();
 
     try {
       const result = await startFeatureAutomation(feature.id, {
@@ -765,10 +785,11 @@ function createFeatureAutomationUi(content, feature) {
         : `Feature automation started for feature #${feature.id}.`;
       await refreshAutomationState();
     } catch (error) {
-      createStatusBox.textContent = `Feature automation failed to start: ${error.message}`;
-      button.disabled = isAnyAutomationInFlight() && !isActiveFeatureRun;
-      button.textContent = "Complete with Automation";
+      createStatusBox.textContent = isAutomationAlreadyRunningError(error)
+        ? `Automation is already running. ${error.message}`
+        : `Feature automation failed to start: ${error.message}`;
     } finally {
+      featureAutomationStartInFlight.delete(feature.id);
       renderFeatureLists();
     }
   });
@@ -803,28 +824,33 @@ function createEpicAutomationUi(content, epic) {
       && globalAutomationLock?.automationType === "epic"
       && Number(globalAutomationLock?.targetId) === Number(epic.id)
   );
+  const isEpicStartInFlight = epicAutomationStartInFlight.has(epic.id);
 
   if (isActiveEpicRun) {
     const runLabel = Number.isInteger(Number(globalAutomationLock?.automationRunId))
       ? `Epic automation run #${globalAutomationLock.automationRunId} is in progress.`
       : "Epic automation is in progress.";
     content.appendChild(createTextNode("p", "inline-hint", runLabel));
+  } else if (isEpicStartInFlight) {
+    content.appendChild(createTextNode("p", "inline-hint", "Epic automation start request is in progress."));
   }
 
   const button = document.createElement("button");
   button.type = "button";
   button.className = "secondary-button";
-  button.textContent = isActiveEpicRun
+  button.textContent = isActiveEpicRun || isEpicStartInFlight
     ? "Automation Running..."
     : "Complete with Automation";
-  button.disabled = isAnyAutomationInFlight() && !isActiveEpicRun;
+  button.disabled = isEpicStartInFlight
+    || isActiveEpicRun
+    || (isAnyAutomationInFlight() && !isActiveEpicRun);
 
   const stopOnIncompleteCheckbox = document.createElement("input");
   stopOnIncompleteCheckbox.type = "checkbox";
   stopOnIncompleteCheckbox.checked = Boolean(
     stopRunForIncompleteStoriesByEpicId.get(epic.id)
   );
-  stopOnIncompleteCheckbox.disabled = isActiveEpicRun;
+  stopOnIncompleteCheckbox.disabled = isActiveEpicRun || isEpicStartInFlight;
   stopOnIncompleteCheckbox.addEventListener("change", () => {
     stopRunForIncompleteStoriesByEpicId.set(epic.id, stopOnIncompleteCheckbox.checked);
   });
@@ -836,6 +862,11 @@ function createEpicAutomationUi(content, epic) {
   content.appendChild(stopOnIncompleteLabel);
 
   button.addEventListener("click", async () => {
+    if (epicAutomationStartInFlight.has(epic.id)) {
+      createStatusBox.textContent = "Epic automation start is already being requested for this epic.";
+      return;
+    }
+
     if (isAnyAutomationInFlight() && !isActiveEpicRun) {
       createStatusBox.textContent = "Automation is already running. Wait for completion before starting another run.";
       return;
@@ -846,8 +877,9 @@ function createEpicAutomationUi(content, epic) {
       return;
     }
 
-    button.disabled = true;
-    button.textContent = "Starting Automation...";
+    openCards.add(`epic:${epic.id}`);
+    epicAutomationStartInFlight.add(epic.id);
+    renderFeatureLists();
 
     try {
       const result = await startEpicAutomation(epic.id, {
@@ -860,10 +892,11 @@ function createEpicAutomationUi(content, epic) {
         : `Epic automation started for epic #${epic.id}.`;
       await refreshAutomationState();
     } catch (error) {
-      createStatusBox.textContent = `Epic automation failed to start: ${error.message}`;
-      button.disabled = isAnyAutomationInFlight() && !isActiveEpicRun;
-      button.textContent = "Complete with Automation";
+      createStatusBox.textContent = isAutomationAlreadyRunningError(error)
+        ? `Automation is already running. ${error.message}`
+        : `Epic automation failed to start: ${error.message}`;
     } finally {
+      epicAutomationStartInFlight.delete(epic.id);
       renderFeatureLists();
     }
   });
@@ -898,6 +931,11 @@ function createStoryAutomationUi(content, story) {
   automationButton.disabled = isGlobalRunActive && !isStoryStartInFlight;
 
   automationButton.addEventListener("click", async () => {
+    if (storyAutomationInFlight.has(story.id)) {
+      createStatusBox.textContent = "Story automation start is already being requested for this story.";
+      return;
+    }
+
     if (isAnyAutomationInFlight()) {
       createStatusBox.textContent = "Automation is already running. Wait for completion before starting another run.";
       return;
@@ -922,7 +960,9 @@ function createStoryAutomationUi(content, story) {
         : `Story automation started for story #${story.id} (1 story queued).`;
       await refreshAutomationState();
     } catch (error) {
-      createStatusBox.textContent = `Story automation failed to start: ${error.message}`;
+      createStatusBox.textContent = isAutomationAlreadyRunningError(error)
+        ? `Automation is already running. ${error.message}`
+        : `Story automation failed to start: ${error.message}`;
     } finally {
       storyAutomationInFlight.delete(story.id);
       renderFeatureLists();
