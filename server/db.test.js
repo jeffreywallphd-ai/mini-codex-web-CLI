@@ -6,6 +6,8 @@ const sqlite3 = require("sqlite3").verbose();
 const {
   dbReady,
   saveRun,
+  getRunById,
+  getRuns,
   createFeatureTree,
   getFeaturesTree,
   createAutomationRun,
@@ -43,6 +45,22 @@ function cleanupAutomationStoryExecutions(automationRunId) {
 
     const db = new sqlite3.Database(dbPath);
     db.run("DELETE FROM automation_story_executions WHERE automation_run_id = ?", [automationRunId], (err) => {
+      db.close();
+      if (err) return reject(err);
+      resolve();
+    });
+  });
+}
+
+function cleanupRun(id) {
+  return new Promise((resolve, reject) => {
+    if (!Number.isInteger(id) || id <= 0) {
+      resolve();
+      return;
+    }
+
+    const db = new sqlite3.Database(dbPath);
+    db.run("DELETE FROM runs WHERE id = ?", [id], (err) => {
       db.close();
       if (err) return reject(err);
       resolve();
@@ -162,6 +180,112 @@ test("automation metadata is persisted and updateable in sqlite", async () => {
     assert.equal(updated.automation_status, "completed");
     assert.equal(updated.stop_reason, "all_work_complete");
   } finally {
+    await cleanupAutomationRun(automationRunId);
+  }
+});
+
+test("run records persist automation origin linkage with backward-compatible null defaults", async () => {
+  await dbReady;
+
+  let automationRunId = null;
+  let automatedRunId = null;
+  let manualRunId = null;
+
+  try {
+    const automationRun = await createAutomationRun({
+      automationType: "feature",
+      targetId: 12345,
+      projectName: "db-test-project",
+      baseBranch: "main",
+      stopFlag: false,
+      stopOnIncomplete: false,
+      automationStatus: "running",
+      currentPosition: 1,
+      stopReason: null
+    });
+    automationRunId = automationRun.id;
+
+    automatedRunId = await saveRun({
+      projectName: "db-test-project",
+      prompt: "automated run prompt",
+      code: 0,
+      stdout: "",
+      stderr: "",
+      statusBefore: "",
+      statusAfter: "",
+      usageDelta: "",
+      creditsRemaining: null,
+      executionMode: "write",
+      branchName: "codex-auto-branch",
+      baseBranch: "main",
+      gitStatus: "",
+      gitStatusFiles: [],
+      gitDiffMap: {},
+      changeTitle: "automation update",
+      changeDescription: "automation update",
+      promptWithInstructions: "automation prompt",
+      executedCommand: "automation command",
+      spawnCommand: "automation spawn",
+      completionStatus: "complete",
+      completionWork: "none",
+      runStartTime: Date.now() - 100,
+      runEndTime: Date.now(),
+      automationOriginType: "feature",
+      automationOriginId: 12345,
+      automationRunId
+    });
+
+    manualRunId = await saveRun({
+      projectName: "db-test-project",
+      prompt: "manual run prompt",
+      code: 0,
+      stdout: "",
+      stderr: "",
+      statusBefore: "",
+      statusAfter: "",
+      usageDelta: "",
+      creditsRemaining: null,
+      executionMode: "read",
+      branchName: "codex-manual-branch",
+      baseBranch: "main",
+      gitStatus: "",
+      gitStatusFiles: [],
+      gitDiffMap: {},
+      changeTitle: "manual update",
+      changeDescription: "manual update",
+      promptWithInstructions: "manual prompt",
+      executedCommand: "manual command",
+      spawnCommand: "manual spawn",
+      completionStatus: "incomplete",
+      completionWork: "Remaining manual tasks",
+      runStartTime: Date.now() - 100,
+      runEndTime: Date.now()
+    });
+
+    const automatedRun = await getRunById(automatedRunId);
+    assert.equal(automatedRun.automation_origin_type, "feature");
+    assert.equal(automatedRun.automation_origin_id, 12345);
+    assert.equal(automatedRun.automation_run_id, automationRunId);
+
+    const manualRun = await getRunById(manualRunId);
+    assert.equal(manualRun.automation_origin_type, null);
+    assert.equal(manualRun.automation_origin_id, null);
+    assert.equal(manualRun.automation_run_id, null);
+
+    const recentRuns = await getRuns({ status: "all" });
+    const automatedSummary = recentRuns.find((run) => run.id === automatedRunId);
+    const manualSummary = recentRuns.find((run) => run.id === manualRunId);
+    assert.ok(automatedSummary);
+    assert.ok(manualSummary);
+    assert.equal(automatedSummary.automation_origin_type, "feature");
+    assert.equal(automatedSummary.automation_origin_id, 12345);
+    assert.equal(automatedSummary.automation_run_id, automationRunId);
+    assert.equal(manualSummary.automation_origin_type, null);
+    assert.equal(manualSummary.automation_origin_id, null);
+    assert.equal(manualSummary.automation_run_id, null);
+  } finally {
+    await cleanupRun(automatedRunId);
+    await cleanupRun(manualRunId);
     await cleanupAutomationRun(automationRunId);
   }
 });

@@ -9,11 +9,52 @@ const dbPath = path.resolve(dataDir, "app.db");
 const db = new sqlite3.Database(dbPath);
 db.run("PRAGMA foreign_keys = ON");
 
-const LATEST_SCHEMA_VERSION = 12;
+const LATEST_SCHEMA_VERSION = 13;
 const VALID_AUTOMATION_TYPES = new Set(["feature", "epic", "story"]);
 const VALID_AUTOMATION_STATUSES = new Set(["pending", "running", "completed", "failed", "stopped"]);
 const VALID_AUTOMATION_STORY_EXECUTION_STATUSES = new Set(["completed", "failed"]);
 const VALID_AUTOMATION_STORY_QUEUE_ACTIONS = new Set(["advanced", "stopped", "failed"]);
+
+function normalizeRunOrigin(runInput = {}) {
+  const rawType = runInput.automationOriginType ?? runInput.originEntityType ?? null;
+  const rawEntityId = runInput.automationOriginId ?? runInput.originEntityId ?? null;
+  const rawAutomationRunId = runInput.automationRunId ?? runInput.originAutomationRunId ?? null;
+
+  const automationOriginType = rawType === null || rawType === undefined || rawType === ""
+    ? null
+    : String(rawType).trim().toLowerCase();
+  const automationOriginId = rawEntityId === null || rawEntityId === undefined || rawEntityId === ""
+    ? null
+    : Number.parseInt(rawEntityId, 10);
+  const automationRunId = rawAutomationRunId === null || rawAutomationRunId === undefined || rawAutomationRunId === ""
+    ? null
+    : Number.parseInt(rawAutomationRunId, 10);
+
+  const hasType = Boolean(automationOriginType);
+  const hasEntityId = automationOriginId !== null;
+
+  if (hasType !== hasEntityId) {
+    throw new Error("Run automation origin type and target id must be provided together.");
+  }
+
+  if (hasType && !VALID_AUTOMATION_TYPES.has(automationOriginType)) {
+    throw new Error("Run automation origin type must be feature, epic, or story.");
+  }
+
+  if (hasEntityId && (!Number.isInteger(automationOriginId) || automationOriginId <= 0)) {
+    throw new Error("Run automation origin target id must be a positive integer.");
+  }
+
+  if (automationRunId !== null && (!Number.isInteger(automationRunId) || automationRunId <= 0)) {
+    throw new Error("Run automation run id must be a positive integer when provided.");
+  }
+
+  return {
+    automationOriginType,
+    automationOriginId,
+    automationRunId
+  };
+}
 
 function run(sql, params = []) {
   return new Promise((resolve, reject) => {
@@ -89,7 +130,13 @@ async function detectVersionFromSchema() {
           if (hasStoryExecutionTable) {
             const hasAutomationScopeContext = await columnExists("automation_runs", "project_name")
               && await columnExists("automation_runs", "base_branch");
-            if (hasAutomationScopeContext) return 12;
+            if (hasAutomationScopeContext) {
+              const hasRunOriginLinkage = await columnExists("runs", "automation_origin_type")
+                && await columnExists("runs", "automation_origin_id")
+                && await columnExists("runs", "automation_run_id");
+              if (hasRunOriginLinkage) return 13;
+              return 12;
+            }
             return 11;
           }
           return 10;
@@ -334,6 +381,20 @@ async function migrateToV12() {
   await ensureColumn("automation_runs", "base_branch", "TEXT NOT NULL DEFAULT ''");
 }
 
+async function migrateToV13() {
+  await ensureColumn("runs", "automation_origin_type", "TEXT");
+  await ensureColumn("runs", "automation_origin_id", "INTEGER");
+  await ensureColumn("runs", "automation_run_id", "INTEGER REFERENCES automation_runs(id) ON DELETE SET NULL");
+  await run(`
+    CREATE INDEX IF NOT EXISTS idx_runs_automation_origin
+    ON runs(automation_origin_type, automation_origin_id)
+  `);
+  await run(`
+    CREATE INDEX IF NOT EXISTS idx_runs_automation_run_id
+    ON runs(automation_run_id)
+  `);
+}
+
 async function runMigrations() {
   let version = await getSchemaVersion();
 
@@ -411,6 +472,12 @@ async function runMigrations() {
     await setSchemaVersion(version);
   }
 
+  if (version < 13) {
+    await migrateToV13();
+    version = 13;
+    await setSchemaVersion(version);
+  }
+
   if (version > LATEST_SCHEMA_VERSION) {
     throw new Error(`Unsupported schema version ${version}. Latest supported is ${LATEST_SCHEMA_VERSION}.`);
   }
@@ -422,6 +489,7 @@ function saveRun(runInput) {
   return new Promise((resolve, reject) => {
     dbReady
       .then(() => {
+        const runOrigin = normalizeRunOrigin(runInput);
         db.run(
           `INSERT INTO runs
           (
@@ -448,9 +516,12 @@ function saveRun(runInput) {
             completion_status,
             completion_work,
             run_start_time,
-            run_end_time
+            run_end_time,
+            automation_origin_type,
+            automation_origin_id,
+            automation_run_id
           )
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           [
             runInput.projectName,
             runInput.prompt,
@@ -475,7 +546,10 @@ function saveRun(runInput) {
             runInput.completionStatus,
             runInput.completionWork,
             runInput.runStartTime,
-            runInput.runEndTime
+            runInput.runEndTime,
+            runOrigin.automationOriginType,
+            runOrigin.automationOriginId,
+            runOrigin.automationRunId
           ],
           function onInsert(err) {
             if (err) return reject(err);
@@ -525,6 +599,9 @@ function getRuns({ search = "", status = "active" } = {}) {
              completion_work,
              run_start_time,
              run_end_time,
+             automation_origin_type,
+             automation_origin_id,
+             automation_run_id,
              COALESCE(archived, 0) AS archived
            FROM runs
            ${whereSql}

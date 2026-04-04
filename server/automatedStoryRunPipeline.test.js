@@ -59,11 +59,21 @@ test("automated story runner reuses existing run flow and links run to story", a
   assert.equal(calls.executeRunFlow[0].executionMode, "write");
   assert.equal(calls.executeRunFlow[0].streamId, "stream-1");
   assert.match(calls.executeRunFlow[0].prompt, /Story A/);
+  assert.deepEqual(calls.executeRunFlow[0].runOrigin, {
+    automationType: "story",
+    targetId: 12,
+    automationRunId: null
+  });
 
   assert.deepEqual(calls.attachRunToStory, [{ storyId: 12, runId: 42 }]);
   assert.equal(result.runId, 42);
   assert.equal(result.completionStatus, "complete");
   assert.equal(result.completionWork, "none");
+  assert.deepEqual(result.runOrigin, {
+    automationType: "story",
+    targetId: 12,
+    automationRunId: null
+  });
 });
 
 test("automated story runner throws prompt_generation_failed when prompt build fails", async () => {
@@ -102,4 +112,48 @@ test("automated story runner throws when story is missing from scoped project co
     }),
     /Story #999 was not found/
   );
+});
+
+test("automated story runner forwards feature or epic automation origin context", async () => {
+  const executeCalls = [];
+  const executeAutomatedStoryRun = createAutomatedStoryRunExecutor({
+    getStoryAutomationContext: async (storyId) => ({
+      story_id: storyId,
+      story_name: "Story in Feature Queue",
+      story_description: "Do work"
+    }),
+    executeRunFlow: async (input) => {
+      executeCalls.push(input);
+      return {
+        runId: 99,
+        responsePayload: {
+          completion_status: "incomplete",
+          completion_work: "Follow-up work remains."
+        }
+      };
+    },
+    attachRunToStory: async () => {}
+  });
+
+  const result = await executeAutomatedStoryRun({
+    storyId: 301,
+    projectName: "demo-project",
+    baseBranch: "main",
+    executionMode: "write",
+    automationType: "feature",
+    targetId: 100,
+    automationRunId: 555
+  });
+
+  assert.equal(executeCalls.length, 1);
+  assert.deepEqual(executeCalls[0].runOrigin, {
+    automationType: "feature",
+    targetId: 100,
+    automationRunId: 555
+  });
+  assert.deepEqual(result.runOrigin, {
+    automationType: "feature",
+    targetId: 100,
+    automationRunId: 555
+  });
 });

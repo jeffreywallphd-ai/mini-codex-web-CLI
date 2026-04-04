@@ -178,7 +178,10 @@ function createAutomationStartRouter(deps = {}) {
             storyId: storyQueueItem?.storyId,
             projectName,
             baseBranch,
-            executionMode: "write"
+            executionMode: "write",
+            automationType,
+            targetId,
+            automationRunId: automationRun.id
           });
 
           return {
