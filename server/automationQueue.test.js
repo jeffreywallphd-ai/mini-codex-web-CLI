@@ -327,6 +327,36 @@ test("buildScopedStoryExecutionQueue reports validation_failed when required sto
   assert.deepEqual(queueResult.validationErrors[0].missingFields, ["story_description"]);
 });
 
+test("defineAutomationExecutionPlan preserves validation errors for API responses", () => {
+  const featuresFixture = [
+    {
+      id: 1,
+      name: "Feature 1",
+      created_at: "2026-01-01T09:00:00.000Z",
+      epics: [
+        {
+          id: 11,
+          name: "Epic 1.1",
+          created_at: "2026-01-01T09:05:00.000Z",
+          stories: [
+            { id: 111, name: "Story Missing Description", created_at: "2026-01-01T09:06:00.000Z", description: "" }
+          ]
+        }
+      ]
+    }
+  ];
+
+  const plan = defineAutomationExecutionPlan(featuresFixture, {
+    automationType: AUTOMATION_SCOPE.STORY,
+    targetId: 111
+  });
+
+  assert.equal(plan.queueStatus.code, QUEUE_BUILD_STATUS.VALIDATION_FAILED);
+  assert.equal(Array.isArray(plan.validationErrors), true);
+  assert.equal(plan.validationErrors.length, 1);
+  assert.deepEqual(plan.validationErrors[0].missingFields, ["story_description"]);
+});
+
 test("feature queue still starts when at least one story is runnable even if others fail prompt validation", () => {
   const featuresFixture = [
     {
