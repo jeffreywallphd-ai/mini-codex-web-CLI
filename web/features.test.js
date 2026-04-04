@@ -202,6 +202,22 @@ test("automation summaries render current executing story from backend status pa
   assert.match(source, /createRunDetailsLink\(linkedRunId,\s*"Run details"\)/);
 });
 
+test("automation summaries display associated context bundle for traceability", () => {
+  const source = readFeaturesScript();
+
+  assert.match(source, /function normalizeAutomationBundleAssociation\(contextBundleId,\s*contextBundleTitle\)/);
+  assert.match(source, /function resolveAutomationBundleAssociation\(automationType,\s*targetId,\s*fallback = \{\}\)/);
+  assert.match(source, /function appendAutomationBundleAssociationLine\(content,\s*\{ status,\s*automationType,\s*targetId,\s*fallback \} = \{\}\)/);
+  assert.match(source, /row\.textContent = `Context bundle: \$\{bundleLabel\}`;/);
+  assert.match(source, /row\.textContent = "Context bundle: none";/);
+  assert.match(source, /contextBundleId: feature\?\.feature_automation_context_bundle_id,/);
+  assert.match(source, /contextBundleTitle: feature\?\.feature_automation_context_bundle_title/);
+  assert.match(source, /contextBundleId: epic\?\.epic_automation_context_bundle_id,/);
+  assert.match(source, /contextBundleTitle: epic\?\.epic_automation_context_bundle_title/);
+  assert.match(source, /contextBundleId: story\?\.story_automation_context_bundle_id,/);
+  assert.match(source, /contextBundleTitle: story\?\.story_automation_context_bundle_title/);
+});
+
 test("frontend polls automation status endpoint using active backend automation run id", () => {
   const source = readFeaturesScript();
 
