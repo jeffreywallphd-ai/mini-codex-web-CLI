@@ -719,8 +719,14 @@ test("context bundles API returns bundle preview payload with deterministic comp
       payload.preview.sections.map((section) => section.sectionLabel),
       ["Feature Background: Goal", "Testing Expectations: Tests"]
     );
-    assert.match(payload.preview.compiledText, /## Feature Background: Goal/);
-    assert.match(payload.preview.compiledText, /## Testing Expectations: Tests/);
+    assert.deepEqual(
+      payload.preview.compilationGroups.map((group) => group.sectionKey),
+      ["architecture_guidance", "background_context"]
+    );
+    assert.match(payload.preview.compiledText, /## Architecture Guidance/);
+    assert.match(payload.preview.compiledText, /### Testing Expectations: Tests/);
+    assert.match(payload.preview.compiledText, /## Background Context/);
+    assert.match(payload.preview.compiledText, /### Feature Background: Goal/);
   });
 });
 

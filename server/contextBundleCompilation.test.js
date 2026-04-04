@@ -63,9 +63,49 @@ test("compileContextBundle creates deterministic section ordering and labels", (
       sectionLabels: ["Testing Expectations: Coverage"]
     }
   ]);
+  assert.deepEqual(compiled.compilationGroups, [
+    {
+      sectionKey: "architecture_guidance",
+      sectionLabel: "Architecture Guidance",
+      contextRole: "instructions",
+      includedPartIds: [103],
+      sectionLabels: ["Testing Expectations: Coverage"],
+      partTypes: ["testing_expectations"],
+      sections: [
+        {
+          partId: 103,
+          position: 3,
+          partType: "testing_expectations",
+          partTypeLabel: "Testing Expectations",
+          title: "Coverage",
+          sectionLabel: "Testing Expectations: Coverage",
+          content: "Add API tests."
+        }
+      ]
+    },
+    {
+      sectionKey: "background_context",
+      sectionLabel: "Background Context",
+      contextRole: "reference",
+      includedPartIds: [101],
+      sectionLabels: ["Feature Background: Goal"],
+      partTypes: ["feature_background"],
+      sections: [
+        {
+          partId: 101,
+          position: 1,
+          partType: "feature_background",
+          partTypeLabel: "Feature Background",
+          title: "Goal",
+          sectionLabel: "Feature Background: Goal",
+          content: "Implement preview payload."
+        }
+      ]
+    }
+  ]);
   assert.match(
     compiled.compiledText,
-    /## Feature Background: Goal[\s\S]*## Testing Expectations: Coverage/
+    /## Architecture Guidance[\s\S]*### Testing Expectations: Coverage[\s\S]*## Background Context[\s\S]*### Feature Background: Goal/
   );
   assert.equal(compiled.compiledString, compiled.compiledText);
 });
@@ -97,6 +137,7 @@ test("compileContextBundle updates output when included parts or content changes
   assert.deepEqual(excluded.includedPartIds, []);
   assert.equal(excluded.compiledText, "");
   assert.deepEqual(excluded.typeGroups, []);
+  assert.deepEqual(excluded.compilationGroups, []);
 
   const updated = compileContextBundle({
     ...sourceBundle,
@@ -146,4 +187,58 @@ test("compileContextBundle is deterministic across repeated compiles and ties", 
     "feature_background",
     "user_notes"
   ]);
+  assert.deepEqual(first.compilationGroups.map((group) => group.sectionKey), [
+    "background_context"
+  ]);
+});
+
+test("compileContextBundle layers constraints, instructions, and reference context into explicit sections", () => {
+  const compiled = compileContextBundle({
+    id: 31,
+    parts: [
+      {
+        id: 301,
+        part_type: "feature_background",
+        title: "Story",
+        content: "Background details",
+        position: 1,
+        include_in_compiled: 1
+      },
+      {
+        id: 302,
+        part_type: "implementation_constraints",
+        title: "Guardrails",
+        content: "Do not change API signatures.",
+        position: 2,
+        include_in_compiled: 1
+      },
+      {
+        id: 303,
+        part_type: "documentation_standards",
+        title: "Docs",
+        content: "Document new payload fields.",
+        position: 3,
+        include_in_compiled: 1
+      },
+      {
+        id: 304,
+        part_type: "domain_glossary",
+        title: "Terms",
+        content: "Compiler: bundle assembler.",
+        position: 4,
+        include_in_compiled: 1
+      }
+    ]
+  });
+
+  assert.deepEqual(compiled.compilationGroups.map((group) => group.sectionKey), [
+    "implementation_constraints",
+    "documentation_standards",
+    "background_context",
+    "glossary"
+  ]);
+  assert.match(
+    compiled.compiledText,
+    /## Implementation Constraints[\s\S]*### Implementation Constraints: Guardrails[\s\S]*## Documentation Standards[\s\S]*### Documentation Standards: Docs[\s\S]*## Background Context[\s\S]*### Feature Background: Story[\s\S]*## Glossary[\s\S]*### Domain Glossary: Terms/
+  );
 });
