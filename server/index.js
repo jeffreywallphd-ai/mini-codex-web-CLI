@@ -26,6 +26,7 @@ const {
 } = require("./db");
 const { buildStoryAutomationPrompt } = require("./storyAutomationPrompt");
 const { createCodexBranch, getGitSnapshot, listLocalBranches, mergeBranch, pullRepository } = require("./git");
+const { createAutomationStartRouter } = require("./automationStartApi");
 
 const app = express();
 app.use(cors());
@@ -99,7 +100,10 @@ function getFeatureAutomationLock() {
 
   return {
     isActive: true,
-    source: "feature_automation",
+    source: "automation_run",
+    automationRunId: activeFeatureAutomation.automationRunId ?? null,
+    automationType: activeFeatureAutomation.automationType ?? null,
+    targetId: activeFeatureAutomation.targetId ?? null,
     projectName: activeFeatureAutomation.projectName,
     baseBranch: activeFeatureAutomation.baseBranch,
     storyId: activeFeatureAutomation.storyId,
@@ -324,6 +328,25 @@ async function executeRunFlow({
     responsePayload
   };
 }
+
+app.use("/api/automation", createAutomationStartRouter({
+  isValidProject,
+  listLocalBranches,
+  getRepoPath,
+  getFeaturesTree,
+  createAutomationRun,
+  updateAutomationRunMetadata,
+  recordAutomationStoryExecution,
+  getStoryAutomationContext,
+  attachRunToStory,
+  executeRunFlow,
+  getErrorMessage,
+  runningProjects,
+  getActiveAutomation: () => activeFeatureAutomation,
+  setActiveAutomation: (nextAutomation) => {
+    activeFeatureAutomation = nextAutomation;
+  }
+}));
 
 app.get("/api/projects", (req, res) => {
   const dirs = fs.readdirSync(PROJECTS_DIR, { withFileTypes: true })
