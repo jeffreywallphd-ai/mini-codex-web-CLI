@@ -581,6 +581,20 @@ details pre {
   font-size: 12px;
 }
 
+.feature-automation-status-row--history {
+  margin: -8px 0 10px 8px;
+}
+
+.inline-run-link {
+  color: var(--accent);
+  text-underline-offset: 2px;
+}
+
+.inline-run-link-missing {
+  font-style: italic;
+  opacity: 0.9;
+}
+
 .automation-status-pill {
   display: inline-block;
   border-radius: 999px;
