@@ -22,11 +22,11 @@
 
       <article class="hier-card hier-card--feature-draft">
         <header class="hier-card__header">
-          <button id="createFeatureCardToggle" type="button" class="hier-card__toggle is-open">
+          <button id="createFeatureCardToggle" type="button" class="hier-card__toggle">
             <strong>Create New Feature</strong>
           </button>
         </header>
-        <div id="createFeatureCardContent" class="hier-card__content">
+        <div id="createFeatureCardContent" class="hier-card__content hidden">
           <label for="featureNameInput">Feature Name</label>
           <input id="featureNameInput" type="text" placeholder="Feature name" />
           <label for="featureDescriptionInput">Feature Description</label>
@@ -100,6 +100,21 @@
         <input id="incompleteSearchInput" type="text" placeholder="Search features, epics, and stories..." />
         <button id="clearIncompleteSearchButton" class="secondary-button" type="button">Clear Search</button>
       </div>
+      <article class="hier-card">
+        <header class="hier-card__header">
+          <button id="featureQueueCardToggle" type="button" class="hier-card__toggle is-open">
+            <strong>Feature Queue</strong>
+          </button>
+        </header>
+        <div id="featureQueueCardContent" class="hier-card__content">
+          <p class="inline-hint">Add incomplete features to this queue, reorder them, and run automation top-to-bottom.</p>
+          <div id="featureQueueContainer" class="stack-gap"></div>
+          <div class="draft-actions">
+            <button id="runFeatureQueueButton" type="button">Complete Queue with Automation</button>
+            <button id="clearFeatureQueueButton" class="secondary-button" type="button">Clear Feature Queue</button>
+          </div>
+        </div>
+      </article>
       <div id="incompleteListContainer" class="hier-stack"></div>
     </section>
 

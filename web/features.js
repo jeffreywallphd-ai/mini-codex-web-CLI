@@ -13,6 +13,11 @@ const manifestJsonInput = document.getElementById("manifestJsonInput");
 const createManifestButton = document.getElementById("createManifestButton");
 const incompleteSearchInput = document.getElementById("incompleteSearchInput");
 const clearIncompleteSearchButton = document.getElementById("clearIncompleteSearchButton");
+const featureQueueCardToggle = document.getElementById("featureQueueCardToggle");
+const featureQueueCardContent = document.getElementById("featureQueueCardContent");
+const featureQueueContainer = document.getElementById("featureQueueContainer");
+const runFeatureQueueButton = document.getElementById("runFeatureQueueButton");
+const clearFeatureQueueButton = document.getElementById("clearFeatureQueueButton");
 const completeSearchInput = document.getElementById("completeSearchInput");
 const clearCompleteSearchButton = document.getElementById("clearCompleteSearchButton");
 const incompleteListContainer = document.getElementById("incompleteListContainer");
@@ -39,6 +44,10 @@ let automationContextBundleOptions = [];
 let loadAutomationContextBundlesRequestId = 0;
 const stopRunForIncompleteStoriesByFeatureId = new Map();
 const stopRunForIncompleteStoriesByEpicId = new Map();
+const featureAutomationQueue = [];
+let isFeatureQueueRunning = false;
+let activeFeatureQueueFeatureId = null;
+let isFeatureQueueAdvanceInFlight = false;
 let lastAutomationUiSignature = "";
 let lastScrolledActiveStoryId = null;
 
@@ -687,6 +696,28 @@ function getIncompleteStoryCountForFeature(feature) {
   ).eligibleStoryCount;
 }
 
+function createCardKey(level, id) {
+  return `${level}:${id}`;
+}
+
+function buildAutomationManagedCardKeySet(features = []) {
+  const keys = new Set();
+  for (const feature of Array.isArray(features) ? features : []) {
+    keys.add(createCardKey("feature", feature.id));
+    for (const epic of feature?.epics || []) {
+      keys.add(createCardKey("epic", epic.id));
+      for (const story of epic?.stories || []) {
+        keys.add(createCardKey("story", story.id));
+      }
+    }
+  }
+  return keys;
+}
+
+function findFeatureById(featureId) {
+  return allFeatures.find((feature) => Number(feature?.id) === Number(featureId)) || null;
+}
+
 function getAutomationEligibleStorySummary(stories = []) {
   const normalizedStories = Array.isArray(stories) ? stories : [];
   const eligibleStoryCount = normalizedStories.filter((story) => isStoryEligibleForAutomation(story)).length;
@@ -1267,6 +1298,80 @@ async function abortAutomationRun(automationRunId) {
   return result;
 }
 
+async function launchFeatureAutomationForFeature(feature, options = {}) {
+  const featureId = Number.parseInt(feature?.id, 10);
+  if (!Number.isInteger(featureId) || featureId <= 0) {
+    throw new Error("Feature automation requires a valid feature id.");
+  }
+
+  const isResumeEligible = Boolean(options.isResumeEligible) && parseRunId(feature?.feature_automation_run_id);
+  const stopOnIncompleteStory = Boolean(options.stopOnIncompleteStory);
+  const contextBundleId = Number.isInteger(options?.contextBundleId) && options.contextBundleId > 0
+    ? options.contextBundleId
+    : null;
+  const source = String(options.source || "").trim().toLowerCase();
+  const isActiveFeatureRun = Boolean(
+    globalAutomationLock?.isActive
+      && globalAutomationLock?.automationType === "feature"
+      && Number(globalAutomationLock?.targetId) === featureId
+  );
+
+  if (featureAutomationStartInFlight.has(featureId)) {
+    throw new Error("Feature automation start is already being requested for this feature.");
+  }
+
+  if (isAnyAutomationInFlight() && !isActiveFeatureRun) {
+    throw new Error("Automation is already running. Wait for completion before starting another run.");
+  }
+
+  if (isActiveFeatureRun) {
+    throw new Error("Feature automation is already running for this feature.");
+  }
+
+  openCards.add(`feature:${featureId}`);
+  featureAutomationStartInFlight.add(featureId);
+  renderFeatureLists();
+
+  try {
+    const result = isResumeEligible
+      ? await resumeAutomationRun(feature.feature_automation_run_id, {
+        contextBundleId
+      })
+      : await startFeatureAutomation(featureId, {
+        stopOnIncompleteStory,
+        contextBundleId
+      });
+    assertAutomationStartScope(result, {
+      automationType: "feature",
+      targetId: featureId
+    });
+    const runId = result?.automationRun?.id;
+    const totalStories = result?.queue?.totalStories;
+    const isResumeLaunch = String(result?.launchMode || "").toLowerCase() === "resume";
+    const queueCapSuffix = formatQueueCapSuffix(result?.queue);
+    createStatusBox.textContent = Number.isInteger(runId)
+      ? (isResumeLaunch
+        ? `Feature automation resumed for feature #${featureId} (run #${runId}, ${totalStories} remaining story(s) queued).${queueCapSuffix}`
+        : `Feature automation started for feature #${featureId} (run #${runId}, ${totalStories} story(s) queued).${queueCapSuffix}`)
+      : (isResumeLaunch
+        ? `Feature automation resumed for feature #${featureId}.${queueCapSuffix}`
+        : `Feature automation started for feature #${featureId}.${queueCapSuffix}`);
+    if (source === "feature_queue") {
+      createStatusBox.textContent = `Feature queue: ${createStatusBox.textContent}`;
+    }
+    await refreshAutomationState();
+    return result;
+  } catch (error) {
+    createStatusBox.textContent = isAutomationAlreadyRunningError(error)
+      ? `Automation is already running. ${error.message}`
+      : `Feature automation failed to start: ${error.message}`;
+    throw error;
+  } finally {
+    featureAutomationStartInFlight.delete(featureId);
+    renderFeatureLists();
+  }
+}
+
 function createFeatureAutomationUi(content, feature) {
   if (isFeatureComplete(feature)) {
     return;
@@ -1316,12 +1421,27 @@ function createFeatureAutomationUi(content, feature) {
   actionRow.className = "automation-action-row";
   actionRow.appendChild(button);
 
+  const queueToggleButton = document.createElement("button");
+  queueToggleButton.type = "button";
+  queueToggleButton.className = "secondary-button";
+  queueToggleButton.textContent = featureAutomationQueue.includes(feature.id)
+    ? "Remove from Feature Queue"
+    : "Add to Feature Queue";
+  queueToggleButton.disabled = isFeatureQueueRunning;
+  queueToggleButton.addEventListener("click", () => {
+    toggleFeatureInQueue(feature.id);
+  });
+  actionRow.appendChild(queueToggleButton);
+
   if (isActiveFeatureRun) {
     const abortButton = document.createElement("button");
     abortButton.type = "button";
     abortButton.className = "danger-button";
     abortButton.textContent = "Abort";
     abortButton.addEventListener("click", async () => {
+      clearFeatureAutomationQueue({
+        preserveStatusMessage: true
+      });
       const activeRunId = parseRunId(globalAutomationLock?.automationRunId || globalAutomationStatus?.automationRun?.id);
       if (!activeRunId) {
         createStatusBox.textContent = "Abort unavailable: active automation run id is missing.";
@@ -1366,59 +1486,14 @@ function createFeatureAutomationUi(content, feature) {
   content.appendChild(selectorWrap);
 
   button.addEventListener("click", async () => {
-    if (featureAutomationStartInFlight.has(feature.id)) {
-      createStatusBox.textContent = "Feature automation start is already being requested for this feature.";
-      return;
-    }
-
-    if (isAnyAutomationInFlight() && !isActiveFeatureRun) {
-      createStatusBox.textContent = "Automation is already running. Wait for completion before starting another run.";
-      return;
-    }
-
-    if (isActiveFeatureRun) {
-      createStatusBox.textContent = "Feature automation is already running for this feature.";
-      return;
-    }
-
-    openCards.add(`feature:${feature.id}`);
-    featureAutomationStartInFlight.add(feature.id);
-    renderFeatureLists();
-
     try {
       const selectedContextBundleId = parseSelectedContextBundleId(contextBundleSelect.value);
-      const result = isResumeEligible
-        ? await resumeAutomationRun(feature.feature_automation_run_id, {
-          contextBundleId: selectedContextBundleId
-        })
-        : await startFeatureAutomation(feature.id, {
-          stopOnIncompleteStory: stopOnIncompleteCheckbox.checked,
-          contextBundleId: selectedContextBundleId
-        });
-      assertAutomationStartScope(result, {
-        automationType: "feature",
-        targetId: feature.id
+      await launchFeatureAutomationForFeature(feature, {
+        isResumeEligible,
+        stopOnIncompleteStory: stopOnIncompleteCheckbox.checked,
+        contextBundleId: selectedContextBundleId
       });
-      const runId = result?.automationRun?.id;
-      const totalStories = result?.queue?.totalStories;
-      const isResumeLaunch = String(result?.launchMode || "").toLowerCase() === "resume";
-      const queueCapSuffix = formatQueueCapSuffix(result?.queue);
-      createStatusBox.textContent = Number.isInteger(runId)
-        ? (isResumeLaunch
-          ? `Feature automation resumed for feature #${feature.id} (run #${runId}, ${totalStories} remaining story(s) queued).${queueCapSuffix}`
-          : `Feature automation started for feature #${feature.id} (run #${runId}, ${totalStories} story(s) queued).${queueCapSuffix}`)
-        : (isResumeLaunch
-          ? `Feature automation resumed for feature #${feature.id}.${queueCapSuffix}`
-          : `Feature automation started for feature #${feature.id}.${queueCapSuffix}`);
-      await refreshAutomationState();
-    } catch (error) {
-      createStatusBox.textContent = isAutomationAlreadyRunningError(error)
-        ? `Automation is already running. ${error.message}`
-        : `Feature automation failed to start: ${error.message}`;
-    } finally {
-      featureAutomationStartInFlight.delete(feature.id);
-      renderFeatureLists();
-    }
+    } catch (_error) {}
   });
 
   content.appendChild(actionRow);
@@ -1481,6 +1556,9 @@ function createEpicAutomationUi(content, epic) {
     abortButton.className = "danger-button";
     abortButton.textContent = "Abort";
     abortButton.addEventListener("click", async () => {
+      clearFeatureAutomationQueue({
+        preserveStatusMessage: true
+      });
       const activeRunId = parseRunId(globalAutomationLock?.automationRunId || globalAutomationStatus?.automationRun?.id);
       if (!activeRunId) {
         createStatusBox.textContent = "Abort unavailable: active automation run id is missing.";
@@ -1625,6 +1703,9 @@ function createStoryAutomationUi(content, story) {
     abortButton.className = "danger-button";
     abortButton.textContent = "Abort";
     abortButton.addEventListener("click", async () => {
+      clearFeatureAutomationQueue({
+        preserveStatusMessage: true
+      });
       const activeRunId = parseRunId(globalAutomationLock?.automationRunId || globalAutomationStatus?.automationRun?.id);
       if (!activeRunId) {
         createStatusBox.textContent = "Abort unavailable: active automation run id is missing.";
@@ -1865,42 +1946,65 @@ function getAutomationUiSignature() {
   });
 }
 
-function syncAutomationDrivenCardState() {
+function syncAutomationDrivenCardState(incompleteFeatures = []) {
+  const managedCardKeys = buildAutomationManagedCardKeySet(incompleteFeatures);
+  const isManagedCard = (cardKey) => managedCardKeys.has(cardKey);
   const activeRun = globalAutomationStatus?.automationRun || null;
   const activeStory = getActiveQueueStoryRuntimeContext();
+  const isRunActivelyRunning = Boolean(activeRun) && String(activeRun.status || "").toLowerCase() === "running";
 
-  if (activeRun && String(activeRun.status || "").toLowerCase() === "running") {
+  if (isRunActivelyRunning) {
     if (String(activeRun.automationType || "").toLowerCase() === "feature") {
-      openCards.add(`feature:${activeRun.targetId}`);
+      const featureCardKey = `feature:${activeRun.targetId}`;
+      if (isManagedCard(featureCardKey)) {
+        openCards.add(featureCardKey);
+      }
     }
     if (activeStory?.featureId) {
-      openCards.add(`feature:${activeStory.featureId}`);
+      const featureCardKey = `feature:${activeStory.featureId}`;
+      if (isManagedCard(featureCardKey)) {
+        openCards.add(featureCardKey);
+      }
     }
     if (activeStory?.epicId) {
-      openCards.add(`epic:${activeStory.epicId}`);
+      const epicCardKey = `epic:${activeStory.epicId}`;
+      if (isManagedCard(epicCardKey)) {
+        openCards.add(epicCardKey);
+      }
     }
     if (activeStory?.storyId) {
-      openCards.add(`story:${activeStory.storyId}`);
+      const storyCardKey = `story:${activeStory.storyId}`;
+      if (isManagedCard(storyCardKey)) {
+        openCards.add(storyCardKey);
+      }
     }
-  }
-
-  const processedStoryIds = getLatestProcessedStoryIdsFromAutomation();
-  for (const storyId of processedStoryIds) {
-    openCards.delete(`story:${storyId}`);
-  }
-
-  for (const feature of allFeatures) {
-    for (const epic of feature?.epics || []) {
-      if (isEpicComplete(epic)) {
-        openCards.delete(`epic:${epic.id}`);
+  
+    const processedStoryIds = getLatestProcessedStoryIdsFromAutomation();
+    for (const storyId of processedStoryIds) {
+      const storyCardKey = `story:${storyId}`;
+      if (isManagedCard(storyCardKey)) {
+        openCards.delete(storyCardKey);
       }
     }
   }
 
-  if (activeRun && String(activeRun.status || "").toLowerCase() !== "running") {
+  if (activeRun) {
+    for (const feature of incompleteFeatures) {
+      for (const epic of feature?.epics || []) {
+        if (isEpicComplete(epic)) {
+          openCards.delete(`epic:${epic.id}`);
+        }
+      }
+    }
+  }
+
+  if (activeRun && !isRunActivelyRunning) {
     if (String(activeRun.automationType || "").toLowerCase() === "feature") {
-      openCards.delete(`feature:${activeRun.targetId}`);
-      removeFeatureDescendantOpenCards(activeRun.targetId);
+      const featureCardKey = `feature:${activeRun.targetId}`;
+      if (isManagedCard(featureCardKey)) {
+        openCards.delete(featureCardKey);
+        removeFeatureDescendantOpenCards(activeRun.targetId);
+      }
     }
   }
 }
@@ -1974,6 +2078,264 @@ function refreshActiveStoryRuntimeIndicators() {
   elapsedLine.textContent = `Time elapsed: ${formatElapsed(Date.now() - startedAtMs)}`;
 }
 
+function pruneFeatureAutomationQueue(incompleteFeatures = []) {
+  const allowedFeatureIds = new Set(
+    (Array.isArray(incompleteFeatures) ? incompleteFeatures : [])
+      .map((feature) => Number.parseInt(feature?.id, 10))
+      .filter((featureId) => Number.isInteger(featureId) && featureId > 0)
+  );
+
+  for (let index = featureAutomationQueue.length - 1; index >= 0; index -= 1) {
+    const featureId = Number.parseInt(featureAutomationQueue[index], 10);
+    if (!allowedFeatureIds.has(featureId)) {
+      featureAutomationQueue.splice(index, 1);
+    }
+  }
+
+  if (
+    Number.isInteger(activeFeatureQueueFeatureId)
+    && !allowedFeatureIds.has(activeFeatureQueueFeatureId)
+  ) {
+    activeFeatureQueueFeatureId = null;
+  }
+}
+
+function clearFeatureAutomationQueue({ preserveStatusMessage = false } = {}) {
+  featureAutomationQueue.length = 0;
+  isFeatureQueueRunning = false;
+  activeFeatureQueueFeatureId = null;
+  isFeatureQueueAdvanceInFlight = false;
+  if (!preserveStatusMessage) {
+    createStatusBox.textContent = "Feature queue cleared.";
+  }
+  renderFeatureLists();
+}
+
+function toggleFeatureInQueue(featureId) {
+  if (isFeatureQueueRunning) {
+    createStatusBox.textContent = "Feature queue is running. Stop or wait for completion before editing the queue.";
+    return;
+  }
+
+  const normalizedFeatureId = Number.parseInt(featureId, 10);
+  if (!Number.isInteger(normalizedFeatureId) || normalizedFeatureId <= 0) {
+    return;
+  }
+
+  const index = featureAutomationQueue.findIndex((id) => Number(id) === normalizedFeatureId);
+  if (index >= 0) {
+    featureAutomationQueue.splice(index, 1);
+  } else {
+    featureAutomationQueue.push(normalizedFeatureId);
+  }
+  renderFeatureLists();
+}
+
+function moveFeatureQueueItem(featureId, direction) {
+  if (isFeatureQueueRunning) {
+    createStatusBox.textContent = "Feature queue is running. Reordering is disabled until it finishes.";
+    return;
+  }
+
+  const normalizedFeatureId = Number.parseInt(featureId, 10);
+  if (!Number.isInteger(normalizedFeatureId) || normalizedFeatureId <= 0) {
+    return;
+  }
+  const fromIndex = featureAutomationQueue.findIndex((id) => Number(id) === normalizedFeatureId);
+  if (fromIndex < 0) {
+    return;
+  }
+
+  const toIndex = fromIndex + (direction < 0 ? -1 : 1);
+  if (toIndex < 0 || toIndex >= featureAutomationQueue.length) {
+    return;
+  }
+
+  const [item] = featureAutomationQueue.splice(fromIndex, 1);
+  featureAutomationQueue.splice(toIndex, 0, item);
+  renderFeatureLists();
+}
+
+async function maybeAdvanceFeatureQueue() {
+  if (!isFeatureQueueRunning || isFeatureQueueAdvanceInFlight) {
+    return;
+  }
+
+  if (isAnyAutomationInFlight()) {
+    return;
+  }
+
+  if (!featureAutomationQueue.length) {
+    isFeatureQueueRunning = false;
+    activeFeatureQueueFeatureId = null;
+    createStatusBox.textContent = "Feature queue completed.";
+    renderFeatureLists();
+    return;
+  }
+
+  const nextFeatureId = Number.parseInt(featureAutomationQueue[0], 10);
+  const nextFeature = findFeatureById(nextFeatureId);
+  if (!nextFeature || isFeatureComplete(nextFeature)) {
+    featureAutomationQueue.shift();
+    renderFeatureLists();
+    await maybeAdvanceFeatureQueue();
+    return;
+  }
+
+  isFeatureQueueAdvanceInFlight = true;
+  activeFeatureQueueFeatureId = nextFeatureId;
+  renderFeatureLists();
+
+  try {
+    const featureAutomationStatus = getFeatureAutomationStatus(nextFeature);
+    const isResumeEligible = (featureAutomationStatus === "stopped" || featureAutomationStatus === "failed")
+      && parseRunId(nextFeature?.feature_automation_run_id);
+    await launchFeatureAutomationForFeature(nextFeature, {
+      isResumeEligible,
+      stopOnIncompleteStory: Boolean(stopRunForIncompleteStoriesByFeatureId.get(nextFeatureId)),
+      source: "feature_queue"
+    });
+  } catch (error) {
+    isFeatureQueueRunning = false;
+    activeFeatureQueueFeatureId = null;
+  } finally {
+    isFeatureQueueAdvanceInFlight = false;
+    renderFeatureLists();
+  }
+}
+
+function reconcileFeatureQueueProgress() {
+  if (!isFeatureQueueRunning) {
+    return;
+  }
+
+  if (!featureAutomationQueue.length) {
+    isFeatureQueueRunning = false;
+    activeFeatureQueueFeatureId = null;
+    createStatusBox.textContent = "Feature queue completed.";
+    return;
+  }
+
+  const activeTargetId = Number.parseInt(globalAutomationLock?.targetId, 10);
+  const isFeatureRunActive = Boolean(
+    globalAutomationLock?.isActive
+      && String(globalAutomationLock?.automationType || "").toLowerCase() === "feature"
+      && Number.isInteger(activeTargetId)
+      && activeTargetId > 0
+  );
+
+  if (isFeatureRunActive && Number.isInteger(activeFeatureQueueFeatureId) && activeTargetId === activeFeatureQueueFeatureId) {
+    return;
+  }
+
+  if (Number.isInteger(activeFeatureQueueFeatureId) && !isFeatureRunActive) {
+    if (Number.parseInt(featureAutomationQueue[0], 10) === activeFeatureQueueFeatureId) {
+      featureAutomationQueue.shift();
+    }
+    activeFeatureQueueFeatureId = null;
+  }
+
+  if (!isAnyAutomationInFlight()) {
+    maybeAdvanceFeatureQueue().catch((error) => {
+      createStatusBox.textContent = `Feature queue failed: ${error.message}`;
+    });
+  }
+}
+
+async function runFeatureAutomationQueue() {
+  if (isFeatureQueueRunning) {
+    createStatusBox.textContent = "Feature queue is already running.";
+    return;
+  }
+
+  if (!featureAutomationQueue.length) {
+    createStatusBox.textContent = "Add at least one incomplete feature to the feature queue first.";
+    return;
+  }
+
+  if (isAnyAutomationInFlight()) {
+    createStatusBox.textContent = "Automation is already running. Wait for completion before starting the feature queue.";
+    return;
+  }
+
+  isFeatureQueueRunning = true;
+  activeFeatureQueueFeatureId = null;
+  createStatusBox.textContent = `Feature queue started with ${featureAutomationQueue.length} feature(s).`;
+  renderFeatureLists();
+  await maybeAdvanceFeatureQueue();
+}
+
+function renderFeatureQueue(incompleteFeatures = []) {
+  if (!featureQueueContainer || !runFeatureQueueButton || !clearFeatureQueueButton) {
+    return;
+  }
+
+  pruneFeatureAutomationQueue(incompleteFeatures);
+  reconcileFeatureQueueProgress();
+  featureQueueContainer.innerHTML = "";
+
+  if (!featureAutomationQueue.length) {
+    featureQueueContainer.appendChild(
+      createTextNode("p", "empty-card-copy", "No queued features. Use 'Add to Feature Queue' in a feature card.")
+    );
+  } else {
+    for (let index = 0; index < featureAutomationQueue.length; index += 1) {
+      const featureId = Number.parseInt(featureAutomationQueue[index], 10);
+      const feature = findFeatureById(featureId);
+      const row = document.createElement("div");
+      row.className = "feature-queue-item";
+
+      const label = document.createElement("p");
+      label.className = "feature-queue-item__label";
+      const prefix = Number.isInteger(activeFeatureQueueFeatureId) && activeFeatureQueueFeatureId === featureId && isFeatureQueueRunning
+        ? "Running"
+        : "Queued";
+      label.textContent = `${index + 1}. ${prefix}: ${feature?.name || `Feature #${featureId}`}`;
+      row.appendChild(label);
+
+      const controls = document.createElement("div");
+      controls.className = "feature-queue-item__controls";
+
+      const moveUpButton = document.createElement("button");
+      moveUpButton.type = "button";
+      moveUpButton.className = "secondary-button";
+      moveUpButton.textContent = "Move Up";
+      moveUpButton.disabled = isFeatureQueueRunning || index === 0;
+      moveUpButton.addEventListener("click", () => {
+        moveFeatureQueueItem(featureId, -1);
+      });
+      controls.appendChild(moveUpButton);
+
+      const moveDownButton = document.createElement("button");
+      moveDownButton.type = "button";
+      moveDownButton.className = "secondary-button";
+      moveDownButton.textContent = "Move Down";
+      moveDownButton.disabled = isFeatureQueueRunning || index >= featureAutomationQueue.length - 1;
+      moveDownButton.addEventListener("click", () => {
+        moveFeatureQueueItem(featureId, 1);
+      });
+      controls.appendChild(moveDownButton);
+
+      const removeButton = document.createElement("button");
+      removeButton.type = "button";
+      removeButton.className = "secondary-button";
+      removeButton.textContent = "Remove";
+      removeButton.disabled = isFeatureQueueRunning;
+      removeButton.addEventListener("click", () => {
+        toggleFeatureInQueue(featureId);
+      });
+      controls.appendChild(removeButton);
+
+      row.appendChild(controls);
+      featureQueueContainer.appendChild(row);
+    }
+  }
+
+  runFeatureQueueButton.disabled = isFeatureQueueRunning || !featureAutomationQueue.length || isAnyAutomationInFlight();
+  runFeatureQueueButton.textContent = isFeatureQueueRunning ? "Feature Queue Running..." : "Complete Queue with Automation";
+  clearFeatureQueueButton.disabled = !featureAutomationQueue.length;
+}
+
 function renderSection(container, features, options = {}) {
   container.innerHTML = "";
 
@@ -1988,7 +2350,6 @@ function renderSection(container, features, options = {}) {
 }
 
 function renderFeatureLists() {
-  syncAutomationDrivenCardState();
   const incompleteQuery = incompleteSearchInput.value.trim();
   const completeQuery = completeSearchInput.value.trim();
 
@@ -2000,6 +2361,8 @@ function renderFeatureLists() {
     .filter((feature) => isFeatureComplete(feature))
     .filter((feature) => matchesQuery(feature, completeQuery));
 
+  syncAutomationDrivenCardState(incompleteFeatures);
+  renderFeatureQueue(incompleteFeatures);
   renderSection(incompleteListContainer, incompleteFeatures, { showAutomation: true });
   renderSection(completeListContainer, completeFeatures, { showAutomation: false });
 
@@ -2381,6 +2744,7 @@ async function createFeaturesFromManifest() {
 
     allFeatures = Array.isArray(result.features) ? result.features : [];
     renderFeatureLists();
+    manifestJsonInput.value = "";
     createStatusBox.textContent = `Created ${result.createdFeatureCount} feature(s) from manifest.`;
   } catch (error) {
     createStatusBox.textContent = `Manifest create failed: ${error.message}`;
@@ -2409,6 +2773,14 @@ addEpicButton.addEventListener("click", () => {
 
 saveFeatureButton.addEventListener("click", saveFeatureTree);
 createManifestButton.addEventListener("click", createFeaturesFromManifest);
+runFeatureQueueButton.addEventListener("click", () => {
+  runFeatureAutomationQueue().catch((error) => {
+    createStatusBox.textContent = `Feature queue failed to start: ${error.message}`;
+  });
+});
+clearFeatureQueueButton.addEventListener("click", () => {
+  clearFeatureAutomationQueue();
+});
 incompleteSearchInput.addEventListener("input", renderFeatureLists);
 completeSearchInput.addEventListener("input", renderFeatureLists);
 clearIncompleteSearchButton.addEventListener("click", () => {
@@ -2432,8 +2804,9 @@ setInterval(() => {
 
 (async () => {
   try {
-    wireStaticCardToggle(createFeatureCardToggle, createFeatureCardContent, { defaultOpen: true });
+    wireStaticCardToggle(createFeatureCardToggle, createFeatureCardContent, { defaultOpen: false });
     wireStaticCardToggle(manifestCardToggle, manifestCardContent, { defaultOpen: false });
+    wireStaticCardToggle(featureQueueCardToggle, featureQueueCardContent, { defaultOpen: true });
     automationScope = readScopeFromUrlOrState();
     syncScopeIntoEditorState(automationScope);
     hydrateAutomationStatusFromPersistence();

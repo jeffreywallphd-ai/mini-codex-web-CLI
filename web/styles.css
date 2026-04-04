@@ -702,6 +702,26 @@ details pre {
   margin-bottom: 0;
 }
 
+.feature-queue-item {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel-alt);
+  padding: 10px;
+}
+
+.feature-queue-item__label {
+  margin: 0 0 8px;
+}
+
+.feature-queue-item__controls {
+  display: flex;
+  gap: 8px;
+}
+
+.feature-queue-item__controls button {
+  width: auto;
+}
+
 .bundle-parts-section {
   border-top: 1px solid var(--border);
   margin-top: 12px;
