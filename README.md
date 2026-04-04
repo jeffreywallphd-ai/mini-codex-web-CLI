@@ -144,6 +144,7 @@ Context bundles are persisted with a parent-child data model in SQLite:
 - Ordering is deterministic and explicit (`position`) rather than inferred from creation order.
 - Bundle and part CRUD persistence is implemented in `server/db.js` with migration-backed schema evolution (no reset required).
 - Bundle metadata authoring UI is available at `/context-bundles.html` and supports create/edit/delete with metadata display for `intended_use`, `tags`, `project_name`, `summary`, and `updated_at`.
+- The index page includes a **Manage Context Bundles** navigation action that routes to `/context-bundles.html`, making it the central bundle authoring/management page.
 - Context bundle API endpoints:
   - `GET /api/context-bundles` (supports `includeParts=false`)
   - `POST /api/context-bundles`
