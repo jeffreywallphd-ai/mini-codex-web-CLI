@@ -1,6 +1,10 @@
 const fs = require("fs");
 const path = require("path");
 const sqlite3 = require("sqlite3").verbose();
+const {
+  normalizeContextBundlePartType,
+  getContextBundlePartTypeLabel
+} = require("./contextBundlePartTypes");
 
 const dataDir = path.resolve(__dirname, "../data");
 fs.mkdirSync(dataDir, { recursive: true });
@@ -665,6 +669,17 @@ function normalizePositiveInteger(value, fieldName) {
   return parsed;
 }
 
+function decorateContextBundlePart(part) {
+  if (!part || typeof part !== "object") {
+    return part;
+  }
+
+  return {
+    ...part,
+    part_type_label: getContextBundlePartTypeLabel(part.part_type)
+  };
+}
+
 async function createContextBundle(input = {}) {
   await dbReady;
 
@@ -798,7 +813,7 @@ async function getContextBundles(options = {}) {
   const partsByBundleId = new Map();
   for (const part of parts) {
     const existing = partsByBundleId.get(part.bundle_id) || [];
-    existing.push(part);
+    existing.push(decorateContextBundlePart(part));
     partsByBundleId.set(part.bundle_id, existing);
   }
 
@@ -896,7 +911,10 @@ async function createContextBundlePart(input = {}) {
   await dbReady;
 
   const bundleId = normalizePositiveInteger(input.bundleId, "Context bundle id");
-  const partType = String(input.partType || input.type || "").trim().toLowerCase();
+  const partType = normalizeContextBundlePartType(
+    input.partType || input.type,
+    "Context bundle part type"
+  );
   const title = String(input.title || "").trim();
   const content = typeof input.content === "string"
     ? input.content
@@ -916,10 +934,6 @@ async function createContextBundlePart(input = {}) {
     : 1;
   const tokenEstimate = normalizeNullableInteger(input.tokenEstimate, "Part token estimate");
   const isActive = normalizeNullableFlag(input.isActive, "Part active flag");
-
-  if (!partType) {
-    throw new Error("Context bundle part type is required.");
-  }
 
   if (!title) {
     throw new Error("Context bundle part title is required.");
@@ -981,7 +995,7 @@ async function getContextBundlePartById(id) {
     return null;
   }
 
-  return get(
+  const part = await get(
     `
       SELECT
         id,
@@ -1003,6 +1017,8 @@ async function getContextBundlePartById(id) {
     `,
     [partId]
   );
+
+  return decorateContextBundlePart(part);
 }
 
 async function getContextBundlePartsByBundleId(bundleId) {
@@ -1013,7 +1029,7 @@ async function getContextBundlePartsByBundleId(bundleId) {
     return [];
   }
 
-  return all(
+  const parts = await all(
     `
       SELECT
         id,
@@ -1036,6 +1052,8 @@ async function getContextBundlePartsByBundleId(bundleId) {
     `,
     [normalizedBundleId]
   );
+
+  return parts.map((part) => decorateContextBundlePart(part));
 }
 
 async function updateContextBundlePart(id, updates = {}) {
@@ -1047,10 +1065,10 @@ async function updateContextBundlePart(id, updates = {}) {
 
   if (Object.prototype.hasOwnProperty.call(updates, "partType")
     || Object.prototype.hasOwnProperty.call(updates, "type")) {
-    const partType = String(updates.partType || updates.type || "").trim().toLowerCase();
-    if (!partType) {
-      throw new Error("Context bundle part type is required.");
-    }
+    const partType = normalizeContextBundlePartType(
+      updates.partType || updates.type,
+      "Context bundle part type"
+    );
     clauses.push("part_type = ?");
     params.push(partType);
   }
