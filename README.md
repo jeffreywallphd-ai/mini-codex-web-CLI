@@ -276,6 +276,7 @@ Feature Management UI integration:
 - incomplete story cards surface a **Complete with Automation** button
 - the story button starts automation via `POST /api/automation/start/story/:storyId`
 - story-card automation startup validates that exactly one story is queued for the selected story target
+- story cards include a compact automation status summary badge using the same state model (`not_started`, `running`, `completed`, `stopped`, `failed`) with backend-driven fallback to `not_started` when status data is missing
 
 Automation status response (`200 OK`) includes polling-friendly state:
 

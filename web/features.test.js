@@ -84,5 +84,14 @@ test("story card automation UI stays lightweight without story-level stop-on-inc
   const source = readFeaturesScript();
 
   assert.match(source, /function createStoryAutomationUi\(content,\s*story\)/);
+  assert.match(source, /function createStoryAutomationStatusSummary\(content,\s*story\)/);
+  assert.match(source, /function getStoryAutomationStatus\(story\)/);
+  assert.match(source, /if \(rawStatus === "running"\) return "running";/);
+  assert.match(source, /if \(rawStatus === "completed"\) return "completed";/);
+  assert.match(source, /if \(rawStatus === "stopped"\) return "stopped";/);
+  assert.match(source, /if \(rawStatus === "failed"\) return "failed";/);
+  assert.match(source, /createStoryAutomationStatusSummary\(content,\s*story\);/);
+  assert.match(source, /className = `automation-status-pill automation-status-pill--\$\{status\}`/);
+  assert.match(source, /return "not_started";/);
   assert.doesNotMatch(source, /Stop Merge if Story Implementation is Incomplete/);
 });
