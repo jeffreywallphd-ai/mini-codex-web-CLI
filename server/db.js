@@ -767,6 +767,11 @@ function decorateContextBundlePart(part) {
   };
 }
 
+function buildCopiedBundleTitle(title) {
+  const baseTitle = String(title || "").trim() || "Untitled Bundle";
+  return `${baseTitle} (Copy)`;
+}
+
 async function createContextBundle(input = {}) {
   await dbReady;
 
@@ -1030,6 +1035,104 @@ async function deleteContextBundleById(id) {
     `,
     [bundleId]
   );
+}
+
+async function duplicateContextBundleById(id) {
+  await dbReady;
+
+  const bundleId = Number.parseInt(id, 10);
+  if (!Number.isInteger(bundleId) || bundleId <= 0) {
+    return null;
+  }
+
+  const sourceBundle = await getContextBundleById(bundleId);
+  if (!sourceBundle) {
+    return null;
+  }
+
+  const sourceParts = [...(Array.isArray(sourceBundle.parts) ? sourceBundle.parts : [])]
+    .sort((left, right) => {
+      const positionDelta = Number(left.position) - Number(right.position);
+      if (positionDelta !== 0) return positionDelta;
+      return Number(left.id) - Number(right.id);
+    });
+
+  await run("BEGIN TRANSACTION");
+  try {
+    const duplicatedBundleId = await runWithLastId(
+      `
+        INSERT INTO context_bundles
+        (
+          title,
+          description,
+          status,
+          intended_use,
+          tags,
+          project_name,
+          summary,
+          token_estimate,
+          is_active,
+          last_used_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `,
+      [
+        buildCopiedBundleTitle(sourceBundle.title),
+        sourceBundle.description || "",
+        sourceBundle.status || "draft",
+        normalizeNullableText(sourceBundle.intended_use),
+        normalizeBundleTags(sourceBundle.tags),
+        normalizeNullableText(sourceBundle.project_name),
+        normalizeNullableText(sourceBundle.summary),
+        normalizeNullableInteger(sourceBundle.token_estimate, "Bundle token estimate"),
+        normalizeNullableFlag(sourceBundle.is_active, "Bundle active flag"),
+        typeof sourceBundle.last_used_at === "string" && sourceBundle.last_used_at.trim()
+          ? sourceBundle.last_used_at.trim()
+          : null
+      ]
+    );
+
+    for (const part of sourceParts) {
+      await runWithLastId(
+        `
+          INSERT INTO context_bundle_parts
+          (
+            bundle_id,
+            part_type,
+            title,
+            content,
+            instructions,
+            notes,
+            position,
+            include_in_compiled,
+            include_in_preview,
+            token_estimate,
+            is_active
+          )
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `,
+        [
+          duplicatedBundleId,
+          part.part_type,
+          part.title,
+          part.content || "",
+          typeof part.instructions === "string" && part.instructions.trim() ? part.instructions : null,
+          typeof part.notes === "string" && part.notes.trim() ? part.notes : null,
+          part.position,
+          Number(part.include_in_compiled) === 0 ? 0 : 1,
+          Number(part.include_in_preview) === 0 ? 0 : 1,
+          normalizeNullableInteger(part.token_estimate, "Part token estimate"),
+          normalizeNullableFlag(part.is_active, "Part active flag")
+        ]
+      );
+    }
+
+    await run("COMMIT");
+    return getContextBundleById(duplicatedBundleId);
+  } catch (error) {
+    await run("ROLLBACK");
+    throw error;
+  }
 }
 
 async function createContextBundlePart(input = {}) {
@@ -2611,6 +2714,7 @@ module.exports = {
   getContextBundles,
   updateContextBundle,
   deleteContextBundleById,
+  duplicateContextBundleById,
   createContextBundlePart,
   getContextBundlePartById,
   getContextBundlePartsByBundleId,

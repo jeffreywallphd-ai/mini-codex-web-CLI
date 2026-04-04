@@ -16,6 +16,7 @@ const {
   getContextBundles,
   updateContextBundle,
   deleteContextBundleById,
+  duplicateContextBundleById,
   createContextBundlePart,
   getContextBundlePartById,
   getContextBundlePartsByBundleId,
@@ -1452,6 +1453,70 @@ test("context bundles support multiple bundles with deterministic ordered parts"
     for (const bundleId of createdBundleIds) {
       await cleanupContextBundle(bundleId);
     }
+  }
+});
+
+test("context bundle duplication clones metadata and parts without relationship corruption", async () => {
+  await dbReady;
+
+  let sourceBundleId = null;
+  let duplicateBundleId = null;
+
+  try {
+    const sourceBundle = await createContextBundle({
+      title: `Bundle Duplicate Source ${Date.now()}`,
+      description: "Source description",
+      status: "active",
+      intendedUse: "story_implementation",
+      tags: ["duplicate", "clone"],
+      projectName: "bundle-dup-project",
+      summary: "Source summary"
+    });
+    sourceBundleId = sourceBundle.id;
+
+    await createContextBundlePart({
+      bundleId: sourceBundleId,
+      partType: "repository_context",
+      title: "Repository Baseline",
+      content: "Reference architecture snapshot.",
+      position: 1,
+      includeInCompiled: true,
+      includeInPreview: true
+    });
+    await createContextBundlePart({
+      bundleId: sourceBundleId,
+      partType: "implementation_constraints",
+      title: "Guardrails",
+      content: "Keep scope constrained.",
+      position: 2,
+      includeInCompiled: false,
+      includeInPreview: true
+    });
+
+    const duplicated = await duplicateContextBundleById(sourceBundleId);
+    assert.ok(duplicated);
+    duplicateBundleId = duplicated.id;
+
+    assert.notEqual(duplicated.id, sourceBundleId);
+    assert.match(duplicated.title, /\(Copy\)$/);
+    assert.equal(duplicated.description, "Source description");
+    assert.equal(duplicated.status, "active");
+    assert.equal(duplicated.intended_use, "story_implementation");
+    assert.deepEqual(duplicated.tags, ["duplicate", "clone"]);
+    assert.equal(duplicated.project_name, "bundle-dup-project");
+    assert.equal(duplicated.summary, "Source summary");
+    assert.equal(duplicated.parts.length, 2);
+    assert.deepEqual(duplicated.parts.map((part) => part.position), [1, 2]);
+    assert.deepEqual(duplicated.parts.map((part) => part.bundle_id), [duplicated.id, duplicated.id]);
+    assert.notEqual(duplicated.parts[0].id, duplicated.parts[1].id);
+
+    const sourceReloaded = await getContextBundleById(sourceBundleId);
+    assert.equal(sourceReloaded.parts.length, 2);
+    assert.deepEqual(sourceReloaded.parts.map((part) => part.bundle_id), [sourceBundleId, sourceBundleId]);
+    assert.deepEqual(sourceReloaded.parts.map((part) => part.position), [1, 2]);
+  } finally {
+    await cleanupContextBundle(duplicateBundleId);
+    await cleanupContextBundle(sourceBundleId);
   }
 });
 

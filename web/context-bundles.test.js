@@ -60,6 +60,18 @@ test("context bundles authoring UI renders metadata fields including freshness i
   assert.match(source, /Summary:\s*\$\{formatMetadataValue\(bundle\.summary\)\}/);
 });
 
+test("context bundles authoring UI exposes bundle maintenance actions in list cards", () => {
+  const source = readScript();
+
+  assert.match(source, /editButton\.textContent = "Edit Bundle"/);
+  assert.match(source, /duplicateButton\.textContent = "Duplicate Bundle"/);
+  assert.match(source, /deleteButton\.textContent = "Delete Bundle"/);
+  assert.match(source, /fetch\(`\/api\/context-bundles\/\$\{encodeURIComponent\(String\(bundleId\)\)\}\/duplicate`,\s*\{\s*method:\s*"POST"/m);
+  assert.match(source, /window\.confirm\(`Delete \$\{label\}\? This permanently removes the bundle and all of its parts\.`\)/);
+  assert.match(source, /await deleteBundle\(bundle\.id,\s*bundle\.title\)/);
+  assert.match(source, /await deleteBundle\(selectedBundleId,\s*bundleTitleInput\.value\)/);
+});
+
 test("index page includes navigation to context bundles page", () => {
   const source = readHtml(INDEX_HTML_PATH);
 

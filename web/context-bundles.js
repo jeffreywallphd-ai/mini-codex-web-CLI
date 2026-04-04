@@ -82,6 +82,14 @@ function setStatus(message) {
   bundleStatusBox.textContent = message;
 }
 
+function confirmBundleDelete(bundleId, bundleTitle) {
+  const label = String(bundleTitle || "").trim() || `bundle #${bundleId}`;
+  if (typeof window !== "undefined" && typeof window.confirm === "function") {
+    return window.confirm(`Delete ${label}? This permanently removes the bundle and all of its parts.`);
+  }
+  return true;
+}
+
 function clearValidation() {
   bundleValidationBox.textContent = "";
   bundleValidationBox.classList.add("hidden");
@@ -214,7 +222,25 @@ function renderBundles() {
       }
     };
 
+    const duplicateButton = document.createElement("button");
+    duplicateButton.type = "button";
+    duplicateButton.className = "secondary-button";
+    duplicateButton.textContent = "Duplicate Bundle";
+    duplicateButton.onclick = async () => {
+      await duplicateBundle(bundle.id);
+    };
+
+    const deleteButton = document.createElement("button");
+    deleteButton.type = "button";
+    deleteButton.className = "danger-button";
+    deleteButton.textContent = "Delete Bundle";
+    deleteButton.onclick = async () => {
+      await deleteBundle(bundle.id, bundle.title);
+    };
+
     actions.appendChild(editButton);
+    actions.appendChild(duplicateButton);
+    actions.appendChild(deleteButton);
     content.appendChild(heading);
     content.appendChild(statusRow);
     content.appendChild(descriptionRow);
@@ -394,6 +420,56 @@ async function selectBundleForEditing(bundleId) {
   setBundleForm(result);
   bundleParts = sortedParts(Array.isArray(result.parts) ? result.parts : []);
   renderBundleParts();
+}
+
+async function duplicateBundle(bundleId) {
+  try {
+    clearValidation();
+    const response = await fetch(`/api/context-bundles/${encodeURIComponent(String(bundleId))}/duplicate`, {
+      method: "POST"
+    });
+    const result = await parseJsonResponse(response);
+    if (!response.ok) {
+      throw new Error(result?.error || "Failed to duplicate bundle.");
+    }
+
+    await loadBundles();
+    const duplicatedBundle = bundles.find((bundle) => bundle.id === result.id);
+    if (duplicatedBundle) {
+      await selectBundleForEditing(duplicatedBundle.id);
+    }
+    setStatus(`Duplicated bundle #${bundleId} as #${result.id}.`);
+  } catch (error) {
+    setValidation(error.message);
+    setStatus(`Duplicate failed: ${error.message}`);
+  }
+}
+
+async function deleteBundle(bundleId, bundleTitle) {
+  try {
+    if (!confirmBundleDelete(bundleId, bundleTitle)) {
+      setStatus("Delete cancelled.");
+      return;
+    }
+
+    clearValidation();
+    const response = await fetch(`/api/context-bundles/${encodeURIComponent(String(bundleId))}`, {
+      method: "DELETE"
+    });
+    const result = await parseJsonResponse(response);
+    if (!response.ok) {
+      throw new Error(result?.error || "Failed to delete bundle.");
+    }
+
+    if (selectedBundleId === bundleId) {
+      clearBundleForm();
+    }
+    await loadBundles();
+    setStatus(`Deleted bundle #${bundleId}.`);
+  } catch (error) {
+    setValidation(error.message);
+    setStatus(`Delete failed: ${error.message}`);
+  }
 }
 
 async function addBundlePart() {
@@ -595,7 +671,12 @@ updateBundleButton.addEventListener("click", async () => {
     }
 
     await loadBundles();
-    await selectBundleForEditing(result.id);
+    const refreshedBundle = bundles.find((bundle) => bundle.id === result.id);
+    if (refreshedBundle) {
+      await selectBundleForEditing(refreshedBundle.id);
+    } else {
+      clearBundleForm();
+    }
     setStatus(`Updated bundle #${result.id}.`);
   } catch (error) {
     setValidation(error.message);
@@ -609,23 +690,7 @@ deleteBundleButton.addEventListener("click", async () => {
     return;
   }
 
-  try {
-    const response = await fetch(`/api/context-bundles/${encodeURIComponent(String(selectedBundleId))}`, {
-      method: "DELETE"
-    });
-    const result = await parseJsonResponse(response);
-    if (!response.ok) {
-      throw new Error(result?.error || "Failed to delete bundle.");
-    }
-
-    clearValidation();
-    setStatus(`Deleted bundle #${selectedBundleId}.`);
-    clearBundleForm();
-    await loadBundles();
-  } catch (error) {
-    setValidation(error.message);
-    setStatus(`Delete failed: ${error.message}`);
-  }
+  await deleteBundle(selectedBundleId, bundleTitleInput.value);
 });
 
 clearBundleFormButton.addEventListener("click", () => {

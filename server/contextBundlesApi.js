@@ -31,6 +31,7 @@ function createContextBundlesRouter(deps = {}) {
     getContextBundles,
     updateContextBundle,
     deleteContextBundleById,
+    duplicateContextBundleById,
     createContextBundlePart,
     getContextBundlePartById,
     getContextBundlePartsByBundleId,
@@ -43,6 +44,7 @@ function createContextBundlesRouter(deps = {}) {
   if (typeof getContextBundles !== "function") throw new Error("getContextBundles dependency is required.");
   if (typeof updateContextBundle !== "function") throw new Error("updateContextBundle dependency is required.");
   if (typeof deleteContextBundleById !== "function") throw new Error("deleteContextBundleById dependency is required.");
+  if (typeof duplicateContextBundleById !== "function") throw new Error("duplicateContextBundleById dependency is required.");
   if (typeof createContextBundlePart !== "function") throw new Error("createContextBundlePart dependency is required.");
   if (typeof getContextBundlePartById !== "function") throw new Error("getContextBundlePartById dependency is required.");
   if (typeof getContextBundlePartsByBundleId !== "function") throw new Error("getContextBundlePartsByBundleId dependency is required.");
@@ -217,6 +219,23 @@ function createContextBundlesRouter(deps = {}) {
       return res.json({ deleted: true, id: bundleId });
     } catch (error) {
       return res.status(500).json({ error: error?.message || "Failed to delete context bundle." });
+    }
+  });
+
+  router.post("/:bundleId/duplicate", async (req, res) => {
+    const bundleId = parsePositiveId(req.params?.bundleId);
+    if (!bundleId) {
+      return res.status(400).json({ error: "Invalid context bundle id." });
+    }
+
+    try {
+      const duplicatedBundle = await duplicateContextBundleById(bundleId);
+      if (!duplicatedBundle) {
+        return res.status(404).json({ error: "Context bundle not found." });
+      }
+      return res.status(201).json(duplicatedBundle);
+    } catch (error) {
+      return res.status(500).json({ error: error?.message || "Failed to duplicate context bundle." });
     }
   });
 
