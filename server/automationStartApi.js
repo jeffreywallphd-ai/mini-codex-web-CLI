@@ -108,6 +108,11 @@ function parseOptionalPositiveId(value) {
   };
 }
 
+function normalizePersistedContextBundleId(value) {
+  const parsed = parseStrictPositiveInteger(value);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : null;
+}
+
 function parseContextBundleSelection(body = {}) {
   const pluralContextBundleFields = ["contextBundleIds", "context_bundle_ids", "contextBundles"];
   for (const fieldName of pluralContextBundleFields) {
@@ -619,6 +624,9 @@ function createAutomationStartRouter(deps = {}) {
     initialPosition = null,
     contextBundleId = null
   }) {
+    const persistedContextBundleId = normalizePersistedContextBundleId(automationRun?.context_bundle_id);
+    const effectiveContextBundleId = persistedContextBundleId
+      ?? normalizePersistedContextBundleId(contextBundleId);
     const normalizedTotalStoriesInRunQueue = Number.isInteger(totalStoriesInRunQueue) && totalStoriesInRunQueue > 0
       ? totalStoriesInRunQueue
       : stories.length;
@@ -656,7 +664,7 @@ function createAutomationStartRouter(deps = {}) {
             projectName,
             baseBranch,
             executionMode: "write",
-            contextBundleId,
+            contextBundleId: effectiveContextBundleId,
             automationType,
             targetId,
             automationRunId: automationRun.id,
@@ -1077,6 +1085,7 @@ function createAutomationStartRouter(deps = {}) {
         stopReason: null,
         contextBundleId: contextBundleSelection.contextBundleId
       });
+      const contextBundleIdForAutomation = normalizePersistedContextBundleId(automationRun?.context_bundle_id);
       await recordAutomationRunQueueItems({
         automationRunId: automationRun.id,
         stories: queuedStories
@@ -1104,7 +1113,7 @@ function createAutomationStartRouter(deps = {}) {
         stories: queuedStories,
         totalStoriesInRunQueue: queuedStories.length,
         initialPosition: 1,
-        contextBundleId: contextBundleSelection.contextBundleId
+        contextBundleId: contextBundleIdForAutomation
       });
       return res.status(202).json(
         toLaunchAcceptedResponse({
@@ -1275,7 +1284,7 @@ function createAutomationStartRouter(deps = {}) {
       const resumedAutomationRun = await updateAutomationRunMetadata(automationRun.id, resumeUpdates);
       const contextBundleIdForResume = contextBundleSelection.provided
         ? contextBundleSelection.contextBundleId
-        : (resumedAutomationRun.context_bundle_id ?? null);
+        : normalizePersistedContextBundleId(resumedAutomationRun.context_bundle_id);
 
       activateAutomationLock({
         runningProjects,
