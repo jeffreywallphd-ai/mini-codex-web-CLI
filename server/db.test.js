@@ -717,3 +717,217 @@ test("feature tree includes latest feature automation status summary with safe f
     await cleanupFeatureScope(scope);
   }
 });
+
+test("feature tree includes latest epic and story automation status summaries with safe fallback", async () => {
+  await dbReady;
+
+  const stamp = Date.now();
+  const scope = {
+    projectName: `db-epic-story-status-${stamp}`,
+    baseBranch: "main"
+  };
+  const unrelatedScope = {
+    projectName: `db-epic-story-status-unrelated-${stamp}`,
+    baseBranch: "main"
+  };
+
+  const automationRunIds = [];
+
+  try {
+    await createFeatureTree(
+      {
+        name: `Feature Epic/Story Status ${stamp}`,
+        description: "status fixture",
+        epics: [
+          { name: `Epic Running ${stamp}`, description: "", stories: [{ name: `Story Running ${stamp}`, description: "" }] },
+          { name: `Epic Completed ${stamp}`, description: "", stories: [{ name: `Story Completed ${stamp}`, description: "" }] },
+          { name: `Epic Stopped ${stamp}`, description: "", stories: [{ name: `Story Stopped ${stamp}`, description: "" }] },
+          { name: `Epic Failed ${stamp}`, description: "", stories: [{ name: `Story Failed ${stamp}`, description: "" }] },
+          { name: `Epic Not Started ${stamp}`, description: "", stories: [{ name: `Story Not Started ${stamp}`, description: "" }] }
+        ]
+      },
+      scope
+    );
+
+    const seededFeatures = await getFeaturesTree(scope);
+    const firstFeature = seededFeatures[0];
+    const epicByName = new Map(firstFeature.epics.map((epic) => [epic.name, epic]));
+
+    const epicRunning = epicByName.get(`Epic Running ${stamp}`);
+    const epicCompleted = epicByName.get(`Epic Completed ${stamp}`);
+    const epicStopped = epicByName.get(`Epic Stopped ${stamp}`);
+    const epicFailed = epicByName.get(`Epic Failed ${stamp}`);
+    const epicNotStarted = epicByName.get(`Epic Not Started ${stamp}`);
+
+    assert.ok(epicRunning);
+    assert.ok(epicCompleted);
+    assert.ok(epicStopped);
+    assert.ok(epicFailed);
+    assert.ok(epicNotStarted);
+
+    const storyRunning = epicRunning.stories[0];
+    const storyCompleted = epicCompleted.stories[0];
+    const storyStopped = epicStopped.stories[0];
+    const storyFailed = epicFailed.stories[0];
+    const storyNotStarted = epicNotStarted.stories[0];
+
+    const epicRunningRun = await createAutomationRun({
+      automationType: "epic",
+      targetId: epicRunning.id,
+      projectName: scope.projectName,
+      baseBranch: scope.baseBranch,
+      stopFlag: false,
+      stopOnIncomplete: false,
+      automationStatus: "running",
+      currentPosition: 1,
+      stopReason: null
+    });
+    automationRunIds.push(epicRunningRun.id);
+
+    const epicCompletedRun = await createAutomationRun({
+      automationType: "epic",
+      targetId: epicCompleted.id,
+      projectName: scope.projectName,
+      baseBranch: scope.baseBranch,
+      stopFlag: false,
+      stopOnIncomplete: false,
+      automationStatus: "completed",
+      currentPosition: 1,
+      stopReason: "all_work_complete"
+    });
+    automationRunIds.push(epicCompletedRun.id);
+
+    const epicStoppedRun = await createAutomationRun({
+      automationType: "epic",
+      targetId: epicStopped.id,
+      projectName: scope.projectName,
+      baseBranch: scope.baseBranch,
+      stopFlag: true,
+      stopOnIncomplete: true,
+      automationStatus: "stopped",
+      currentPosition: 1,
+      stopReason: "story_incomplete"
+    });
+    automationRunIds.push(epicStoppedRun.id);
+
+    const epicFailedRun = await createAutomationRun({
+      automationType: "epic",
+      targetId: epicFailed.id,
+      projectName: scope.projectName,
+      baseBranch: scope.baseBranch,
+      stopFlag: true,
+      stopOnIncomplete: false,
+      automationStatus: "failed",
+      currentPosition: 1,
+      stopReason: "execution_failed"
+    });
+    automationRunIds.push(epicFailedRun.id);
+
+    const storyRunningRun = await createAutomationRun({
+      automationType: "story",
+      targetId: storyRunning.id,
+      projectName: scope.projectName,
+      baseBranch: scope.baseBranch,
+      stopFlag: false,
+      stopOnIncomplete: false,
+      automationStatus: "running",
+      currentPosition: 1,
+      stopReason: null
+    });
+    automationRunIds.push(storyRunningRun.id);
+
+    const storyCompletedRun = await createAutomationRun({
+      automationType: "story",
+      targetId: storyCompleted.id,
+      projectName: scope.projectName,
+      baseBranch: scope.baseBranch,
+      stopFlag: false,
+      stopOnIncomplete: false,
+      automationStatus: "completed",
+      currentPosition: 1,
+      stopReason: "all_work_complete"
+    });
+    automationRunIds.push(storyCompletedRun.id);
+
+    const storyStoppedRun = await createAutomationRun({
+      automationType: "story",
+      targetId: storyStopped.id,
+      projectName: scope.projectName,
+      baseBranch: scope.baseBranch,
+      stopFlag: true,
+      stopOnIncomplete: true,
+      automationStatus: "stopped",
+      currentPosition: 1,
+      stopReason: "story_incomplete"
+    });
+    automationRunIds.push(storyStoppedRun.id);
+
+    const storyFailedRun = await createAutomationRun({
+      automationType: "story",
+      targetId: storyFailed.id,
+      projectName: scope.projectName,
+      baseBranch: scope.baseBranch,
+      stopFlag: true,
+      stopOnIncomplete: false,
+      automationStatus: "failed",
+      currentPosition: 1,
+      stopReason: "execution_failed"
+    });
+    automationRunIds.push(storyFailedRun.id);
+
+    const unrelatedEpicRun = await createAutomationRun({
+      automationType: "epic",
+      targetId: epicCompleted.id,
+      projectName: unrelatedScope.projectName,
+      baseBranch: unrelatedScope.baseBranch,
+      stopFlag: false,
+      stopOnIncomplete: false,
+      automationStatus: "running",
+      currentPosition: 1,
+      stopReason: null
+    });
+    automationRunIds.push(unrelatedEpicRun.id);
+
+    const unrelatedStoryRun = await createAutomationRun({
+      automationType: "story",
+      targetId: storyCompleted.id,
+      projectName: unrelatedScope.projectName,
+      baseBranch: unrelatedScope.baseBranch,
+      stopFlag: false,
+      stopOnIncomplete: false,
+      automationStatus: "running",
+      currentPosition: 1,
+      stopReason: null
+    });
+    automationRunIds.push(unrelatedStoryRun.id);
+
+    const hydratedFeatures = await getFeaturesTree(scope);
+    const hydratedEpicsByName = new Map(hydratedFeatures[0].epics.map((epic) => [epic.name, epic]));
+
+    assert.equal(hydratedEpicsByName.get(`Epic Running ${stamp}`).epic_automation_status, "running");
+    assert.equal(hydratedEpicsByName.get(`Epic Completed ${stamp}`).epic_automation_status, "completed");
+    assert.equal(hydratedEpicsByName.get(`Epic Stopped ${stamp}`).epic_automation_status, "stopped");
+    assert.equal(hydratedEpicsByName.get(`Epic Failed ${stamp}`).epic_automation_status, "failed");
+    assert.equal(hydratedEpicsByName.get(`Epic Not Started ${stamp}`).epic_automation_status, "not_started");
+    assert.equal(hydratedEpicsByName.get(`Epic Completed ${stamp}`).epic_automation_run_id, epicCompletedRun.id);
+    assert.equal(hydratedEpicsByName.get(`Epic Completed ${stamp}`).epic_automation_stop_reason, "all_work_complete");
+
+    const storiesByName = new Map(
+      hydratedFeatures[0].epics
+        .flatMap((epic) => epic.stories || [])
+        .map((story) => [story.name, story])
+    );
+    assert.equal(storiesByName.get(`Story Running ${stamp}`).story_automation_status, "running");
+    assert.equal(storiesByName.get(`Story Completed ${stamp}`).story_automation_status, "completed");
+    assert.equal(storiesByName.get(`Story Stopped ${stamp}`).story_automation_status, "stopped");
+    assert.equal(storiesByName.get(`Story Failed ${stamp}`).story_automation_status, "failed");
+    assert.equal(storiesByName.get(`Story Not Started ${stamp}`).story_automation_status, "not_started");
+    assert.equal(storiesByName.get(`Story Completed ${stamp}`).story_automation_run_id, storyCompletedRun.id);
+    assert.equal(storiesByName.get(`Story Completed ${stamp}`).story_automation_stop_reason, "all_work_complete");
+  } finally {
+    for (const automationRunId of automationRunIds) {
+      await cleanupAutomationRun(automationRunId);
+    }
+    await cleanupFeatureScope(scope);
+  }
+});

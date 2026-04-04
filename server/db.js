@@ -14,7 +14,7 @@ const VALID_AUTOMATION_TYPES = new Set(["feature", "epic", "story"]);
 const VALID_AUTOMATION_STATUSES = new Set(["pending", "running", "completed", "failed", "stopped"]);
 const VALID_AUTOMATION_STORY_EXECUTION_STATUSES = new Set(["completed", "failed"]);
 const VALID_AUTOMATION_STORY_QUEUE_ACTIONS = new Set(["advanced", "stopped", "failed"]);
-const FEATURE_AUTOMATION_STATUS_FOR_SUMMARY = new Set(["running", "completed", "failed", "stopped"]);
+const AUTOMATION_STATUS_FOR_SUMMARY = new Set(["running", "completed", "failed", "stopped"]);
 
 function normalizeRunOrigin(runInput = {}) {
   const rawType = runInput.automationOriginType ?? runInput.originEntityType ?? null;
@@ -776,10 +776,18 @@ async function getFeaturesTree(scope = {}) {
   ]);
 
   const featureIds = features.map((feature) => feature.id).filter((id) => Number.isInteger(id) && id > 0);
+  const epicIds = epics.map((epic) => epic.id).filter((id) => Number.isInteger(id) && id > 0);
+  const storyIds = stories.map((story) => story.id).filter((id) => Number.isInteger(id) && id > 0);
   let latestFeatureAutomationByFeatureId = new Map();
+  let latestEpicAutomationByEpicId = new Map();
+  let latestStoryAutomationByStoryId = new Map();
 
-  if (featureIds.length > 0) {
-    const placeholders = featureIds.map(() => "?").join(", ");
+  async function getLatestAutomationByTargetId(automationType, targetIds) {
+    if (targetIds.length <= 0) {
+      return new Map();
+    }
+
+    const placeholders = targetIds.map(() => "?").join(", ");
     const automationRows = await all(
       `
         SELECT
@@ -790,7 +798,7 @@ async function getFeaturesTree(scope = {}) {
           created_at,
           updated_at
         FROM automation_runs
-        WHERE automation_type = 'feature'
+        WHERE automation_type = ?
           AND target_id IN (${placeholders})
           AND (
             (project_name = ? AND base_branch = ?)
@@ -798,30 +806,44 @@ async function getFeaturesTree(scope = {}) {
           )
         ORDER BY datetime(COALESCE(updated_at, created_at)) DESC, id DESC
       `,
-      [...featureIds, projectName, baseBranch]
+      [automationType, ...targetIds, projectName, baseBranch]
     );
 
-    latestFeatureAutomationByFeatureId = new Map();
+    const latestByTargetId = new Map();
     for (const row of automationRows) {
       const targetId = Number.parseInt(row?.target_id, 10);
       if (!Number.isInteger(targetId) || targetId <= 0) {
         continue;
       }
 
-      if (!latestFeatureAutomationByFeatureId.has(targetId)) {
+      if (!latestByTargetId.has(targetId)) {
         const rawStatus = String(row?.automation_status || "").trim().toLowerCase();
-        const normalizedStatus = FEATURE_AUTOMATION_STATUS_FOR_SUMMARY.has(rawStatus)
+        const normalizedStatus = AUTOMATION_STATUS_FOR_SUMMARY.has(rawStatus)
           ? rawStatus
           : "not_started";
 
-        latestFeatureAutomationByFeatureId.set(targetId, {
-          feature_automation_run_id: Number.parseInt(row?.id, 10) || null,
-          feature_automation_status: normalizedStatus,
-          feature_automation_stop_reason: row?.stop_reason || null,
-          feature_automation_updated_at: row?.updated_at || row?.created_at || null
+        latestByTargetId.set(targetId, {
+          automation_run_id: Number.parseInt(row?.id, 10) || null,
+          automation_status: normalizedStatus,
+          automation_stop_reason: row?.stop_reason || null,
+          automation_updated_at: row?.updated_at || row?.created_at || null
         });
       }
     }
+
+    return latestByTargetId;
+  }
+
+  if (featureIds.length > 0 || epicIds.length > 0 || storyIds.length > 0) {
+    [
+      latestFeatureAutomationByFeatureId,
+      latestEpicAutomationByEpicId,
+      latestStoryAutomationByStoryId
+    ] = await Promise.all([
+      getLatestAutomationByTargetId("feature", featureIds),
+      getLatestAutomationByTargetId("epic", epicIds),
+      getLatestAutomationByTargetId("story", storyIds)
+    ]);
   }
 
   const featuresById = new Map(features.map((feature) => {
@@ -838,7 +860,15 @@ async function getFeaturesTree(scope = {}) {
   const epicsById = new Map();
 
   for (const epic of epics) {
-    const hydratedEpic = { ...epic, stories: [] };
+    const latestEpicAutomation = latestEpicAutomationByEpicId.get(epic.id) || null;
+    const hydratedEpic = {
+      ...epic,
+      epic_automation_run_id: latestEpicAutomation?.automation_run_id ?? null,
+      epic_automation_status: latestEpicAutomation?.automation_status || "not_started",
+      epic_automation_stop_reason: latestEpicAutomation?.automation_stop_reason ?? null,
+      epic_automation_updated_at: latestEpicAutomation?.automation_updated_at ?? null,
+      stories: []
+    };
     epicsById.set(epic.id, hydratedEpic);
     const parentFeature = featuresById.get(epic.feature_id);
     if (parentFeature) {
@@ -849,6 +879,7 @@ async function getFeaturesTree(scope = {}) {
   for (const story of stories) {
     const parentEpic = epicsById.get(story.epic_id);
     if (!parentEpic) continue;
+    const latestStoryAutomation = latestStoryAutomationByStoryId.get(story.id) || null;
 
     const associatedRunId = story.linked_run_id || story.run_id || story.completion_run_id || null;
     const normalizedCompletionStatus = story.linked_run_completion_status === "complete"
@@ -866,7 +897,11 @@ async function getFeaturesTree(scope = {}) {
       run_id: associatedRunId,
       run_status: runStatus,
       run_completion_status: normalizedCompletionStatus,
-      is_complete: isComplete
+      is_complete: isComplete,
+      story_automation_run_id: latestStoryAutomation?.automation_run_id ?? null,
+      story_automation_status: latestStoryAutomation?.automation_status || "not_started",
+      story_automation_stop_reason: latestStoryAutomation?.automation_stop_reason ?? null,
+      story_automation_updated_at: latestStoryAutomation?.automation_updated_at ?? null
     });
   }
 

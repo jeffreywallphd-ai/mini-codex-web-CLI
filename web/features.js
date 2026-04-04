@@ -105,6 +105,14 @@ function getStoryRunStatusLabel(story) {
   return "Run status: not started";
 }
 
+function getAutomationStatusLabel(status) {
+  if (status === "running") return "Running";
+  if (status === "completed") return "Completed";
+  if (status === "stopped") return "Stopped";
+  if (status === "failed") return "Failed";
+  return "Not Started";
+}
+
 function renderScopeHint() {
   if (!automationScope.projectName || !automationScope.baseBranch) {
     scopeHint.textContent = "Project and base branch are required. Return to the editor page and select them first.";
@@ -285,11 +293,7 @@ function getFeatureAutomationStatus(feature) {
 }
 
 function getFeatureAutomationStatusLabel(status) {
-  if (status === "running") return "Running";
-  if (status === "completed") return "Completed";
-  if (status === "stopped") return "Stopped";
-  if (status === "failed") return "Failed";
-  return "Not Started";
+  return getAutomationStatusLabel(status);
 }
 
 function getEpicAutomationStatus(epic) {
@@ -312,11 +316,26 @@ function getEpicAutomationStatus(epic) {
 }
 
 function getEpicAutomationStatusLabel(status) {
-  if (status === "running") return "Running";
-  if (status === "completed") return "Completed";
-  if (status === "stopped") return "Stopped";
-  if (status === "failed") return "Failed";
-  return "Not Started";
+  return getAutomationStatusLabel(status);
+}
+
+function getStoryAutomationStatus(story) {
+  const activeStoryRun = Boolean(
+    globalAutomationLock?.isActive
+      && globalAutomationLock?.automationType === "story"
+      && Number(globalAutomationLock?.targetId) === Number(story?.id)
+  );
+  if (activeStoryRun) {
+    return "running";
+  }
+
+  const rawStatus = String(story?.story_automation_status || "").trim().toLowerCase();
+  if (rawStatus === "running") return "running";
+  if (rawStatus === "completed") return "completed";
+  if (rawStatus === "stopped") return "stopped";
+  if (rawStatus === "failed") return "failed";
+
+  return "not_started";
 }
 
 function createFeatureAutomationStatusSummary(content, feature) {
@@ -354,6 +373,27 @@ function createEpicAutomationStatusSummary(content, epic) {
   row.appendChild(badge);
 
   const runId = Number.parseInt(epic?.epic_automation_run_id, 10);
+  if (Number.isInteger(runId) && runId > 0 && status !== "not_started") {
+    row.appendChild(document.createTextNode(` (#${runId})`));
+  }
+
+  content.appendChild(row);
+}
+
+function createStoryAutomationStatusSummary(content, story) {
+  const status = getStoryAutomationStatus(story);
+  const label = getAutomationStatusLabel(status);
+
+  const row = document.createElement("p");
+  row.className = "feature-automation-status-row";
+  row.appendChild(document.createTextNode("Automation: "));
+
+  const badge = document.createElement("span");
+  badge.className = `automation-status-pill automation-status-pill--${status}`;
+  badge.textContent = label;
+  row.appendChild(badge);
+
+  const runId = Number.parseInt(story?.story_automation_run_id, 10);
   if (Number.isInteger(runId) && runId > 0 && status !== "not_started") {
     row.appendChild(document.createTextNode(` (#${runId})`));
   }
@@ -664,6 +704,7 @@ function renderStoryCard(story, options = {}) {
     status: getStoryStatus(story),
     renderBody: (content) => {
       createDescription(content, story.description);
+      createStoryAutomationStatusSummary(content, story);
       if (options.showAutomation) {
         createStoryAutomationUi(content, story);
       } else {
