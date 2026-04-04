@@ -499,6 +499,82 @@ test("run and automation persistence expose linked context bundle title metadata
   }
 });
 
+test("context bundle usage metadata updates after run and automation usage", async () => {
+  await dbReady;
+
+  let bundleId = null;
+  let runId = null;
+  let automationRunId = null;
+
+  try {
+    const createdBundle = await createContextBundle({
+      title: `Bundle Usage ${Date.now()}`,
+      description: "Bundle usage metadata fixture.",
+      status: "active"
+    });
+    bundleId = createdBundle.id;
+
+    runId = await saveRun({
+      projectName: "db-test-project",
+      prompt: "usage metadata run prompt",
+      code: 0,
+      stdout: "",
+      stderr: "",
+      statusBefore: "",
+      statusAfter: "",
+      usageDelta: "",
+      creditsRemaining: null,
+      executionMode: "read",
+      branchName: "usage-meta-branch",
+      baseBranch: "main",
+      gitStatus: "",
+      gitStatusFiles: [],
+      gitDiffMap: {},
+      changeTitle: "usage metadata",
+      changeDescription: "usage metadata",
+      promptWithInstructions: "usage metadata prompt",
+      executedCommand: "usage metadata command",
+      spawnCommand: "usage metadata spawn",
+      completionStatus: "complete",
+      completionWork: "none",
+      runStartTime: Date.now() - 10,
+      runEndTime: Date.now(),
+      contextBundleId: bundleId
+    });
+
+    automationRunId = (await createAutomationRun({
+      automationType: "story",
+      targetId: Date.now() + Math.floor(Math.random() * 1000),
+      projectName: "db-test-project",
+      baseBranch: "main",
+      stopFlag: false,
+      stopOnIncomplete: false,
+      automationStatus: "completed",
+      currentPosition: 1,
+      stopReason: "all_work_complete",
+      contextBundleId: bundleId
+    })).id;
+
+    const loadedBundle = await getContextBundleById(bundleId, { includeParts: false });
+    assert.equal(loadedBundle.id, bundleId);
+    assert.ok(typeof loadedBundle.last_used_at === "string" && loadedBundle.last_used_at.trim().length > 0);
+    assert.equal(loadedBundle.usage_total_count, 2);
+    assert.equal(loadedBundle.usage_recent_count, 2);
+    assert.equal(loadedBundle.usage_recent_success_count, 2);
+
+    const listedBundles = await getContextBundles({ includeParts: false });
+    const listedBundle = listedBundles.find((bundle) => bundle.id === bundleId);
+    assert.ok(listedBundle);
+    assert.equal(listedBundle.usage_total_count, 2);
+    assert.equal(listedBundle.usage_recent_count, 2);
+    assert.equal(listedBundle.usage_recent_success_count, 2);
+  } finally {
+    await cleanupRun(runId);
+    await cleanupAutomationRun(automationRunId);
+    await cleanupContextBundle(bundleId);
+  }
+});
+
 test("deleting an unmerged run clears linked story completion association", async () => {
   await dbReady;
 

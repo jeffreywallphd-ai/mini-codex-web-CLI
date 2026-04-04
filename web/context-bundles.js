@@ -51,6 +51,30 @@ function formatMetadataValue(value) {
   return normalized || "(none)";
 }
 
+function formatBundleUsageCount(value) {
+  const parsed = Number.parseInt(value, 10);
+  if (!Number.isInteger(parsed) || parsed < 0) {
+    return 0;
+  }
+  return parsed;
+}
+
+function formatBundleLastUsedAt(value) {
+  const timestamp = typeof value === "string" && value.trim()
+    ? value.trim()
+    : "";
+  if (!timestamp) {
+    return "(never)";
+  }
+
+  const parsedTimestamp = Date.parse(timestamp);
+  if (!Number.isFinite(parsedTimestamp)) {
+    return timestamp;
+  }
+
+  return new Date(parsedTimestamp).toLocaleString();
+}
+
 function formatPartTypeLabel(partType) {
   const normalized = String(partType || "").trim().toLowerCase();
   const match = PART_TYPE_OPTIONS.find((option) => option.value === normalized);
@@ -355,6 +379,10 @@ function renderBundles() {
     summaryRow.className = "card-description";
     summaryRow.textContent = `Summary: ${formatMetadataValue(bundle.summary)}`;
 
+    const usageRow = document.createElement("p");
+    usageRow.className = "card-description";
+    usageRow.textContent = `Usage: Last used ${formatBundleLastUsedAt(bundle.last_used_at)} | Recent uses (30d): ${formatBundleUsageCount(bundle.usage_recent_count)} | Recent successful uses (30d): ${formatBundleUsageCount(bundle.usage_recent_success_count)}`;
+
     const guidanceRow = document.createElement("p");
     guidanceRow.className = "card-description";
     guidanceRow.textContent = `Selection guidance: ${buildIntentGuidance(bundle)}`;
@@ -402,6 +430,7 @@ function renderBundles() {
     content.appendChild(projectRow);
     content.appendChild(tagsRow);
     content.appendChild(summaryRow);
+    content.appendChild(usageRow);
     content.appendChild(guidanceRow);
     content.appendChild(actions);
     card.appendChild(content);

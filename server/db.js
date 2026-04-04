@@ -19,6 +19,7 @@ const db = new sqlite3.Database(dbPath);
 db.run("PRAGMA foreign_keys = ON");
 
 const LATEST_SCHEMA_VERSION = 19;
+const CONTEXT_BUNDLE_RECENT_USAGE_WINDOW_DAYS = 30;
 const VALID_AUTOMATION_TYPES = new Set(["feature", "epic", "story"]);
 const VALID_AUTOMATION_STATUSES = new Set(["pending", "running", "completed", "failed", "stopped"]);
 const VALID_AUTOMATION_STORY_EXECUTION_STATUSES = new Set(["completed", "failed"]);
@@ -795,14 +796,151 @@ function parseBundleTags(value) {
     .filter(Boolean);
 }
 
-function decorateContextBundle(bundle) {
+function normalizeUsageCount(value) {
+  const parsed = Number.parseInt(value, 10);
+  if (!Number.isInteger(parsed) || parsed < 0) {
+    return 0;
+  }
+  return parsed;
+}
+
+function buildDefaultBundleUsageStats() {
+  return {
+    usage_total_count: 0,
+    usage_recent_count: 0,
+    usage_recent_success_count: 0
+  };
+}
+
+function addBundleUsageStats(map, bundleId, usageStats = {}) {
+  const normalizedBundleId = Number.parseInt(bundleId, 10);
+  if (!Number.isInteger(normalizedBundleId) || normalizedBundleId <= 0) {
+    return;
+  }
+
+  const existing = map.get(normalizedBundleId) || buildDefaultBundleUsageStats();
+  map.set(normalizedBundleId, {
+    usage_total_count: normalizeUsageCount(existing.usage_total_count) + normalizeUsageCount(usageStats.usage_total_count),
+    usage_recent_count: normalizeUsageCount(existing.usage_recent_count) + normalizeUsageCount(usageStats.usage_recent_count),
+    usage_recent_success_count: normalizeUsageCount(existing.usage_recent_success_count)
+      + normalizeUsageCount(usageStats.usage_recent_success_count)
+  });
+}
+
+async function getContextBundleUsageStatsMap(bundleIds = []) {
+  const normalizedBundleIds = [...new Set(
+    (Array.isArray(bundleIds) ? bundleIds : [])
+      .map((bundleId) => Number.parseInt(bundleId, 10))
+      .filter((bundleId) => Number.isInteger(bundleId) && bundleId > 0)
+  )];
+
+  if (normalizedBundleIds.length <= 0) {
+    return new Map();
+  }
+
+  const placeholders = normalizedBundleIds.map(() => "?").join(", ");
+  const recentWindow = `-${CONTEXT_BUNDLE_RECENT_USAGE_WINDOW_DAYS} days`;
+  const usageStatsByBundleId = new Map();
+
+  const runUsageRows = await all(
+    `
+      SELECT
+        context_bundle_id AS bundle_id,
+        COUNT(*) AS usage_total_count,
+        SUM(
+          CASE
+            WHEN datetime(created_at) >= datetime('now', ?)
+            THEN 1
+            ELSE 0
+          END
+        ) AS usage_recent_count,
+        SUM(
+          CASE
+            WHEN code = 0 AND datetime(created_at) >= datetime('now', ?)
+            THEN 1
+            ELSE 0
+          END
+        ) AS usage_recent_success_count
+      FROM runs
+      WHERE context_bundle_id IN (${placeholders})
+      GROUP BY context_bundle_id
+    `,
+    [recentWindow, recentWindow, ...normalizedBundleIds]
+  );
+
+  for (const row of runUsageRows) {
+    addBundleUsageStats(usageStatsByBundleId, row.bundle_id, row);
+  }
+
+  const automationUsageRows = await all(
+    `
+      SELECT
+        context_bundle_id AS bundle_id,
+        COUNT(*) AS usage_total_count,
+        SUM(
+          CASE
+            WHEN datetime(created_at) >= datetime('now', ?)
+            THEN 1
+            ELSE 0
+          END
+        ) AS usage_recent_count,
+        SUM(
+          CASE
+            WHEN automation_status = 'completed' AND datetime(created_at) >= datetime('now', ?)
+            THEN 1
+            ELSE 0
+          END
+        ) AS usage_recent_success_count
+      FROM automation_runs
+      WHERE context_bundle_id IN (${placeholders})
+      GROUP BY context_bundle_id
+    `,
+    [recentWindow, recentWindow, ...normalizedBundleIds]
+  );
+
+  for (const row of automationUsageRows) {
+    addBundleUsageStats(usageStatsByBundleId, row.bundle_id, row);
+  }
+
+  return usageStatsByBundleId;
+}
+
+async function markContextBundleUsed(contextBundleId, usedAt = null) {
+  const normalizedContextBundleId = normalizeOptionalPositiveInteger(contextBundleId, "Context bundle id");
+  if (!Number.isInteger(normalizedContextBundleId) || normalizedContextBundleId <= 0) {
+    return;
+  }
+
+  const timestamp = typeof usedAt === "string" && usedAt.trim()
+    ? usedAt.trim()
+    : new Date().toISOString();
+
+  await run(
+    `
+      UPDATE context_bundles
+      SET
+        last_used_at = ?,
+        updated_at = CURRENT_TIMESTAMP
+      WHERE id = ?
+    `,
+    [timestamp, normalizedContextBundleId]
+  );
+}
+
+function decorateContextBundle(bundle, usageStatsByBundleId = null) {
   if (!bundle || typeof bundle !== "object") {
     return bundle;
   }
 
+  const bundleId = Number.parseInt(bundle.id, 10);
+  const usageStats = Number.isInteger(bundleId) && bundleId > 0
+    ? (usageStatsByBundleId?.get(bundleId) || buildDefaultBundleUsageStats())
+    : buildDefaultBundleUsageStats();
+
   return {
     ...bundle,
-    tags: parseBundleTags(bundle.tags)
+    tags: parseBundleTags(bundle.tags),
+    ...usageStats
   };
 }
 
@@ -905,13 +1043,15 @@ async function getContextBundleById(id, options = {}) {
     return null;
   }
 
+  const usageStatsByBundleId = await getContextBundleUsageStatsMap([bundle.id]);
+
   if (options.includeParts === false) {
-    return decorateContextBundle(bundle);
+    return decorateContextBundle(bundle, usageStatsByBundleId);
   }
 
   const parts = await getContextBundlePartsByBundleId(bundle.id);
   return {
-    ...decorateContextBundle(bundle),
+    ...decorateContextBundle(bundle, usageStatsByBundleId),
     parts
   };
 }
@@ -940,11 +1080,17 @@ async function getContextBundles(options = {}) {
     `
   );
 
-  if (options.includeParts === false || bundles.length <= 0) {
-    return bundles.map((bundle) => decorateContextBundle(bundle));
+  if (bundles.length <= 0) {
+    return [];
   }
 
   const bundleIds = bundles.map((bundle) => bundle.id);
+  const usageStatsByBundleId = await getContextBundleUsageStatsMap(bundleIds);
+
+  if (options.includeParts === false) {
+    return bundles.map((bundle) => decorateContextBundle(bundle, usageStatsByBundleId));
+  }
+
   const placeholders = bundleIds.map(() => "?").join(", ");
   const parts = await all(
     `
@@ -978,7 +1124,7 @@ async function getContextBundles(options = {}) {
   }
 
   return bundles.map((bundle) => ({
-    ...decorateContextBundle(bundle),
+    ...decorateContextBundle(bundle, usageStatsByBundleId),
     parts: partsByBundleId.get(bundle.id) || []
   }));
 }
@@ -1507,14 +1653,13 @@ async function deleteContextBundlePartById(id) {
   );
 }
 
-function saveRun(runInput) {
-  return new Promise((resolve, reject) => {
-    dbReady
-      .then(() => {
-        const runOrigin = normalizeRunOrigin(runInput);
-        const contextBundleId = normalizeOptionalPositiveInteger(runInput.contextBundleId, "Context bundle id");
-        db.run(
-          `INSERT INTO runs
+async function saveRun(runInput) {
+  await dbReady;
+
+  const runOrigin = normalizeRunOrigin(runInput);
+  const contextBundleId = normalizeOptionalPositiveInteger(runInput.contextBundleId, "Context bundle id");
+  const runId = await runWithLastId(
+    `INSERT INTO runs
           (
             project_name,
             prompt,
@@ -1546,44 +1691,43 @@ function saveRun(runInput) {
             context_bundle_id
           )
           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-          [
-            runInput.projectName,
-            runInput.prompt,
-            runInput.code,
-            runInput.stdout,
-            runInput.stderr,
-            runInput.statusBefore,
-            runInput.statusAfter,
-            runInput.usageDelta,
-            runInput.creditsRemaining,
-            runInput.executionMode,
-            runInput.branchName,
-            runInput.baseBranch,
-            runInput.gitStatus,
-            JSON.stringify(runInput.gitStatusFiles || []),
-            JSON.stringify(runInput.gitDiffMap || {}),
-            runInput.changeTitle,
-            runInput.changeDescription,
-            runInput.promptWithInstructions,
-            runInput.executedCommand,
-            runInput.spawnCommand,
-            runInput.completionStatus,
-            runInput.completionWork,
-            runInput.runStartTime,
-            runInput.runEndTime,
-            runOrigin.automationOriginType,
-            runOrigin.automationOriginId,
-            runOrigin.automationRunId,
-            contextBundleId
-          ],
-          function onInsert(err) {
-            if (err) return reject(err);
-            resolve(this.lastID);
-          }
-        );
-      })
-      .catch(reject);
-  });
+    [
+      runInput.projectName,
+      runInput.prompt,
+      runInput.code,
+      runInput.stdout,
+      runInput.stderr,
+      runInput.statusBefore,
+      runInput.statusAfter,
+      runInput.usageDelta,
+      runInput.creditsRemaining,
+      runInput.executionMode,
+      runInput.branchName,
+      runInput.baseBranch,
+      runInput.gitStatus,
+      JSON.stringify(runInput.gitStatusFiles || []),
+      JSON.stringify(runInput.gitDiffMap || {}),
+      runInput.changeTitle,
+      runInput.changeDescription,
+      runInput.promptWithInstructions,
+      runInput.executedCommand,
+      runInput.spawnCommand,
+      runInput.completionStatus,
+      runInput.completionWork,
+      runInput.runStartTime,
+      runInput.runEndTime,
+      runOrigin.automationOriginType,
+      runOrigin.automationOriginId,
+      runOrigin.automationRunId,
+      contextBundleId
+    ]
+  );
+
+  if (Number.isInteger(contextBundleId) && contextBundleId > 0) {
+    await markContextBundleUsed(contextBundleId);
+  }
+
+  return runId;
 }
 
 function getRuns({ search = "", status = "active" } = {}) {
@@ -2186,6 +2330,10 @@ async function createAutomationRun(input = {}) {
     throw error;
   }
 
+  if (Number.isInteger(contextBundleId) && contextBundleId > 0) {
+    await markContextBundleUsed(contextBundleId);
+  }
+
   return getAutomationRunById(id);
 }
 
@@ -2234,6 +2382,7 @@ async function updateAutomationRunMetadata(id, updates = {}) {
 
   const updateClauses = [];
   const params = [];
+  let selectedContextBundleId = null;
 
   if (Object.prototype.hasOwnProperty.call(updates, "stopFlag")) {
     updateClauses.push("stop_flag = ?");
@@ -2297,6 +2446,7 @@ async function updateAutomationRunMetadata(id, updates = {}) {
     const contextBundleId = normalizeOptionalPositiveInteger(updates.contextBundleId, "Context bundle id");
     updateClauses.push("context_bundle_id = ?");
     params.push(contextBundleId);
+    selectedContextBundleId = contextBundleId;
   }
 
   if (updateClauses.length === 0) {
@@ -2314,6 +2464,10 @@ async function updateAutomationRunMetadata(id, updates = {}) {
     `,
     params
   );
+
+  if (Number.isInteger(selectedContextBundleId) && selectedContextBundleId > 0) {
+    await markContextBundleUsed(selectedContextBundleId);
+  }
 
   return getAutomationRunById(runId);
 }
