@@ -135,6 +135,33 @@ test("runner stops when stopOnIncompleteStory is enabled and story is incomplete
   assert.equal(result.processedStories, 1);
 });
 
+test("runner continues past incomplete stories when stopOnIncompleteStory is disabled", async () => {
+  const stories = [
+    { storyId: 451, positionInQueue: 1 },
+    { storyId: 452, positionInQueue: 2 }
+  ];
+  const callOrder = [];
+
+  const result = await runSequentialStoryQueue({
+    stories,
+    stopOnIncompleteStory: false,
+    executeStory: async (story) => {
+      callOrder.push(story.storyId);
+      return {
+        runId: story.storyId * 10,
+        completionStatus: story.storyId === 451 ? "incomplete" : "complete"
+      };
+    }
+  });
+
+  assert.deepEqual(callOrder, [451, 452]);
+  assert.equal(result.status, "completed");
+  assert.equal(result.stopReason, AUTOMATION_STOP_REASON.ALL_WORK_COMPLETE);
+  assert.equal(result.processedStories, 2);
+  assert.equal(result.storyResults[0].completionStatus, "incomplete");
+  assert.equal(result.storyResults[1].completionStatus, "complete");
+});
+
 test("runner stops queue when story execution throws", async () => {
   const stories = [
     { storyId: 501, positionInQueue: 1 },
