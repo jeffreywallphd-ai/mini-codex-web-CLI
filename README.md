@@ -159,6 +159,7 @@ Context bundles are persisted with a parent-child data model in SQLite:
 - Bundle compilation now includes simple context-quality advisory warnings (`qualityWarnings`, `qualityWarningSummary`) for common issues such as missing high-value sections, low-signal parts, duplicate/near-duplicate content, potential contradictory directives, and oversized bundle estimates; warnings are previewed in the authoring UI and are non-blocking unless data is clearly invalid.
 - Optional compile limits (`maxCompiledChars` or token-equivalent options) apply deterministic prefix-preserving truncation: higher-priority compilation sections are preserved first, then earlier ordered parts, with explainable truncation metadata (`truncation.preservedPartIds`, `truncation.partiallyTruncatedPartIds`, `truncation.omittedPartIds`).
 - Run preparation can now accept an optional `contextBundleId`; when provided, the selected bundle is compiled during run creation using the same `compileContextBundle(...)` path used by preview.
+- Run records persist nullable `context_bundle_id` linkage so bundle-backed and non-bundle runs remain backward compatible in one explicit model.
 - Prompt assembly uses a stable rule: compiled bundle context is injected **before** the task prompt using `bundle_context_before_task_prompt_v1` in `server/runPromptContext.js`.
 - The index page includes a **Manage Context Bundles** navigation action that routes to `/context-bundles.html`, making it the central bundle authoring/management page.
 - Context bundle API endpoints:
@@ -370,11 +371,13 @@ Request body fields:
 - `targetId` (optional but validated against route id when provided)
 - scoped id field (`featureId`, `epicId`, `storyId`) (optional but validated against route id when provided)
 - `contextBundleId` (optional positive integer; when provided, each queued run compiles and injects that bundle into final run prompt context)
+- automation start/resume requests enforce a single-bundle API shape: `contextBundleId` only (plural/multi-reference payload fields are rejected)
 
 Success response (`202 Accepted`) includes tracking metadata for the UI:
 
 - `launchMode` (`start` for fresh launches)
 - `automationRun` (id, type, target, status, stop flags, timestamps)
+- `automationRun.contextBundleId` (nullable single selected bundle id persisted for this automation run)
 - `automationRun.projectName` and `automationRun.baseBranch` for traceability
 - `queue` (`totalStories`, `storyIds`, and queue readiness metadata)
 - `projectName`
@@ -384,6 +387,7 @@ Resume behavior (`POST /api/automation/resume/:automationRunId`):
 
 - accepts only stopped/failed runs and rejects non-resumable statuses (including running/completed)
 - accepts optional `contextBundleId` to apply bundle-compiled context to resumed queued story runs
+- when resume omits `contextBundleId`, the automation run reuses its persisted `context_bundle_id`; when provided, it replaces that single selection
 - uses persisted queue snapshot (`automation_run_queue_items`) plus persisted
   story outcomes (`automation_story_executions`) to compute remaining work
 - normalizes persisted queue and execution rows by `position_in_queue` so resume

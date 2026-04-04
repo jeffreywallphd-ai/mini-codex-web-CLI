@@ -10,11 +10,21 @@ function normalizePrompt(prompt) {
 }
 
 function normalizePositiveInteger(value) {
-  const parsed = Number.parseInt(value, 10);
-  if (!Number.isInteger(parsed) || parsed <= 0) {
+  if (typeof value === "number") {
+    return Number.isInteger(value) && value > 0 ? value : null;
+  }
+
+  if (typeof value !== "string") {
     return null;
   }
-  return parsed;
+
+  const normalized = value.trim();
+  if (!/^\d+$/.test(normalized)) {
+    return null;
+  }
+
+  const parsed = Number.parseInt(normalized, 10);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : null;
 }
 
 function buildRunPromptWithCompiledBundle({

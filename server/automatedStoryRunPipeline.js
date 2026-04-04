@@ -11,6 +11,28 @@ function defaultErrorMessage(error) {
   return String(error);
 }
 
+function parseOptionalPositiveInteger(value) {
+  if (value === null || value === undefined || value === "") {
+    return null;
+  }
+
+  if (typeof value === "number") {
+    return Number.isInteger(value) && value > 0 ? value : NaN;
+  }
+
+  if (typeof value !== "string") {
+    return NaN;
+  }
+
+  const normalized = value.trim();
+  if (!/^\d+$/.test(normalized)) {
+    return NaN;
+  }
+
+  const parsed = Number.parseInt(normalized, 10);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : NaN;
+}
+
 function createAutomatedStoryRunExecutor(deps = {}) {
   const {
     getStoryAutomationContext,
@@ -30,21 +52,21 @@ function createAutomatedStoryRunExecutor(deps = {}) {
   }
 
   return async function executeAutomatedStoryRun(input = {}) {
-    const storyId = Number.parseInt(input.storyId, 10);
+    const storyId = parseOptionalPositiveInteger(input.storyId);
     const rawAutomationType = String(input.automationType || "").trim().toLowerCase();
     const automationType = rawAutomationType || "story";
     const targetId = input.targetId === null || input.targetId === undefined || input.targetId === ""
       ? storyId
-      : Number.parseInt(input.targetId, 10);
+      : parseOptionalPositiveInteger(input.targetId);
     const automationRunId = input.automationRunId === null || input.automationRunId === undefined || input.automationRunId === ""
       ? null
-      : Number.parseInt(input.automationRunId, 10);
+      : parseOptionalPositiveInteger(input.automationRunId);
     const projectName = String(input.projectName || "").trim();
     const baseBranch = String(input.baseBranch || "").trim();
     const executionMode = String(input.executionMode || "write").trim() || "write";
     const contextBundleId = input.contextBundleId === null || input.contextBundleId === undefined || input.contextBundleId === ""
       ? null
-      : Number.parseInt(input.contextBundleId, 10);
+      : parseOptionalPositiveInteger(input.contextBundleId);
     const streamId = input.streamId ?? null;
     const onProgressEvent = typeof input.onProgressEvent === "function"
       ? input.onProgressEvent

@@ -181,3 +181,25 @@ test("automated story runner rejects invalid context bundle id", async () => {
     /Context bundle id must be a positive integer/
   );
 });
+
+test("automated story runner rejects multiple context bundle references", async () => {
+  const executeAutomatedStoryRun = createAutomatedStoryRunExecutor({
+    getStoryAutomationContext: async () => ({
+      story_id: 12,
+      story_name: "Story A",
+      story_description: "Do thing."
+    }),
+    executeRunFlow: async () => ({ runId: 1, responsePayload: {} }),
+    attachRunToStory: async () => {}
+  });
+
+  await assert.rejects(
+    () => executeAutomatedStoryRun({
+      storyId: 12,
+      projectName: "demo-project",
+      baseBranch: "main",
+      contextBundleId: [1, 2]
+    }),
+    /Context bundle id must be a positive integer/
+  );
+});

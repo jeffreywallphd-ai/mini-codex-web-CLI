@@ -222,6 +222,7 @@ test("automation metadata is persisted and updateable in sqlite", async () => {
     assert.equal(created.current_position, 1);
     assert.equal(created.automation_status, "running");
     assert.equal(created.stop_reason, null);
+    assert.equal(created.context_bundle_id, null);
     assert.equal(created.failed_story_id, null);
     assert.equal(created.failure_summary, null);
 
@@ -234,6 +235,7 @@ test("automation metadata is persisted and updateable in sqlite", async () => {
     assert.equal(loaded.stop_on_incomplete, 1);
     assert.equal(loaded.automation_status, "running");
     assert.equal(loaded.stop_reason, null);
+    assert.equal(loaded.context_bundle_id, null);
     assert.equal(loaded.failed_story_id, null);
     assert.equal(loaded.failure_summary, null);
 
@@ -243,6 +245,7 @@ test("automation metadata is persisted and updateable in sqlite", async () => {
       currentPosition: 2,
       automationStatus: "failed",
       stopReason: "execution_failed",
+      contextBundleId: 456,
       failedStoryId: 123,
       failureSummary: "Prompt parse failed."
     });
@@ -251,6 +254,7 @@ test("automation metadata is persisted and updateable in sqlite", async () => {
     assert.equal(updated.current_position, 2);
     assert.equal(updated.automation_status, "failed");
     assert.equal(updated.stop_reason, "execution_failed");
+    assert.equal(updated.context_bundle_id, 456);
     assert.equal(updated.failed_story_id, 123);
     assert.equal(updated.failure_summary, "Prompt parse failed.");
   } finally {
@@ -348,7 +352,8 @@ test("run records persist automation origin linkage with backward-compatible nul
       runEndTime: Date.now(),
       automationOriginType: "feature",
       automationOriginId: 12345,
-      automationRunId
+      automationRunId,
+      contextBundleId: 88
     });
 
     manualRunId = await saveRun({
@@ -382,11 +387,13 @@ test("run records persist automation origin linkage with backward-compatible nul
     assert.equal(automatedRun.automation_origin_type, "feature");
     assert.equal(automatedRun.automation_origin_id, 12345);
     assert.equal(automatedRun.automation_run_id, automationRunId);
+    assert.equal(automatedRun.context_bundle_id, 88);
 
     const manualRun = await getRunById(manualRunId);
     assert.equal(manualRun.automation_origin_type, null);
     assert.equal(manualRun.automation_origin_id, null);
     assert.equal(manualRun.automation_run_id, null);
+    assert.equal(manualRun.context_bundle_id, null);
 
     const recentRuns = await getRuns({ status: "all" });
     const automatedSummary = recentRuns.find((run) => run.id === automatedRunId);
@@ -396,9 +403,11 @@ test("run records persist automation origin linkage with backward-compatible nul
     assert.equal(automatedSummary.automation_origin_type, "feature");
     assert.equal(automatedSummary.automation_origin_id, 12345);
     assert.equal(automatedSummary.automation_run_id, automationRunId);
+    assert.equal(automatedSummary.context_bundle_id, 88);
     assert.equal(manualSummary.automation_origin_type, null);
     assert.equal(manualSummary.automation_origin_id, null);
     assert.equal(manualSummary.automation_run_id, null);
+    assert.equal(manualSummary.context_bundle_id, null);
   } finally {
     await cleanupRun(automatedRunId);
     await cleanupRun(manualRunId);
@@ -1335,7 +1344,7 @@ test("context bundle schema migration creates bundle foundation tables", async (
 
   const schemaVersion = await getDbRow("SELECT version FROM schema_version LIMIT 1");
   assert.ok(Number.isInteger(schemaVersion?.version));
-  assert.ok(schemaVersion.version >= 18);
+  assert.ok(schemaVersion.version >= 19);
 
   const bundleTable = await getDbRow(
     "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'context_bundles'"
@@ -1346,6 +1355,15 @@ test("context bundle schema migration creates bundle foundation tables", async (
 
   assert.equal(bundleTable?.name, "context_bundles");
   assert.equal(partTable?.name, "context_bundle_parts");
+
+  const runBundleColumn = await getDbRow(
+    "SELECT name FROM pragma_table_info('runs') WHERE name = 'context_bundle_id'"
+  );
+  const automationBundleColumn = await getDbRow(
+    "SELECT name FROM pragma_table_info('automation_runs') WHERE name = 'context_bundle_id'"
+  );
+  assert.equal(runBundleColumn?.name, "context_bundle_id");
+  assert.equal(automationBundleColumn?.name, "context_bundle_id");
 });
 
 test("context bundle part type semantics expose a controlled list", () => {
