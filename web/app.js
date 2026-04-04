@@ -6,6 +6,10 @@ const executionModeSelect = document.getElementById("executionModeSelect");
 const promptInput = document.getElementById("promptInput");
 const contextBundleSelect = document.getElementById("contextBundleSelect");
 const contextBundleHint = document.getElementById("contextBundleHint");
+const contextBundleSummaryCard = document.getElementById("contextBundleSummaryCard");
+const contextBundleSummaryTitle = document.getElementById("contextBundleSummaryTitle");
+const contextBundleSummaryGuidance = document.getElementById("contextBundleSummaryGuidance");
+const contextBundleSummaryMeta = document.getElementById("contextBundleSummaryMeta");
 const runButton = document.getElementById("runButton");
 const pasteClipboardButton = document.getElementById("pasteClipboardButton");
 const clearStateButton = document.getElementById("clearStateButton");
@@ -33,6 +37,7 @@ let lastBranchLoadRequestId = 0;
 let loadRunsRequestId = 0;
 let loadContextBundlesRequestId = 0;
 let activeAutomationLock = null;
+let contextBundleOptions = [];
 
 function escapeHtml(text) {
   return String(text ?? "")
@@ -397,11 +402,64 @@ function formatContextBundleOption(bundle) {
   return meta ? `${title} - ${meta}` : title;
 }
 
+function buildContextBundleSelectionGuidance(bundle) {
+  const hasSummary = Boolean(String(bundle?.summary || "").trim());
+  const hasIntendedUse = Boolean(String(bundle?.intended_use || "").trim());
+  const hasProjectAffinity = Boolean(String(bundle?.project_name || "").trim());
+
+  if (hasSummary && hasIntendedUse && hasProjectAffinity) {
+    return "Summary, intended use, and project affinity are all set.";
+  }
+
+  if (!hasSummary && !hasIntendedUse && !hasProjectAffinity) {
+    return "No optional metadata saved for this bundle.";
+  }
+
+  return "Optional metadata is partially filled for this bundle.";
+}
+
+function renderContextBundleSelectionSummary() {
+  const selectedBundleId = Number.parseInt(contextBundleSelect.value, 10);
+  const hasSelectedBundle = Number.isInteger(selectedBundleId) && selectedBundleId > 0;
+
+  if (!hasSelectedBundle) {
+    contextBundleSummaryCard.classList.add("hidden");
+    contextBundleSummaryTitle.textContent = "";
+    contextBundleSummaryGuidance.textContent = "";
+    contextBundleSummaryMeta.textContent = "";
+    return;
+  }
+
+  const selectedBundle = contextBundleOptions.find((bundle) => bundle.id === selectedBundleId);
+  if (!selectedBundle) {
+    contextBundleSummaryCard.classList.add("hidden");
+    contextBundleSummaryTitle.textContent = "";
+    contextBundleSummaryGuidance.textContent = "";
+    contextBundleSummaryMeta.textContent = "";
+    return;
+  }
+
+  const title = String(selectedBundle.title || "").trim() || "Untitled Bundle";
+  const summary = String(selectedBundle.summary || "").trim();
+  const intendedUse = String(selectedBundle.intended_use || "").trim();
+  const projectAffinity = String(selectedBundle.project_name || "").trim();
+
+  contextBundleSummaryTitle.textContent = title;
+  contextBundleSummaryGuidance.textContent = buildContextBundleSelectionGuidance(selectedBundle);
+  contextBundleSummaryMeta.textContent = [
+    `Summary: ${summary || "(none)"}`,
+    `Intended use: ${intendedUse || "(none)"}`,
+    `Project affinity: ${projectAffinity || "(none)"}`
+  ].join(" | ");
+  contextBundleSummaryCard.classList.remove("hidden");
+}
+
 async function loadContextBundles() {
   const requestId = ++loadContextBundlesRequestId;
 
   contextBundleHint.textContent = "Loading context bundles...";
   contextBundleSelect.innerHTML = "";
+  contextBundleOptions = [];
   const defaultOption = document.createElement("option");
   defaultOption.value = "";
   defaultOption.textContent = "No context bundle";
@@ -420,6 +478,7 @@ async function loadContextBundles() {
     }
 
     const bundles = Array.isArray(result) ? result : [];
+    const selectableBundles = [];
 
     for (const bundle of bundles) {
       const bundleId = Number.parseInt(bundle?.id, 10);
@@ -431,7 +490,12 @@ async function loadContextBundles() {
       option.value = String(bundleId);
       option.textContent = formatContextBundleOption(bundle);
       contextBundleSelect.appendChild(option);
+      selectableBundles.push({
+        ...bundle,
+        id: bundleId
+      });
     }
+    contextBundleOptions = selectableBundles;
 
     const savedState = getSavedEditorState();
     const savedContextBundleId = String(savedState?.contextBundleId || "").trim();
@@ -444,13 +508,16 @@ async function loadContextBundles() {
     contextBundleHint.textContent = bundles.length > 0
       ? "Choose one saved bundle to prepend reusable context, or leave unselected."
       : "No saved bundles yet. Runs will proceed without bundle context.";
+    renderContextBundleSelectionSummary();
   } catch (error) {
     if (requestId !== loadContextBundlesRequestId) {
       return;
     }
 
+    contextBundleOptions = [];
     contextBundleSelect.value = "";
     contextBundleHint.textContent = "Context bundles are unavailable. Runs can continue without one.";
+    renderContextBundleSelectionSummary();
     statusBox.textContent = `Context bundle load failed: ${error.message}`;
     showErrorCard(`Context bundle load failed: ${error.message}`);
   } finally {
@@ -926,6 +993,7 @@ manageFeaturesLink.addEventListener("click", (event) => {
 });
 clearStateButton.addEventListener("click", async () => {
   clearEditorState();
+  renderContextBundleSelectionSummary();
   await loadBranchesForSelectedProject();
   await refreshRunningProjects();
   statusBox.textContent = "Saved form state cleared and running-project cache refreshed.";
@@ -935,6 +1003,8 @@ clearStateButton.addEventListener("click", async () => {
   element.addEventListener("change", saveEditorState);
   element.addEventListener("input", saveEditorState);
 });
+
+contextBundleSelect.addEventListener("change", renderContextBundleSelectionSummary);
 
 projectSelect.addEventListener("change", async () => {
   hideErrorCard();
