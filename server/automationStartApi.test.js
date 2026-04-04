@@ -1677,6 +1677,152 @@ test("resume endpoint restarts stopped automation from remaining persisted queue
   );
 });
 
+test("resume endpoint restarts failed automation from remaining persisted queue items", async () => {
+  const harness = createServerHarness({
+    getAutomationRunQueueItemsByRunId: async () => ([
+      {
+        id: 91,
+        automationRunId: 4450,
+        positionInQueue: 1,
+        featureId: 100,
+        featureTitle: "Feature 100",
+        epicId: 201,
+        epicTitle: "Epic 201",
+        storyId: 801,
+        storyTitle: "Story 801",
+        storyDescription: "First story",
+        storyCreatedAt: "2026-01-01T10:00:00.000Z",
+        createdAt: "2026-04-04T00:00:00.000Z"
+      },
+      {
+        id: 92,
+        automationRunId: 4450,
+        positionInQueue: 2,
+        featureId: 100,
+        featureTitle: "Feature 100",
+        epicId: 201,
+        epicTitle: "Epic 201",
+        storyId: 802,
+        storyTitle: "Story 802",
+        storyDescription: "Second story",
+        storyCreatedAt: "2026-01-01T10:01:00.000Z",
+        createdAt: "2026-04-04T00:00:00.000Z"
+      },
+      {
+        id: 93,
+        automationRunId: 4450,
+        positionInQueue: 3,
+        featureId: 100,
+        featureTitle: "Feature 100",
+        epicId: 201,
+        epicTitle: "Epic 201",
+        storyId: 803,
+        storyTitle: "Story 803",
+        storyDescription: "Third story",
+        storyCreatedAt: "2026-01-01T10:02:00.000Z",
+        createdAt: "2026-04-04T00:00:00.000Z"
+      }
+    ]),
+    getAutomationStoryExecutionsByRunId: async () => ([
+      {
+        id: 171,
+        automation_run_id: 4450,
+        story_id: 801,
+        position_in_queue: 1,
+        execution_status: "completed",
+        queue_action: "advanced",
+        run_id: 3001,
+        completion_status: "complete",
+        completion_work: "none",
+        error: null,
+        created_at: "2026-04-04T00:00:20.000Z"
+      },
+      {
+        id: 172,
+        automation_run_id: 4450,
+        story_id: 802,
+        position_in_queue: 2,
+        execution_status: "failed",
+        queue_action: "failed",
+        run_id: null,
+        completion_status: "unknown",
+        completion_work: null,
+        error: "Prompt generation failed",
+        created_at: "2026-04-04T00:00:40.000Z"
+      }
+    ])
+  });
+  harness.automationRuns.set(4450, {
+    id: 4450,
+    automation_type: "feature",
+    target_id: 100,
+    project_name: "demo-project",
+    base_branch: "main",
+    stop_on_incomplete: 0,
+    stop_flag: 1,
+    current_position: 2,
+    automation_status: "failed",
+    stop_reason: "execution_failed",
+    failed_story_id: 802,
+    failure_summary: "Prompt generation failed",
+    created_at: "2026-04-04T00:00:00.000Z",
+    updated_at: "2026-04-04T00:02:00.000Z"
+  });
+
+  await withServer(harness, async (baseUrl) => {
+    const response = await fetch(`${baseUrl}/api/automation/resume/4450`, {
+      method: "POST"
+    });
+
+    assert.equal(response.status, 202);
+    const payload = await response.json();
+    assert.equal(payload.launchMode, "resume");
+    assert.equal(payload.automationRun.id, 4450);
+    assert.equal(payload.automationRun.status, "running");
+    assert.deepEqual(payload.queue.storyIds, [802, 803]);
+    assert.equal(payload.queue.totalStoriesInRunQueue, 3);
+    assert.equal(payload.queue.skippedCompletedStories, 1);
+  });
+
+  await harness.runDetachedTasks();
+  assert.deepEqual(
+    harness.calls.executeAutomatedStoryRun.map((call) => call.storyId),
+    [802, 803]
+  );
+});
+
+test("resume endpoint rejects statuses other than stopped or failed", async () => {
+  const harness = createServerHarness();
+  harness.automationRuns.set(4601, {
+    id: 4601,
+    automation_type: "feature",
+    target_id: 100,
+    project_name: "demo-project",
+    base_branch: "main",
+    stop_on_incomplete: 0,
+    stop_flag: 0,
+    current_position: 1,
+    automation_status: "pending",
+    stop_reason: null,
+    created_at: "2026-04-04T00:00:00.000Z",
+    updated_at: "2026-04-04T00:00:00.000Z"
+  });
+
+  await withServer(harness, async (baseUrl) => {
+    const response = await fetch(`${baseUrl}/api/automation/resume/4601`, {
+      method: "POST"
+    });
+
+    assert.equal(response.status, 409);
+    const payload = await response.json();
+    assert.match(payload.error, /cannot be resumed from status 'pending'/i);
+    assert.deepEqual(payload.resumableStatuses, ["stopped", "failed"]);
+    assert.equal(payload.automationRun.id, 4601);
+  });
+
+  assert.equal(harness.calls.detachedTasks.length, 0);
+});
+
 test("resume endpoint honors persisted queue position ordering when snapshot rows are unsorted", async () => {
   const harness = createServerHarness({
     getAutomationRunQueueItemsByRunId: async () => ([

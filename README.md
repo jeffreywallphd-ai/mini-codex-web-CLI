@@ -322,7 +322,7 @@ Success response (`202 Accepted`) includes tracking metadata for the UI:
 
 Resume behavior (`POST /api/automation/resume/:automationRunId`):
 
-- accepts only stopped/failed runs and rejects already-running/already-completed runs
+- accepts only stopped/failed runs and rejects non-resumable statuses (including running/completed)
 - uses persisted queue snapshot (`automation_run_queue_items`) plus persisted
   story outcomes (`automation_story_executions`) to compute remaining work
 - normalizes persisted queue and execution rows by `position_in_queue` so resume
