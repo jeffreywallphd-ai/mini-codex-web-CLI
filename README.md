@@ -199,6 +199,38 @@ is compatible with the existing story run lifecycle.
   `queueAction` (`advanced`, `stopped`, `failed`) and completion fields so
   each story outcome can be persisted for automation status displays.
 
+## Automation Start API
+
+`server/automationStartApi.js` exposes minimal endpoints for launching
+automation runs by scope:
+
+- `POST /api/automation/start/feature/:featureId`
+- `POST /api/automation/start/epic/:epicId`
+- `POST /api/automation/start/story/:storyId`
+
+Each endpoint:
+
+- validates `projectName` and `baseBranch`
+- validates the scoped target exists (`featureId`, `epicId`, or `storyId`)
+- validates the selected target is eligible (non-empty runnable queue)
+- creates an `automation_runs` record with initial state
+- initializes a deterministic queue from `defineAutomationExecutionPlan`
+- starts background execution using the existing run system (`executeRunFlow`
+  + sequential queue runner)
+
+Request body fields:
+
+- `projectName` (required)
+- `baseBranch` (required)
+- `stopOnIncompleteStory` (optional boolean, default `false`)
+
+Success response (`202 Accepted`) includes tracking metadata for the UI:
+
+- `automationRun` (id, type, target, status, stop flags, timestamps)
+- `queue` (`totalStories`, `storyIds`, and queue readiness metadata)
+- `projectName`
+- `baseBranch`
+
 ## Story Automation Prompt Generation
 
 `server/storyAutomationPrompt.js` is the single source of truth for converting
