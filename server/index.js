@@ -18,6 +18,7 @@ const {
   syncStoryCompletionFromRun,
   createAutomationRun,
   updateAutomationRunMetadata,
+  recordAutomationStoryExecution,
   getCompletionEligibleRuns,
   setRunArchived,
   deleteRunById,
@@ -494,6 +495,7 @@ app.post("/api/stories/:storyId/complete-with-automation", async (req, res) => {
   const stopMergeIfStoryImplementationIncomplete = Boolean(req.body?.stopMergeIfStoryImplementationIncomplete);
   const executionMode = "write";
   let automationRunRecord = null;
+  let executionRecordInput = null;
 
   if (!Number.isInteger(storyId) || storyId <= 0) {
     return res.status(400).json({ error: "Invalid story id." });
@@ -564,6 +566,16 @@ app.post("/api/stories/:storyId/complete-with-automation", async (req, res) => {
 
     await attachRunToStory(storyId, runId);
     const runCompletionStatus = normalizeCompletionStatus(responsePayload.completion_status);
+    executionRecordInput = {
+      automationRunId: automationRunRecord?.id,
+      storyId,
+      positionInQueue: 1,
+      executionStatus: "completed",
+      queueAction: "advanced",
+      runId,
+      completionStatus: runCompletionStatus,
+      completionWork: responsePayload.completion_work ?? null
+    };
     const shouldSkipAutoMerge = stopMergeIfStoryImplementationIncomplete && runCompletionStatus !== "complete";
     let autoMerge = {
       status: "not_attempted",
@@ -578,6 +590,7 @@ app.post("/api/stories/:storyId/complete-with-automation", async (req, res) => {
           stopReason: "story_incomplete"
         });
       }
+      executionRecordInput.queueAction = "stopped";
       autoMerge = {
         status: "skipped",
         reason: `Run completion status was '${runCompletionStatus}'.`
@@ -627,6 +640,10 @@ app.post("/api/stories/:storyId/complete-with-automation", async (req, res) => {
       }
     }
 
+    if (automationRunRecord?.id) {
+      await recordAutomationStoryExecution(executionRecordInput);
+    }
+
     const updatedFeatures = await getFeaturesTree({ projectName, baseBranch });
     publishRunEvent(streamId, { type: "automation.completed", message: `Story automation completed for #${storyId}.` });
 
@@ -641,6 +658,31 @@ app.post("/api/stories/:storyId/complete-with-automation", async (req, res) => {
       baseBranch
     });
   } catch (error) {
+    if (automationRunRecord?.id) {
+      const failureExecutionRecord = executionRecordInput || {
+        automationRunId: automationRunRecord.id,
+        storyId,
+        positionInQueue: 1,
+        executionStatus: "failed",
+        queueAction: "failed",
+        runId: null,
+        completionStatus: null,
+        completionWork: null,
+        error: getErrorMessage(error)
+      };
+
+      try {
+        await recordAutomationStoryExecution({
+          ...failureExecutionRecord,
+          executionStatus: "failed",
+          queueAction: "failed",
+          error: getErrorMessage(error)
+        });
+      } catch (persistError) {
+        console.error("automation story execution persistence failed:", persistError);
+      }
+    }
+
     if (automationRunRecord?.id) {
       try {
         await updateAutomationRunMetadata(automationRunRecord.id, {

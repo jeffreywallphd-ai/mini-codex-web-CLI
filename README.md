@@ -27,6 +27,7 @@ The app is designed for personal LAN use, not for public internet exposure or mu
 - Basic usage tracking when the SDK returns usage data
 - Automation queue generation utilities for deterministic `feature -> epic -> story` ordering
 - Automation metadata persistence for orchestration state (`automation_type`, `target_id`, `stop_on_incomplete`, `stop_flag`, `current_position`, `automation_status`, `stop_reason`)
+- Automation story execution outcome persistence for status reporting (`automation_story_executions` with run linkage and queue outcome state)
 - Sequential automation runner for server-driven queue execution (`server/automationRunner.js`)
 - SQLite storage with no external database
 - Mobile-friendly, lightweight UI intended for LAN access
@@ -165,6 +166,16 @@ Shared automation planning rules are defined in `server/automationQueue.js`.
   - `automation_status` (`pending`, `running`, `completed`, `failed`, or `stopped`)
   - `stop_reason` (final outcome reason, such as `all_work_complete`,
     `execution_failed`, or `story_incomplete`)
+- Per-story automation execution outcomes are persisted in SQLite table
+  `automation_story_executions` with:
+  - `automation_run_id`
+  - `story_id`
+  - `position_in_queue`
+  - `execution_status` (`completed` or `failed`)
+  - `queue_action` (`advanced`, `stopped`, or `failed`)
+  - `run_id` (linked run when available)
+  - `completion_status` and `completion_work` (when available)
+  - `error` (failure detail when execution failed)
 
 ## Automation Execution Runner
 
@@ -184,6 +195,9 @@ is compatible with the existing story run lifecycle.
   persisted and displayed.
 - `onProgress` is invoked after each story to support persistence of queue
   progress (for example, updating `automation_runs.current_position`).
+- `onStoryResult` is invoked after each story with deterministic
+  `queueAction` (`advanced`, `stopped`, `failed`) and completion fields so
+  each story outcome can be persisted for automation status displays.
 
 ## Story Automation Prompt Generation
 
