@@ -7,14 +7,24 @@ fs.mkdirSync(dataDir, { recursive: true });
 
 const dbPath = path.resolve(dataDir, "app.db");
 const db = new sqlite3.Database(dbPath);
+db.run("PRAGMA foreign_keys = ON");
 
-const LATEST_SCHEMA_VERSION = 3;
+const LATEST_SCHEMA_VERSION = 4;
 
 function run(sql, params = []) {
   return new Promise((resolve, reject) => {
     db.run(sql, params, (err) => {
       if (err) return reject(err);
       resolve();
+    });
+  });
+}
+
+function runWithLastId(sql, params = []) {
+  return new Promise((resolve, reject) => {
+    db.run(sql, params, function onRun(err) {
+      if (err) return reject(err);
+      resolve(this.lastID);
     });
   });
 }
@@ -155,6 +165,43 @@ async function migrateToV3() {
   await ensureColumn("runs", "run_end_time", "INTEGER");
 }
 
+async function migrateToV4() {
+  await run(`
+    CREATE TABLE IF NOT EXISTS features (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL,
+      description TEXT NOT NULL DEFAULT '',
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )
+  `);
+
+  await run(`
+    CREATE TABLE IF NOT EXISTS epics (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      feature_id INTEGER NOT NULL REFERENCES features(id) ON DELETE CASCADE,
+      name TEXT NOT NULL,
+      description TEXT NOT NULL DEFAULT '',
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )
+  `);
+
+  await run(`
+    CREATE TABLE IF NOT EXISTS stories (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      epic_id INTEGER NOT NULL REFERENCES epics(id) ON DELETE CASCADE,
+      name TEXT NOT NULL,
+      description TEXT NOT NULL DEFAULT '',
+      is_complete INTEGER NOT NULL DEFAULT 0,
+      completion_run_id INTEGER,
+      completed_at DATETIME,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )
+  `);
+
+  await run(`CREATE INDEX IF NOT EXISTS idx_epics_feature_id ON epics(feature_id)`);
+  await run(`CREATE INDEX IF NOT EXISTS idx_stories_epic_id ON stories(epic_id)`);
+}
+
 async function runMigrations() {
   let version = await getSchemaVersion();
 
@@ -175,6 +222,12 @@ async function runMigrations() {
   if (version < 3) {
     await migrateToV3();
     version = 3;
+    await setSchemaVersion(version);
+  }
+
+  if (version < 4) {
+    await migrateToV4();
+    version = 4;
     await setSchemaVersion(version);
   }
 
@@ -310,4 +363,148 @@ function updateRunMerge(id, mergeResult) {
   });
 }
 
-module.exports = { saveRun, getRuns, getRunById, updateRunMerge, dbReady };
+async function createFeatureTree(featureDraft) {
+  await dbReady;
+
+  const featureName = String(featureDraft?.name || "").trim();
+  const featureDescription = String(featureDraft?.description || "").trim();
+  const epics = Array.isArray(featureDraft?.epics) ? featureDraft.epics : [];
+
+  if (!featureName) {
+    throw new Error("Feature name is required.");
+  }
+
+  await run("BEGIN TRANSACTION");
+  try {
+    const featureId = await runWithLastId(
+      `INSERT INTO features (name, description) VALUES (?, ?)`,
+      [featureName, featureDescription]
+    );
+
+    for (const epicDraft of epics) {
+      const epicName = String(epicDraft?.name || "").trim();
+      if (!epicName) {
+        throw new Error("Epic name is required.");
+      }
+
+      const epicDescription = String(epicDraft?.description || "").trim();
+      const epicId = await runWithLastId(
+        `INSERT INTO epics (feature_id, name, description) VALUES (?, ?, ?)`,
+        [featureId, epicName, epicDescription]
+      );
+
+      const stories = Array.isArray(epicDraft?.stories) ? epicDraft.stories : [];
+      for (const storyDraft of stories) {
+        const storyName = String(storyDraft?.name || "").trim();
+        if (!storyName) {
+          throw new Error("Story name is required.");
+        }
+
+        const storyDescription = String(storyDraft?.description || "").trim();
+        await runWithLastId(
+          `INSERT INTO stories (epic_id, name, description, is_complete) VALUES (?, ?, ?, 0)`,
+          [epicId, storyName, storyDescription]
+        );
+      }
+    }
+
+    await run("COMMIT");
+  } catch (error) {
+    await run("ROLLBACK");
+    throw error;
+  }
+}
+
+async function getFeaturesTree() {
+  await dbReady;
+  const [features, epics, stories] = await Promise.all([
+    all(`SELECT id, name, description, created_at FROM features ORDER BY id DESC`),
+    all(`SELECT id, feature_id, name, description, created_at FROM epics ORDER BY id ASC`),
+    all(`
+      SELECT id, epic_id, name, description, is_complete, completion_run_id, completed_at, created_at
+      FROM stories
+      ORDER BY id ASC
+    `)
+  ]);
+
+  const featuresById = new Map(features.map((feature) => [feature.id, { ...feature, epics: [] }]));
+  const epicsById = new Map();
+
+  for (const epic of epics) {
+    const hydratedEpic = { ...epic, stories: [] };
+    epicsById.set(epic.id, hydratedEpic);
+    const parentFeature = featuresById.get(epic.feature_id);
+    if (parentFeature) {
+      parentFeature.epics.push(hydratedEpic);
+    }
+  }
+
+  for (const story of stories) {
+    const parentEpic = epicsById.get(story.epic_id);
+    if (!parentEpic) continue;
+    parentEpic.stories.push({
+      ...story,
+      is_complete: story.is_complete === 1
+    });
+  }
+
+  return [...featuresById.values()];
+}
+
+async function syncStoryCompletionFromRun(storyId, runId) {
+  await dbReady;
+
+  const story = await get(`SELECT id FROM stories WHERE id = ?`, [storyId]);
+  if (!story) {
+    throw new Error("Story not found.");
+  }
+
+  const runRecord = await get(`SELECT id, completion_status FROM runs WHERE id = ?`, [runId]);
+  if (!runRecord) {
+    throw new Error("Run not found.");
+  }
+
+  const isComplete = runRecord.completion_status === "complete" ? 1 : 0;
+  await run(
+    `
+      UPDATE stories
+      SET is_complete = ?,
+          completion_run_id = ?,
+          completed_at = CASE WHEN ? = 1 THEN CURRENT_TIMESTAMP ELSE NULL END
+      WHERE id = ?
+    `,
+    [isComplete, runRecord.id, isComplete, storyId]
+  );
+
+  return {
+    storyId,
+    runId: runRecord.id,
+    isComplete: isComplete === 1
+  };
+}
+
+async function getCompletionEligibleRuns(limit = 100) {
+  await dbReady;
+  return all(
+    `
+      SELECT id, project_name, change_title, prompt, completion_status, created_at
+      FROM runs
+      WHERE completion_status IS NOT NULL
+      ORDER BY id DESC
+      LIMIT ?
+    `,
+    [limit]
+  );
+}
+
+module.exports = {
+  saveRun,
+  getRuns,
+  getRunById,
+  updateRunMerge,
+  createFeatureTree,
+  getFeaturesTree,
+  syncStoryCompletionFromRun,
+  getCompletionEligibleRuns,
+  dbReady
+};
