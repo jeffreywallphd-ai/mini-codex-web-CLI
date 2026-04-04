@@ -572,6 +572,8 @@ app.post("/api/stories/:storyId/complete-with-automation", async (req, res) => {
     automationRunRecord = await createAutomationRun({
       automationType: "story",
       targetId: storyId,
+      projectName,
+      baseBranch,
       stopFlag: false,
       stopOnIncomplete: stopMergeIfStoryImplementationIncomplete,
       automationStatus: "running",

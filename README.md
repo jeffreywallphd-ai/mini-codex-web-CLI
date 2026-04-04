@@ -26,7 +26,7 @@ The app is designed for personal LAN use, not for public internet exposure or mu
 - Recent run history with search
 - Basic usage tracking when the SDK returns usage data
 - Automation queue generation utilities for deterministic `feature -> epic -> story` ordering
-- Automation metadata persistence for orchestration state (`automation_type`, `target_id`, `stop_on_incomplete`, `stop_flag`, `current_position`, `automation_status`, `stop_reason`)
+- Automation metadata persistence for orchestration state (`automation_type`, `target_id`, `project_name`, `base_branch`, `stop_on_incomplete`, `stop_flag`, `current_position`, `automation_status`, `stop_reason`)
 - Automation story execution outcome persistence for status reporting (`automation_story_executions` with run linkage and queue outcome state)
 - Sequential automation runner for server-driven queue execution (`server/automationRunner.js`)
 - Shared automated story run pipeline that reuses manual run creation/execution persistence (`server/automatedStoryRunPipeline.js`)
@@ -161,6 +161,8 @@ Shared automation planning rules are defined in `server/automationQueue.js`.
   `automation_runs` with:
   - `automation_type` (`feature`, `epic`, or `story`)
   - `target_id`
+  - `project_name`
+  - `base_branch`
   - `stop_on_incomplete`
   - `stop_flag`
   - `current_position`
@@ -211,6 +213,8 @@ automation and the existing run pipeline.
   creation/execution
 - persists run output through the standard `runs` table lifecycle and then
   links the run to the story (`attachRunToStory`)
+- requires project and base-branch context before execution starts so invalid
+  scope is rejected early
 - returns normalized completion metadata consumed by queue orchestration
 
 ## Automation Start API
@@ -227,6 +231,8 @@ automation runs by scope:
 Each endpoint:
 
 - validates `projectName` and `baseBranch`
+- validates `projectName` maps to a known local project and `baseBranch`
+  exists in that repository before queue execution starts
 - validates the scoped target exists (`featureId`, `epicId`, or `storyId`)
 - validates the selected target is eligible (non-empty runnable queue)
 - creates an `automation_runs` record with initial state
@@ -243,13 +249,14 @@ Request body fields:
 Success response (`202 Accepted`) includes tracking metadata for the UI:
 
 - `automationRun` (id, type, target, status, stop flags, timestamps)
+- `automationRun.projectName` and `automationRun.baseBranch` for traceability
 - `queue` (`totalStories`, `storyIds`, and queue readiness metadata)
 - `projectName`
 - `baseBranch`
 
 Automation status response (`200 OK`) includes polling-friendly state:
 
-- `automationRun` (id, type, target, stop flags, current queue position, status, timestamps)
+- `automationRun` (id, type, target, project/branch scope, stop flags, current queue position, status, timestamps)
 - `queue` (`totalStories`, `processedStories`, `remainingStories`, and `currentItem` while running)
 - `summary` (completed/failed/stopped execution counts)
 - `completedSteps` and `failedSteps` (per-story summarized outcomes with run linkage)

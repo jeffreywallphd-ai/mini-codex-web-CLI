@@ -119,6 +119,8 @@ test("automation metadata is persisted and updateable in sqlite", async () => {
     const created = await createAutomationRun({
       automationType: "story",
       targetId,
+      projectName: "db-test-project",
+      baseBranch: "main",
       stopFlag: false,
       stopOnIncomplete: true,
       automationStatus: "running",
@@ -129,6 +131,8 @@ test("automation metadata is persisted and updateable in sqlite", async () => {
 
     assert.equal(created.automation_type, "story");
     assert.equal(created.target_id, targetId);
+    assert.equal(created.project_name, "db-test-project");
+    assert.equal(created.base_branch, "main");
     assert.equal(created.stop_flag, 0);
     assert.equal(created.stop_on_incomplete, 1);
     assert.equal(created.current_position, 1);
@@ -139,6 +143,8 @@ test("automation metadata is persisted and updateable in sqlite", async () => {
     assert.equal(loaded.id, automationRunId);
     assert.equal(loaded.automation_type, "story");
     assert.equal(loaded.target_id, targetId);
+    assert.equal(loaded.project_name, "db-test-project");
+    assert.equal(loaded.base_branch, "main");
     assert.equal(loaded.stop_on_incomplete, 1);
     assert.equal(loaded.automation_status, "running");
     assert.equal(loaded.stop_reason, null);
@@ -167,6 +173,8 @@ test("automation metadata persistence validates required fields", async () => {
     () => createAutomationRun({
       automationType: "",
       targetId: 1,
+      projectName: "demo-project",
+      baseBranch: "main",
       currentPosition: 1
     }),
     /Automation type is required/
@@ -176,6 +184,8 @@ test("automation metadata persistence validates required fields", async () => {
     () => createAutomationRun({
       automationType: "unknown",
       targetId: 1,
+      projectName: "demo-project",
+      baseBranch: "main",
       currentPosition: 1
     }),
     /Automation type must be feature, epic, or story/
@@ -185,9 +195,33 @@ test("automation metadata persistence validates required fields", async () => {
     () => createAutomationRun({
       automationType: "story",
       targetId: 0,
+      projectName: "demo-project",
+      baseBranch: "main",
       currentPosition: 1
     }),
     /Target id must be a positive integer/
+  );
+
+  await assert.rejects(
+    () => createAutomationRun({
+      automationType: "story",
+      targetId: 1,
+      projectName: "",
+      baseBranch: "main",
+      currentPosition: 1
+    }),
+    /Project name is required/
+  );
+
+  await assert.rejects(
+    () => createAutomationRun({
+      automationType: "story",
+      targetId: 1,
+      projectName: "demo-project",
+      baseBranch: "",
+      currentPosition: 1
+    }),
+    /Base branch is required/
   );
 
   await assert.rejects(
@@ -213,6 +247,8 @@ test("automation story execution outcomes are persisted for status displays", as
     const automationRun = await createAutomationRun({
       automationType: "story",
       targetId,
+      projectName: `db-test-project-${targetId}`,
+      baseBranch: "main",
       stopFlag: false,
       stopOnIncomplete: true,
       automationStatus: "running",

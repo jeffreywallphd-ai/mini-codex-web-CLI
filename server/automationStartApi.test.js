@@ -67,6 +67,8 @@ function createServerHarness(overrides = {}) {
         id: automationRunIdSeed,
         automation_type: input.automationType,
         target_id: Number(input.targetId),
+        project_name: input.projectName ?? null,
+        base_branch: input.baseBranch ?? null,
         stop_on_incomplete: input.stopOnIncomplete ? 1 : 0,
         stop_flag: input.stopFlag ? 1 : 0,
         current_position: input.currentPosition,
@@ -84,6 +86,8 @@ function createServerHarness(overrides = {}) {
         id: Number(automationRunId),
         automation_type: "feature",
         target_id: 100,
+        project_name: "demo-project",
+        base_branch: "main",
         stop_on_incomplete: 0,
         stop_flag: 0,
         current_position: 1,
@@ -145,6 +149,8 @@ function createServerHarness(overrides = {}) {
       id: Number(automationRunId),
       automation_type: "feature",
       target_id: 100,
+      project_name: "demo-project",
+      base_branch: "main",
       stop_on_incomplete: 0,
       stop_flag: 0,
       current_position: 2,
@@ -279,6 +285,8 @@ test("feature/epic/story start endpoints launch automation and return tracking p
       assert.equal(payload.projectName, "demo-project");
       assert.equal(payload.baseBranch, "main");
       assert.equal(payload.automationRun.automationType, testCase.expectedType);
+      assert.equal(payload.automationRun.projectName, "demo-project");
+      assert.equal(payload.automationRun.baseBranch, "main");
       assert.equal(payload.automationRun.stopOnIncomplete, true);
       assert.equal(payload.automationRun.status, "running");
       assert.equal(payload.queue.totalStories, testCase.expectedStoryIds.length);
@@ -288,6 +296,12 @@ test("feature/epic/story start endpoints launch automation and return tracking p
   });
 
   assert.equal(harness.calls.createAutomationRun.length, 3);
+  assert.ok(
+    harness.calls.createAutomationRun.every((call) => (
+      call.projectName === "demo-project"
+      && call.baseBranch === "main"
+    ))
+  );
   assert.equal(harness.calls.detachedTasks.length, 3);
   assert.equal(harness.calls.executeAutomatedStoryRun.length, 0);
 
@@ -369,6 +383,47 @@ test("start endpoint rejects ineligible targets with no runnable stories", async
   assert.equal(harness.calls.detachedTasks.length, 0);
 });
 
+test("start endpoint rejects missing or invalid project/branch context before queue execution", async () => {
+  const harness = createServerHarness({
+    isValidProject: (projectName) => projectName === "demo-project",
+    listLocalBranches: async () => ({ branches: ["main"], currentBranch: "main" })
+  });
+
+  await withServer(harness, async (baseUrl) => {
+    const invalidProjectResponse = await fetch(`${baseUrl}/api/automation/start/feature/100`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        projectName: "unknown-project",
+        baseBranch: "main"
+      })
+    });
+    assert.equal(invalidProjectResponse.status, 400);
+    const invalidProjectPayload = await invalidProjectResponse.json();
+    assert.match(invalidProjectPayload.error, /valid project name is required/i);
+
+    const invalidBranchResponse = await fetch(`${baseUrl}/api/automation/start/feature/100`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        projectName: "demo-project",
+        baseBranch: "release/unknown"
+      })
+    });
+    assert.equal(invalidBranchResponse.status, 400);
+    const invalidBranchPayload = await invalidBranchResponse.json();
+    assert.match(invalidBranchPayload.error, /Invalid base branch 'release\/unknown'/);
+  });
+
+  assert.equal(harness.calls.createAutomationRun.length, 0);
+  assert.equal(harness.calls.detachedTasks.length, 0);
+  assert.equal(harness.calls.executeAutomatedStoryRun.length, 0);
+});
+
 test("status endpoint returns queue progress and current item for running automation", async () => {
   const harness = createServerHarness();
 
@@ -380,6 +435,8 @@ test("status endpoint returns queue progress and current item for running automa
 
     assert.equal(payload.automationRun.id, 1001);
     assert.equal(payload.automationRun.status, "running");
+    assert.equal(payload.automationRun.projectName, "demo-project");
+    assert.equal(payload.automationRun.baseBranch, "main");
     assert.equal(payload.queue.totalStories, 2);
     assert.equal(payload.queue.processedStories, 1);
     assert.equal(payload.queue.remainingStories, 1);
@@ -401,6 +458,8 @@ test("status endpoint returns final result and handles invalid or missing ids", 
         id: Number(automationRunId),
         automation_type: "story",
         target_id: 301,
+        project_name: "demo-project",
+        base_branch: "main",
         stop_on_incomplete: 1,
         stop_flag: 1,
         current_position: 1,
@@ -446,6 +505,8 @@ test("status endpoint returns final result and handles invalid or missing ids", 
     const completedPayload = await completedResponse.json();
     assert.equal(completedPayload.finalResult.status, "stopped");
     assert.equal(completedPayload.finalResult.stopReason, "story_incomplete");
+    assert.equal(completedPayload.automationRun.projectName, "demo-project");
+    assert.equal(completedPayload.automationRun.baseBranch, "main");
 
     const invalidResponse = await fetch(`${baseUrl}/api/automation/status/not-a-number`);
     assert.equal(invalidResponse.status, 400);

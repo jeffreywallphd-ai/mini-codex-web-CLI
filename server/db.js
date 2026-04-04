@@ -9,7 +9,7 @@ const dbPath = path.resolve(dataDir, "app.db");
 const db = new sqlite3.Database(dbPath);
 db.run("PRAGMA foreign_keys = ON");
 
-const LATEST_SCHEMA_VERSION = 11;
+const LATEST_SCHEMA_VERSION = 12;
 const VALID_AUTOMATION_TYPES = new Set(["feature", "epic", "story"]);
 const VALID_AUTOMATION_STATUSES = new Set(["pending", "running", "completed", "failed", "stopped"]);
 const VALID_AUTOMATION_STORY_EXECUTION_STATUSES = new Set(["completed", "failed"]);
@@ -86,7 +86,12 @@ async function detectVersionFromSchema() {
         const hasStopReason = await columnExists("automation_runs", "stop_reason");
         if (hasStopReason) {
           const hasStoryExecutionTable = await tableExists("automation_story_executions");
-          if (hasStoryExecutionTable) return 11;
+          if (hasStoryExecutionTable) {
+            const hasAutomationScopeContext = await columnExists("automation_runs", "project_name")
+              && await columnExists("automation_runs", "base_branch");
+            if (hasAutomationScopeContext) return 12;
+            return 11;
+          }
           return 10;
         }
         return 9;
@@ -324,6 +329,11 @@ async function migrateToV11() {
   `);
 }
 
+async function migrateToV12() {
+  await ensureColumn("automation_runs", "project_name", "TEXT NOT NULL DEFAULT ''");
+  await ensureColumn("automation_runs", "base_branch", "TEXT NOT NULL DEFAULT ''");
+}
+
 async function runMigrations() {
   let version = await getSchemaVersion();
 
@@ -392,6 +402,12 @@ async function runMigrations() {
   if (version < 11) {
     await migrateToV11();
     version = 11;
+    await setSchemaVersion(version);
+  }
+
+  if (version < 12) {
+    await migrateToV12();
+    version = 12;
     await setSchemaVersion(version);
   }
 
@@ -831,6 +847,8 @@ async function createAutomationRun(input = {}) {
   await dbReady;
   const automationType = String(input.automationType || "").trim().toLowerCase();
   const automationStatus = String(input.automationStatus || "running").trim().toLowerCase();
+  const projectName = String(input.projectName || "").trim();
+  const baseBranch = String(input.baseBranch || "").trim();
   const targetId = Number.parseInt(input.targetId, 10);
   const stopFlag = input.stopFlag ? 1 : 0;
   const stopOnIncomplete = input.stopOnIncomplete ? 1 : 0;
@@ -849,6 +867,12 @@ async function createAutomationRun(input = {}) {
   if (!Number.isInteger(targetId) || targetId <= 0) {
     throw new Error("Target id must be a positive integer.");
   }
+  if (!projectName) {
+    throw new Error("Project name is required.");
+  }
+  if (!baseBranch) {
+    throw new Error("Base branch is required.");
+  }
 
   if (!automationStatus) {
     throw new Error("Automation status is required.");
@@ -864,10 +888,30 @@ async function createAutomationRun(input = {}) {
   const id = await runWithLastId(
     `
       INSERT INTO automation_runs
-      (automation_type, target_id, stop_flag, stop_on_incomplete, current_position, automation_status, stop_reason)
-      VALUES (?, ?, ?, ?, ?, ?, ?)
+      (
+        automation_type,
+        target_id,
+        project_name,
+        base_branch,
+        stop_flag,
+        stop_on_incomplete,
+        current_position,
+        automation_status,
+        stop_reason
+      )
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
     `,
-    [automationType, targetId, stopFlag, stopOnIncomplete, currentPosition, automationStatus, stopReason]
+    [
+      automationType,
+      targetId,
+      projectName,
+      baseBranch,
+      stopFlag,
+      stopOnIncomplete,
+      currentPosition,
+      automationStatus,
+      stopReason
+    ]
   );
 
   return getAutomationRunById(id);
@@ -887,6 +931,8 @@ async function getAutomationRunById(id) {
         id,
         automation_type,
         target_id,
+        project_name,
+        base_branch,
         stop_flag,
         stop_on_incomplete,
         current_position,
