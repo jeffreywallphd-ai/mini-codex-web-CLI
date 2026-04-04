@@ -9,27 +9,7 @@ const dbPath = path.resolve(dataDir, "app.db");
 const db = new sqlite3.Database(dbPath);
 db.run("PRAGMA foreign_keys = ON");
 
-
 const LATEST_SCHEMA_VERSION = 6;
-const RUN_COLUMNS = {
-  archived: "INTEGER NOT NULL DEFAULT 0",
-  execution_mode: "TEXT",
-  branch_name: "TEXT",
-  base_branch: "TEXT",
-  git_status: "TEXT",
-  git_status_files: "TEXT",
-  git_diff_map: "TEXT",
-  change_title: "TEXT",
-  change_description: "TEXT",
-  prompt_with_instructions: "TEXT",
-  executed_command: "TEXT",
-  spawn_command: "TEXT",
-  merge_code: "INTEGER",
-  merge_stdout: "TEXT",
-  merge_stderr: "TEXT",
-  merge_git_status: "TEXT",
-  merged_at: "DATETIME"
-};
 
 function run(sql, params = []) {
   return new Promise((resolve, reject) => {
@@ -297,69 +277,69 @@ async function runMigrations() {
 
 const dbReady = runMigrations();
 
-function saveRun(run) {
+function saveRun(runInput) {
   return new Promise((resolve, reject) => {
     dbReady
       .then(() => {
         db.run(
-      `INSERT INTO runs
-      (
-        project_name,
-        prompt,
-        code,
-        stdout,
-        stderr,
-        status_before,
-        status_after,
-        usage_delta,
-        credits_remaining,
-        execution_mode,
-        branch_name,
-        base_branch,
-        git_status,
-        git_status_files,
-        git_diff_map,
-        change_title,
-        change_description,
-        prompt_with_instructions,
-        executed_command,
-        spawn_command,
-        completion_status,
-        completion_work,
-        run_start_time,
-        run_end_time
-      )
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)` ,
-      [
-        run.projectName,
-        run.prompt,
-        run.code,
-        run.stdout,
-        run.stderr,
-        run.statusBefore,
-        run.statusAfter,
-        run.usageDelta,
-        run.creditsRemaining,
-        run.executionMode,
-        run.branchName,
-        run.baseBranch,
-        run.gitStatus,
-        JSON.stringify(run.gitStatusFiles || []),
-        JSON.stringify(run.gitDiffMap || {}),
-        run.changeTitle,
-        run.changeDescription,
-        run.promptWithInstructions,
-        run.executedCommand,
-        run.spawnCommand,
-        run.completionStatus,
-        run.completionWork,
-        run.runStartTime,
-        run.runEndTime
-      ],
-      function onInsert(err) {
-        if (err) return reject(err);
-        resolve(this.lastID);
-      }
+          `INSERT INTO runs
+          (
+            project_name,
+            prompt,
+            code,
+            stdout,
+            stderr,
+            status_before,
+            status_after,
+            usage_delta,
+            credits_remaining,
+            execution_mode,
+            branch_name,
+            base_branch,
+            git_status,
+            git_status_files,
+            git_diff_map,
+            change_title,
+            change_description,
+            prompt_with_instructions,
+            executed_command,
+            spawn_command,
+            completion_status,
+            completion_work,
+            run_start_time,
+            run_end_time
+          )
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          [
+            runInput.projectName,
+            runInput.prompt,
+            runInput.code,
+            runInput.stdout,
+            runInput.stderr,
+            runInput.statusBefore,
+            runInput.statusAfter,
+            runInput.usageDelta,
+            runInput.creditsRemaining,
+            runInput.executionMode,
+            runInput.branchName,
+            runInput.baseBranch,
+            runInput.gitStatus,
+            JSON.stringify(runInput.gitStatusFiles || []),
+            JSON.stringify(runInput.gitDiffMap || {}),
+            runInput.changeTitle,
+            runInput.changeDescription,
+            runInput.promptWithInstructions,
+            runInput.executedCommand,
+            runInput.spawnCommand,
+            runInput.completionStatus,
+            runInput.completionWork,
+            runInput.runStartTime,
+            runInput.runEndTime
+          ],
+          function onInsert(err) {
+            if (err) return reject(err);
+            resolve(this.lastID);
+          }
         );
       })
       .catch(reject);
@@ -411,37 +391,6 @@ function getRuns({ search = "", status = "active" } = {}) {
            LIMIT 50`,
           params,
           (err, rows) => (err ? reject(err) : resolve(rows))
-
-      `SELECT id, project_name, prompt, code, created_at, execution_mode, branch_name, merged_at, change_title, completion_status, completion_work, run_start_time, run_end_time
-       FROM runs ORDER BY id DESC LIMIT 50`,
-      [],
-    const normalizedStatus = String(status || "active").toLowerCase();
-    const whereClauses = [];
-    const params = [];
-
-    if (normalizedStatus === "active") {
-      whereClauses.push("COALESCE(archived, 0) = 0");
-    } else if (normalizedStatus === "archived") {
-      whereClauses.push("COALESCE(archived, 0) = 1");
-    }
-
-    const normalizedSearch = String(search || "").trim();
-    if (normalizedSearch) {
-      whereClauses.push("(project_name LIKE ? OR prompt LIKE ? OR branch_name LIKE ?)");
-      const searchTerm = `%${normalizedSearch}%`;
-      params.push(searchTerm, searchTerm, searchTerm);
-    }
-
-    const whereSql = whereClauses.length ? `WHERE ${whereClauses.join(" AND ")}` : "";
-
-    db.all(
-      `SELECT id, project_name, prompt, code, created_at, execution_mode, branch_name, merged_at, change_title, COALESCE(archived, 0) AS archived
-       FROM runs
-       ${whereSql}
-       ORDER BY id DESC
-       LIMIT 50`,
-      params,
-      (err, rows) => (err ? reject(err) : resolve(rows))
         );
       })
       .catch(reject);
@@ -453,9 +402,9 @@ function getRunById(id) {
     dbReady
       .then(() => {
         db.get(
-      `SELECT * FROM runs WHERE id = ?`,
-      [id],
-      (err, row) => (err ? reject(err) : resolve(row))
+          `SELECT * FROM runs WHERE id = ?`,
+          [id],
+          (err, row) => (err ? reject(err) : resolve(row))
         );
       })
       .catch(reject);
@@ -467,22 +416,22 @@ function updateRunMerge(id, mergeResult) {
     dbReady
       .then(() => {
         db.run(
-      `UPDATE runs
-       SET merge_git_status = ?,
-           merge_code = ?,
-           merge_stdout = ?,
-           merge_stderr = ?,
-           merged_at = CASE WHEN ? = 0 THEN CURRENT_TIMESTAMP ELSE merged_at END
-       WHERE id = ?`,
-      [
-        mergeResult.gitStatus,
-        mergeResult.code,
-        mergeResult.stdout,
-        mergeResult.stderr,
-        mergeResult.code,
-        id
-      ],
-      (err) => (err ? reject(err) : resolve())
+          `UPDATE runs
+           SET merge_git_status = ?,
+               merge_code = ?,
+               merge_stdout = ?,
+               merge_stderr = ?,
+               merged_at = CASE WHEN ? = 0 THEN CURRENT_TIMESTAMP ELSE merged_at END
+           WHERE id = ?`,
+          [
+            mergeResult.gitStatus,
+            mergeResult.code,
+            mergeResult.stdout,
+            mergeResult.stderr,
+            mergeResult.code,
+            id
+          ],
+          (err) => (err ? reject(err) : resolve())
         );
       })
       .catch(reject);
