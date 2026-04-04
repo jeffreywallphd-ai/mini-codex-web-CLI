@@ -17,6 +17,7 @@ function createHarness() {
     createContextBundle: [],
     updateContextBundle: [],
     deleteContextBundleById: [],
+    duplicateContextBundleById: [],
     createContextBundlePart: [],
     getContextBundlePartById: [],
     getContextBundlePartsByBundleId: [],
@@ -127,6 +128,36 @@ function createHarness() {
         }
       }
       return bundleStore.delete(bundleId) ? 1 : 0;
+    },
+    duplicateContextBundleById: async (id) => {
+      calls.duplicateContextBundleById.push(id);
+      const bundleId = Number(id);
+      const source = bundleStore.get(bundleId);
+      if (!source) return null;
+
+      idSeed += 1;
+      const copiedBundle = {
+        ...source,
+        id: idSeed,
+        title: `${source.title} (Copy)`,
+        created_at: "2026-04-04T00:05:00.000Z",
+        updated_at: "2026-04-04T00:05:00.000Z"
+      };
+      bundleStore.set(copiedBundle.id, copiedBundle);
+
+      const sourceParts = getBundleParts(bundleId);
+      for (const part of sourceParts) {
+        partIdSeed += 1;
+        partStore.set(partIdSeed, {
+          ...part,
+          id: partIdSeed,
+          bundle_id: copiedBundle.id,
+          created_at: "2026-04-04T00:05:00.000Z",
+          updated_at: "2026-04-04T00:05:00.000Z"
+        });
+      }
+
+      return withParts(copiedBundle);
     },
     createContextBundlePart: async (input = {}) => {
       calls.createContextBundlePart.push(input);
@@ -464,6 +495,66 @@ test("context bundles API rejects cross-bundle part mutation", async () => {
   });
 });
 
+test("context bundles API duplicates bundle metadata and part relationships", async () => {
+  const harness = createHarness();
+
+  await withServer(harness, async (baseUrl) => {
+    const createBundle = await fetch(`${baseUrl}/api/context-bundles`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        title: "Source Bundle",
+        description: "Source description",
+        status: "active"
+      })
+    });
+    assert.equal(createBundle.status, 201);
+    const sourceBundle = await createBundle.json();
+
+    const createPartA = await fetch(`${baseUrl}/api/context-bundles/${sourceBundle.id}/parts`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        partType: "feature_background",
+        title: "Part One",
+        content: "Part one content",
+        position: 1
+      })
+    });
+    assert.equal(createPartA.status, 201);
+
+    const createPartB = await fetch(`${baseUrl}/api/context-bundles/${sourceBundle.id}/parts`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        partType: "implementation_constraints",
+        title: "Part Two",
+        content: "Part two content",
+        position: 2
+      })
+    });
+    assert.equal(createPartB.status, 201);
+
+    const duplicateResponse = await fetch(`${baseUrl}/api/context-bundles/${sourceBundle.id}/duplicate`, {
+      method: "POST"
+    });
+    assert.equal(duplicateResponse.status, 201);
+    const duplicate = await duplicateResponse.json();
+    assert.notEqual(duplicate.id, sourceBundle.id);
+    assert.match(duplicate.title, /\(Copy\)$/);
+    assert.equal(duplicate.parts.length, 2);
+    assert.deepEqual(duplicate.parts.map((part) => part.bundle_id), [duplicate.id, duplicate.id]);
+    assert.deepEqual(duplicate.parts.map((part) => part.position), [1, 2]);
+
+    const listResponse = await fetch(`${baseUrl}/api/context-bundles`);
+    assert.equal(listResponse.status, 200);
+    const allBundles = await listResponse.json();
+    assert.equal(allBundles.length, 2);
+  });
+
+  assert.equal(harness.calls.duplicateContextBundleById.length, 1);
+});
+
 test("context bundles API delete returns 404 when bundle is missing", async () => {
   const harness = createHarness();
 
@@ -473,6 +564,19 @@ test("context bundles API delete returns 404 when bundle is missing", async () =
     });
     assert.equal(deleteResponse.status, 404);
     const payload = await deleteResponse.json();
+    assert.match(payload.error, /not found/i);
+  });
+});
+
+test("context bundles API duplicate returns 404 when bundle is missing", async () => {
+  const harness = createHarness();
+
+  await withServer(harness, async (baseUrl) => {
+    const duplicateResponse = await fetch(`${baseUrl}/api/context-bundles/99999/duplicate`, {
+      method: "POST"
+    });
+    assert.equal(duplicateResponse.status, 404);
+    const payload = await duplicateResponse.json();
     assert.match(payload.error, /not found/i);
   });
 });

@@ -144,6 +144,7 @@ Context bundles are persisted with a parent-child data model in SQLite:
 - Ordering is deterministic and explicit (`position`) rather than inferred from creation order.
 - Bundle and part CRUD persistence is implemented in `server/db.js` with migration-backed schema evolution (no reset required).
 - Bundle metadata authoring UI is available at `/context-bundles.html` and supports in-page create/edit/delete flows for bundle title + description, metadata display for `intended_use`, `tags`, `project_name`, `summary`, and `updated_at`, plus clear validation feedback when required fields are missing.
+- Saved bundle cards include maintenance actions for `Edit Bundle`, `Duplicate Bundle`, and `Delete Bundle`; duplicate clones the bundle plus all ordered parts into a new `(Copy)` bundle, and delete is confirmation-protected to reduce accidental removal.
 - Bundle authoring UI includes explicit bundle-part card management for state-of-the-art context composition: add multiple parts, edit type/title/content, toggle include-in-compiled output, remove parts, and reorder deterministically with move up/down controls.
 - The index page includes a **Manage Context Bundles** navigation action that routes to `/context-bundles.html`, making it the central bundle authoring/management page.
 - Context bundle API endpoints:
@@ -152,6 +153,7 @@ Context bundles are persisted with a parent-child data model in SQLite:
   - `GET /api/context-bundles/:bundleId` (supports `includeParts=false`)
   - `PATCH /api/context-bundles/:bundleId`
   - `DELETE /api/context-bundles/:bundleId`
+  - `POST /api/context-bundles/:bundleId/duplicate`
   - `GET /api/context-bundles/:bundleId/parts`
   - `POST /api/context-bundles/:bundleId/parts`
   - `PATCH /api/context-bundles/:bundleId/parts/:partId`
