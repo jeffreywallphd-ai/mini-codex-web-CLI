@@ -38,6 +38,7 @@ let epicDraftId = 0;
 let storyDraftId = 0;
 const epicDrafts = [];
 const stopMergeIfIncompleteByStoryId = new Map();
+const stopRunForIncompleteStoriesByFeatureId = new Map();
 
 function isStoryComplete(story) {
   return Boolean(story?.is_complete);
@@ -427,9 +428,10 @@ function getIncompleteStoryCountForFeature(feature) {
   return count;
 }
 
-async function startFeatureAutomation(featureId) {
+async function startFeatureAutomation(featureId, options = {}) {
   const projectName = automationScope.projectName;
   const baseBranch = automationScope.baseBranch;
+  const stopOnIncompleteStory = Boolean(options.stopOnIncompleteStory);
   if (!projectName || !baseBranch) {
     throw new Error("Select a project and branch on the editor page first, then retry automation.");
   }
@@ -439,7 +441,8 @@ async function startFeatureAutomation(featureId) {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       projectName,
-      baseBranch
+      baseBranch,
+      stopOnIncompleteStory
     })
   });
   const result = await response.json();
@@ -483,6 +486,22 @@ function createFeatureAutomationUi(content, feature) {
     : "Complete with Automation";
   button.disabled = isAnyAutomationInFlight() && !isActiveFeatureRun;
 
+  const stopOnIncompleteCheckbox = document.createElement("input");
+  stopOnIncompleteCheckbox.type = "checkbox";
+  stopOnIncompleteCheckbox.checked = Boolean(
+    stopRunForIncompleteStoriesByFeatureId.get(feature.id)
+  );
+  stopOnIncompleteCheckbox.disabled = isActiveFeatureRun;
+  stopOnIncompleteCheckbox.addEventListener("change", () => {
+    stopRunForIncompleteStoriesByFeatureId.set(feature.id, stopOnIncompleteCheckbox.checked);
+  });
+
+  const stopOnIncompleteLabel = document.createElement("label");
+  stopOnIncompleteLabel.className = "story-automation-checkbox";
+  stopOnIncompleteLabel.appendChild(stopOnIncompleteCheckbox);
+  stopOnIncompleteLabel.appendChild(document.createTextNode("Stop Run For Incomplete Stories"));
+  content.appendChild(stopOnIncompleteLabel);
+
   button.addEventListener("click", async () => {
     if (isAnyAutomationInFlight() && !isActiveFeatureRun) {
       createStatusBox.textContent = "Automation is already running. Wait for completion before starting another run.";
@@ -498,7 +517,9 @@ function createFeatureAutomationUi(content, feature) {
     button.textContent = "Starting Automation...";
 
     try {
-      const result = await startFeatureAutomation(feature.id);
+      const result = await startFeatureAutomation(feature.id, {
+        stopOnIncompleteStory: stopOnIncompleteCheckbox.checked
+      });
       const runId = result?.automationRun?.id;
       const totalStories = result?.queue?.totalStories;
       createStatusBox.textContent = Number.isInteger(runId)
