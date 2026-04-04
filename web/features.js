@@ -1,10 +1,16 @@
 const backButton = document.getElementById("backButton");
 const createStatusBox = document.getElementById("createStatusBox");
+const createFeatureCardToggle = document.getElementById("createFeatureCardToggle");
+const createFeatureCardContent = document.getElementById("createFeatureCardContent");
+const manifestCardToggle = document.getElementById("manifestCardToggle");
+const manifestCardContent = document.getElementById("manifestCardContent");
 const featureNameInput = document.getElementById("featureNameInput");
 const featureDescriptionInput = document.getElementById("featureDescriptionInput");
 const addEpicButton = document.getElementById("addEpicButton");
 const saveFeatureButton = document.getElementById("saveFeatureButton");
 const epicDraftsContainer = document.getElementById("epicDraftsContainer");
+const manifestJsonInput = document.getElementById("manifestJsonInput");
+const createManifestButton = document.getElementById("createManifestButton");
 const incompleteSearchInput = document.getElementById("incompleteSearchInput");
 const clearIncompleteSearchButton = document.getElementById("clearIncompleteSearchButton");
 const completeSearchInput = document.getElementById("completeSearchInput");
@@ -315,6 +321,25 @@ function createCollapsibleCard({ levelClass, cardKey, name, status, renderBody }
   card.appendChild(content);
   applyOpenState();
   return card;
+}
+
+function wireStaticCardToggle(toggleButton, contentNode, { defaultOpen = false } = {}) {
+  if (!toggleButton || !contentNode) return;
+
+  let isOpen = defaultOpen;
+
+  const applyState = () => {
+    toggleButton.classList.toggle("is-open", isOpen);
+    contentNode.classList.toggle("hidden", !isOpen);
+    toggleButton.setAttribute("aria-expanded", String(isOpen));
+  };
+
+  toggleButton.addEventListener("click", () => {
+    isOpen = !isOpen;
+    applyState();
+  });
+
+  applyState();
 }
 
 function createStoryAutomationUi(content, story) {
@@ -793,6 +818,47 @@ async function saveFeatureTree() {
   }
 }
 
+async function createFeaturesFromManifest() {
+  if (!automationScope.projectName || !automationScope.baseBranch) {
+    createStatusBox.textContent = "Project and branch are required. Return to the editor page first.";
+    return;
+  }
+
+  const manifestJson = manifestJsonInput.value.trim();
+  if (!manifestJson) {
+    createStatusBox.textContent = "Paste a JSON manifest first.";
+    return;
+  }
+
+  createManifestButton.disabled = true;
+  createStatusBox.textContent = "Creating features from JSON manifest...";
+
+  try {
+    const response = await fetch("/api/features/tree/from-manifest", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        projectName: automationScope.projectName,
+        baseBranch: automationScope.baseBranch,
+        manifestJson
+      })
+    });
+    const result = await response.json();
+
+    if (!response.ok) {
+      throw new Error(result.error || "Manifest creation failed.");
+    }
+
+    allFeatures = Array.isArray(result.features) ? result.features : [];
+    renderFeatureLists();
+    createStatusBox.textContent = `Created ${result.createdFeatureCount} feature(s) from manifest.`;
+  } catch (error) {
+    createStatusBox.textContent = `Manifest create failed: ${error.message}`;
+  } finally {
+    createManifestButton.disabled = false;
+  }
+}
+
 backButton.addEventListener("click", () => {
   const query = new URLSearchParams();
   if (automationScope.projectName) {
@@ -812,6 +878,7 @@ addEpicButton.addEventListener("click", () => {
 });
 
 saveFeatureButton.addEventListener("click", saveFeatureTree);
+createManifestButton.addEventListener("click", createFeaturesFromManifest);
 incompleteSearchInput.addEventListener("input", renderFeatureLists);
 completeSearchInput.addEventListener("input", renderFeatureLists);
 clearIncompleteSearchButton.addEventListener("click", () => {
@@ -831,6 +898,8 @@ setInterval(() => {
 
 (async () => {
   try {
+    wireStaticCardToggle(createFeatureCardToggle, createFeatureCardContent, { defaultOpen: true });
+    wireStaticCardToggle(manifestCardToggle, manifestCardContent, { defaultOpen: false });
     automationScope = readScopeFromUrlOrState();
     syncScopeIntoEditorState(automationScope);
     renderScopeHint();
