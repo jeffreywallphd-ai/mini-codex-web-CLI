@@ -278,6 +278,9 @@ Each endpoint:
 - validates runnable stories include required prompt data before automation starts
 - rejects completed targets as ineligible when all scoped stories are already
   complete (prevents accidental re-runs without deliberate action)
+- returns `422` with `errorType: "target_ineligible"` plus `queueStatus` when
+  a selected feature/epic/story has no eligible not-yet-implemented stories (or
+  contains no stories)
 - rejects concurrent launches for the exact same automation target
   (`automationType` + `targetId` + `projectName` + `baseBranch`) while a run is
   already `running`, returning a frontend-friendly `409` conflict payload
@@ -347,12 +350,15 @@ Feature Management UI integration:
 - running feature/epic automation summaries include a concise `Current story` line sourced from `GET /api/automation/status/:automationRunId` queue status data (`queue.currentItem`)
 - feature/epic/story automation summaries and recent execution history include run-details links (`/run-details.html?id=<runId>`) when run ids are available, with a graceful `Run details unavailable` fallback when they are not
 - feature automation UI stores a lightweight per-scope (`projectName` + `baseBranch`) snapshot of the latest automation run id and status payload in `localStorage`, allowing cards to recover recent automation context after page refresh without introducing a client-side state library
-- the button is hidden for completed features and replaced with a lightweight hint when no incomplete stories are available in the feature
+- the button is hidden for completed features and replaced with a lightweight
+  ineligible hint when the feature has no stories or all stories are complete
 - incomplete epic cards surface a **Complete with Automation** button
 - the epic button starts automation via `POST /api/automation/start/epic/:epicId`
 - epic automation requests include explicit scope metadata (`automationType`, `targetId`, `epicId`) so backend scope validation can reject mismatched launches
 - epic cards include a `Stop Run For Incomplete Stories` checkbox that controls `stopOnIncompleteStory` in the start request (defaults to unchecked)
 - epic cards include the same compact automation status summary badge pattern (`not_started`, `running`, `completed`, `stopped`, `failed`) and show active-run context when an epic run is in progress
+- epic cards show the same ineligible hint pattern when the epic has no stories
+  or all stories are complete
 - incomplete story cards surface a **Complete with Automation** button
 - completed story cards show an explicit ineligible hint instead of an
   automation control

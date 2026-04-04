@@ -751,8 +751,10 @@ test("start endpoint rejects ineligible targets with no runnable stories", async
       })
     });
 
-    assert.equal(response.status, 409);
+    assert.equal(response.status, 422);
     const payload = await response.json();
+    assert.equal(payload.errorType, "target_ineligible");
+    assert.equal(payload.queueStatus?.code, "empty_queue");
     assert.match(payload.error, /No runnable stories found for epic '201'/);
   });
 
@@ -881,8 +883,10 @@ test("start endpoint rejects completed targets as ineligible for automation", as
         baseBranch: "main"
       })
     });
-    assert.equal(featureResponse.status, 409);
+    assert.equal(featureResponse.status, 422);
     const featurePayload = await featureResponse.json();
+    assert.equal(featurePayload.errorType, "target_ineligible");
+    assert.equal(featurePayload.queueStatus?.code, "target_ineligible");
     assert.match(featurePayload.error, /not eligible for automation/i);
 
     const epicResponse = await fetch(`${baseUrl}/api/automation/start/epic/201`, {
@@ -895,8 +899,10 @@ test("start endpoint rejects completed targets as ineligible for automation", as
         baseBranch: "main"
       })
     });
-    assert.equal(epicResponse.status, 409);
+    assert.equal(epicResponse.status, 422);
     const epicPayload = await epicResponse.json();
+    assert.equal(epicPayload.errorType, "target_ineligible");
+    assert.equal(epicPayload.queueStatus?.code, "target_ineligible");
     assert.match(epicPayload.error, /not eligible for automation/i);
 
     const storyResponse = await fetch(`${baseUrl}/api/automation/start/story/301`, {
@@ -909,8 +915,10 @@ test("start endpoint rejects completed targets as ineligible for automation", as
         baseBranch: "main"
       })
     });
-    assert.equal(storyResponse.status, 409);
+    assert.equal(storyResponse.status, 422);
     const storyPayload = await storyResponse.json();
+    assert.equal(storyPayload.errorType, "target_ineligible");
+    assert.equal(storyPayload.queueStatus?.code, "target_ineligible");
     assert.match(storyPayload.error, /not eligible for automation/i);
   });
 

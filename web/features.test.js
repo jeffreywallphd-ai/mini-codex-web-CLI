@@ -90,14 +90,16 @@ test("feature card automation UI keeps existing card copy and eligibility afford
 
   assert.match(source, /button\.textContent\s*=\s*isActiveFeatureRun \|\| isFeatureStartInFlight\s*\?\s*"Automation Running\.\.\."\s*:\s*"Complete with Automation"/m);
   assert.match(source, /"Stop Run For Incomplete Stories"/);
-  assert.match(source, /"No incomplete stories in this feature\."/);
+  assert.match(source, /function getAutomationIneligibleHint\(entityType,\s*summary = \{\}\)/);
+  assert.match(source, /Automation unavailable: this \$\{label\} has no stories to automate\./);
+  assert.match(source, /Automation unavailable: all stories in this \$\{label\} are already complete\./);
 });
 
 test("epic card automation UI adds complete-with-automation control and status summary", () => {
   const source = readFeaturesScript();
 
   assert.match(source, /function createEpicAutomationUi\(content,\s*epic\)/);
-  assert.match(source, /"No incomplete stories in this epic\."/);
+  assert.match(source, /getAutomationIneligibleHint\("epic",\s*epicEligibilitySummary\)/);
   assert.match(source, /createEpicAutomationStatusSummary\(content,\s*epic\);/);
   assert.match(source, /button\.textContent\s*=\s*isActiveEpicRun \|\| isEpicStartInFlight\s*\?\s*"Automation Running\.\.\."\s*:\s*"Complete with Automation"/m);
   assert.match(source, /stopRunForIncompleteStoriesByEpicId\.get\(epic\.id\)/);
@@ -163,6 +165,8 @@ test("frontend story eligibility mirrors backend completion normalization", () =
   assert.match(source, /story\?\.run_completion_status/);
   assert.match(source, /function isStoryEligibleForAutomation\(story\)/);
   assert.match(source, /return normalizeStoryCompletionStatus\(story\) !== "complete";/);
+  assert.match(source, /function getAutomationEligibleStorySummary\(stories = \[\]\)/);
+  assert.match(source, /eligibleStoryCount = normalizedStories\.filter\(\(story\) => isStoryEligibleForAutomation\(story\)\)\.length/);
   assert.match(source, /"Automation unavailable: this story is already complete\."/);
 });
 

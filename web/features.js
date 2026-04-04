@@ -516,16 +516,33 @@ function assertAutomationStartScope(result, { automationType, targetId, enforceS
 }
 
 function getIncompleteStoryCountForFeature(feature) {
-  let count = 0;
-  for (const epic of feature.epics || []) {
-    for (const story of epic.stories || []) {
-      if (isStoryEligibleForAutomation(story)) {
-        count += 1;
-      }
-    }
+  return getAutomationEligibleStorySummary(
+    (feature?.epics || []).flatMap((epic) => epic?.stories || [])
+  ).eligibleStoryCount;
+}
+
+function getAutomationEligibleStorySummary(stories = []) {
+  const normalizedStories = Array.isArray(stories) ? stories : [];
+  const eligibleStoryCount = normalizedStories.filter((story) => isStoryEligibleForAutomation(story)).length;
+
+  return {
+    totalStoryCount: normalizedStories.length,
+    eligibleStoryCount
+  };
+}
+
+function getAutomationIneligibleHint(entityType, summary = {}) {
+  const normalizedEntityType = String(entityType || "item").trim().toLowerCase() || "item";
+  const label = normalizedEntityType === "feature" || normalizedEntityType === "epic" || normalizedEntityType === "story"
+    ? normalizedEntityType
+    : "item";
+  const totalStoryCount = Number.parseInt(summary.totalStoryCount, 10) || 0;
+
+  if (totalStoryCount <= 0) {
+    return `Automation unavailable: this ${label} has no stories to automate.`;
   }
 
-  return count;
+  return `Automation unavailable: all stories in this ${label} are already complete.`;
 }
 
 function getFeatureAutomationStatus(feature) {
@@ -962,9 +979,14 @@ function createFeatureAutomationUi(content, feature) {
     return;
   }
 
-  const incompleteStoryCount = getIncompleteStoryCountForFeature(feature);
+  const featureEligibilitySummary = getAutomationEligibleStorySummary(
+    (feature?.epics || []).flatMap((epic) => epic?.stories || [])
+  );
+  const incompleteStoryCount = featureEligibilitySummary.eligibleStoryCount;
   if (incompleteStoryCount <= 0) {
-    content.appendChild(createTextNode("p", "inline-hint", "No incomplete stories in this feature."));
+    content.appendChild(
+      createTextNode("p", "inline-hint", getAutomationIneligibleHint("feature", featureEligibilitySummary))
+    );
     return;
   }
 
@@ -1068,14 +1090,7 @@ function createFeatureAutomationUi(content, feature) {
 }
 
 function getIncompleteStoryCountForEpic(epic) {
-  let count = 0;
-  for (const story of epic.stories || []) {
-    if (isStoryEligibleForAutomation(story)) {
-      count += 1;
-    }
-  }
-
-  return count;
+  return getAutomationEligibleStorySummary(epic?.stories || []).eligibleStoryCount;
 }
 
 function createEpicAutomationUi(content, epic) {
@@ -1083,9 +1098,12 @@ function createEpicAutomationUi(content, epic) {
     return;
   }
 
-  const incompleteStoryCount = getIncompleteStoryCountForEpic(epic);
+  const epicEligibilitySummary = getAutomationEligibleStorySummary(epic?.stories || []);
+  const incompleteStoryCount = epicEligibilitySummary.eligibleStoryCount;
   if (incompleteStoryCount <= 0) {
-    content.appendChild(createTextNode("p", "inline-hint", "No incomplete stories in this epic."));
+    content.appendChild(
+      createTextNode("p", "inline-hint", getAutomationIneligibleHint("epic", epicEligibilitySummary))
+    );
     return;
   }
 
