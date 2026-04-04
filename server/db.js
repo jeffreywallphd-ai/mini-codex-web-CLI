@@ -9,7 +9,27 @@ const dbPath = path.resolve(dataDir, "app.db");
 const db = new sqlite3.Database(dbPath);
 db.run("PRAGMA foreign_keys = ON");
 
+
 const LATEST_SCHEMA_VERSION = 6;
+const RUN_COLUMNS = {
+  archived: "INTEGER NOT NULL DEFAULT 0",
+  execution_mode: "TEXT",
+  branch_name: "TEXT",
+  base_branch: "TEXT",
+  git_status: "TEXT",
+  git_status_files: "TEXT",
+  git_diff_map: "TEXT",
+  change_title: "TEXT",
+  change_description: "TEXT",
+  prompt_with_instructions: "TEXT",
+  executed_command: "TEXT",
+  spawn_command: "TEXT",
+  merge_code: "INTEGER",
+  merge_stdout: "TEXT",
+  merge_stderr: "TEXT",
+  merge_git_status: "TEXT",
+  merged_at: "DATETIME"
+};
 
 function run(sql, params = []) {
   return new Promise((resolve, reject) => {
@@ -391,6 +411,37 @@ function getRuns({ search = "", status = "active" } = {}) {
            LIMIT 50`,
           params,
           (err, rows) => (err ? reject(err) : resolve(rows))
+
+      `SELECT id, project_name, prompt, code, created_at, execution_mode, branch_name, merged_at, change_title, completion_status, completion_work, run_start_time, run_end_time
+       FROM runs ORDER BY id DESC LIMIT 50`,
+      [],
+    const normalizedStatus = String(status || "active").toLowerCase();
+    const whereClauses = [];
+    const params = [];
+
+    if (normalizedStatus === "active") {
+      whereClauses.push("COALESCE(archived, 0) = 0");
+    } else if (normalizedStatus === "archived") {
+      whereClauses.push("COALESCE(archived, 0) = 1");
+    }
+
+    const normalizedSearch = String(search || "").trim();
+    if (normalizedSearch) {
+      whereClauses.push("(project_name LIKE ? OR prompt LIKE ? OR branch_name LIKE ?)");
+      const searchTerm = `%${normalizedSearch}%`;
+      params.push(searchTerm, searchTerm, searchTerm);
+    }
+
+    const whereSql = whereClauses.length ? `WHERE ${whereClauses.join(" AND ")}` : "";
+
+    db.all(
+      `SELECT id, project_name, prompt, code, created_at, execution_mode, branch_name, merged_at, change_title, COALESCE(archived, 0) AS archived
+       FROM runs
+       ${whereSql}
+       ORDER BY id DESC
+       LIMIT 50`,
+      params,
+      (err, rows) => (err ? reject(err) : resolve(rows))
         );
       })
       .catch(reject);
