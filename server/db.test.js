@@ -415,6 +415,90 @@ test("run records persist automation origin linkage with backward-compatible nul
   }
 });
 
+test("run and automation persistence expose linked context bundle title metadata", async () => {
+  await dbReady;
+
+  let bundleId = null;
+  let runId = null;
+  let automationRunId = null;
+
+  try {
+    const bundle = await createContextBundle({
+      title: `Traceable Bundle ${Date.now()}`,
+      description: "Bundle used for traceability metadata tests.",
+      status: "active"
+    });
+    bundleId = bundle.id;
+
+    runId = await saveRun({
+      projectName: "db-test-project",
+      prompt: "context metadata run prompt",
+      code: 0,
+      stdout: "",
+      stderr: "",
+      statusBefore: "",
+      statusAfter: "",
+      usageDelta: "",
+      creditsRemaining: null,
+      executionMode: "read",
+      branchName: "context-meta-branch",
+      baseBranch: "main",
+      gitStatus: "",
+      gitStatusFiles: [],
+      gitDiffMap: {},
+      changeTitle: "context metadata",
+      changeDescription: "context metadata",
+      promptWithInstructions: "context metadata prompt",
+      executedCommand: "context metadata command",
+      spawnCommand: "context metadata spawn",
+      completionStatus: "unknown",
+      completionWork: "",
+      runStartTime: Date.now() - 10,
+      runEndTime: Date.now(),
+      contextBundleId: bundleId
+    });
+
+    automationRunId = (await createAutomationRun({
+      automationType: "story",
+      targetId: Date.now() + Math.floor(Math.random() * 1000),
+      projectName: "db-test-project",
+      baseBranch: "main",
+      stopFlag: false,
+      stopOnIncomplete: false,
+      automationStatus: "running",
+      currentPosition: 1,
+      stopReason: null,
+      contextBundleId: bundleId
+    })).id;
+
+    const loadedRun = await getRunById(runId);
+    assert.equal(loadedRun.context_bundle_id, bundleId);
+    assert.equal(loadedRun.context_bundle_title, bundle.title);
+
+    const listedRuns = await getRuns({ status: "all" });
+    const listedRun = listedRuns.find((item) => item.id === runId);
+    assert.ok(listedRun);
+    assert.equal(listedRun.context_bundle_id, bundleId);
+    assert.equal(listedRun.context_bundle_title, bundle.title);
+
+    const loadedAutomationRun = await getAutomationRunById(automationRunId);
+    assert.equal(loadedAutomationRun.context_bundle_id, bundleId);
+    assert.equal(loadedAutomationRun.context_bundle_title, bundle.title);
+
+    const activeAutomation = await findRunningAutomationByScope({
+      automationType: "story",
+      targetId: loadedAutomationRun.target_id
+    });
+    assert.ok(activeAutomation);
+    assert.equal(activeAutomation.context_bundle_id, bundleId);
+    assert.equal(activeAutomation.context_bundle_title, bundle.title);
+  } finally {
+    await cleanupRun(runId);
+    await cleanupAutomationRun(automationRunId);
+    await cleanupContextBundle(bundleId);
+  }
+});
+
 test("deleting an unmerged run clears linked story completion association", async () => {
   await dbReady;
 

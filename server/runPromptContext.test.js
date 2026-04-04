@@ -57,6 +57,7 @@ test("resolveRunPrompt reuses bundle compiler flow and returns assembled prompt 
   assert.match(output.prompt, /## Compiled Context Bundle/);
   assert.match(output.prompt, /## Task Prompt\nShip story 2\.3\.1/);
   assert.equal(output.promptAssembly.usedContextBundleId, 55);
+  assert.equal(output.promptAssembly.usedContextBundleTitle, "Run Integration Bundle");
   assert.equal(output.promptAssembly.compiledBundleFormat, "context_bundle_compiled_preview_v1");
   assert.deepEqual(output.promptAssembly.includedPartIds, [7, 8]);
 });
@@ -68,6 +69,7 @@ test("resolveRunPrompt returns original prompt when no bundle id is supplied", a
 
   assert.equal(output.prompt, "Keep existing flow.");
   assert.equal(output.promptAssembly.usedContextBundleId, null);
+  assert.equal(output.promptAssembly.usedContextBundleTitle, null);
   assert.equal(output.promptAssembly.promptInjectionPolicy, PROMPT_INJECTION_POLICY);
 });
 

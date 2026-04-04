@@ -174,6 +174,9 @@ function parseContextBundleSelection(body = {}) {
 
 function toStatusApiAutomationRun(automationRun) {
   const contextBundleId = Number.parseInt(automationRun.context_bundle_id, 10);
+  const contextBundleTitle = typeof automationRun?.context_bundle_title === "string"
+    ? automationRun.context_bundle_title.trim()
+    : "";
   return {
     id: automationRun.id,
     automationType: automationRun.automation_type,
@@ -186,6 +189,7 @@ function toStatusApiAutomationRun(automationRun) {
     status: automationRun.automation_status,
     stopReason: automationRun.stop_reason,
     contextBundleId: Number.isInteger(contextBundleId) && contextBundleId > 0 ? contextBundleId : null,
+    contextBundleTitle: contextBundleTitle || null,
     failedStoryId: automationRun.failed_story_id ?? null,
     failureSummary: automationRun.failure_summary ?? null,
     createdAt: automationRun.created_at,
@@ -499,6 +503,10 @@ function buildAutomationConflictResponse(conflictingRun) {
       contextBundleId: Number.isInteger(Number.parseInt(conflictingRun?.context_bundle_id, 10))
         ? Number.parseInt(conflictingRun.context_bundle_id, 10)
         : null,
+      contextBundleTitle: typeof conflictingRun?.context_bundle_title === "string"
+        && conflictingRun.context_bundle_title.trim()
+        ? conflictingRun.context_bundle_title.trim()
+        : null,
       status: String(conflictingRun?.automation_status || "").trim().toLowerCase() || null
     }
   };
@@ -531,6 +539,7 @@ function buildFallbackAutomationConflict({
     project_name: projectName,
     base_branch: baseBranch,
     context_bundle_id: null,
+    context_bundle_title: null,
     automation_status: "running"
   };
 }
