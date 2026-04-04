@@ -45,7 +45,8 @@ function createServerHarness(overrides = {}) {
     listLocalBranches: [],
     getFeaturesTree: [],
     detachedTasks: [],
-    updateAutomationRunMetadata: []
+    updateAutomationRunMetadata: [],
+    executeAutomatedStoryRun: []
   };
 
   const deps = {
@@ -116,25 +117,30 @@ function createServerHarness(overrides = {}) {
       return next;
     },
     recordAutomationStoryExecution: async () => ({}),
-    getStoryAutomationContext: async () => ({
-      story_id: 301,
-      story_name: "Story 301",
-      story_description: "Do work",
-      epic_id: 201,
-      epic_name: "Epic 201",
-      epic_description: "Epic description",
-      feature_id: 100,
-      feature_name: "Feature 100",
-      feature_description: "Feature description"
-    }),
-    attachRunToStory: async () => {},
-    executeRunFlow: async () => ({
-      runId: 55,
-      responsePayload: {
-        completion_status: "complete",
-        completion_work: "none"
-      }
-    }),
+    executeAutomatedStoryRun: async (input) => {
+      calls.executeAutomatedStoryRun.push(input);
+      return {
+        storyContext: {
+          story_id: Number(input.storyId),
+          story_name: `Story ${input.storyId}`,
+          story_description: "Do work",
+          epic_id: 201,
+          epic_name: "Epic 201",
+          epic_description: "Epic description",
+          feature_id: 100,
+          feature_name: "Feature 100",
+          feature_description: "Feature description"
+        },
+        prompt: `Story ${input.storyId} prompt`,
+        runId: 55,
+        responsePayload: {
+          completion_status: "complete",
+          completion_work: "none"
+        },
+        completionStatus: "complete",
+        completionWork: "none"
+      };
+    },
     getAutomationRunById: async (automationRunId) => automationRuns.get(Number(automationRunId)) || ({
       id: Number(automationRunId),
       automation_type: "feature",
@@ -283,6 +289,18 @@ test("feature/epic/story start endpoints launch automation and return tracking p
 
   assert.equal(harness.calls.createAutomationRun.length, 3);
   assert.equal(harness.calls.detachedTasks.length, 3);
+  assert.equal(harness.calls.executeAutomatedStoryRun.length, 0);
+
+  await harness.runDetachedTasks();
+
+  assert.equal(harness.calls.executeAutomatedStoryRun.length, 5);
+  assert.ok(
+    harness.calls.executeAutomatedStoryRun.every((call) => (
+      call.projectName === "demo-project"
+      && call.baseBranch === "main"
+      && call.executionMode === "write"
+    ))
+  );
 });
 
 test("start endpoint validates target existence", async () => {
@@ -489,19 +507,27 @@ test("manual stop prevents automation from starting the next queued story", asyn
     firstStoryGate.resolve = resolve;
   });
 
-  let executeRunFlowCalls = 0;
+  let executeAutomatedStoryRunCalls = 0;
   const harness = createServerHarness({
-    executeRunFlow: async () => {
-      executeRunFlowCalls += 1;
-      if (executeRunFlowCalls === 1) {
+    executeAutomatedStoryRun: async (input) => {
+      executeAutomatedStoryRunCalls += 1;
+      if (executeAutomatedStoryRunCalls === 1) {
         await firstStoryGate.promise;
       }
       return {
-        runId: 800 + executeRunFlowCalls,
+        storyContext: {
+          story_id: Number(input.storyId),
+          story_name: `Story ${input.storyId}`,
+          story_description: "Do work"
+        },
+        prompt: `Story ${input.storyId} prompt`,
+        runId: 800 + executeAutomatedStoryRunCalls,
         responsePayload: {
           completion_status: "complete",
           completion_work: "none"
-        }
+        },
+        completionStatus: "complete",
+        completionWork: "none"
       };
     },
     runDetached: (task) => {
@@ -534,7 +560,7 @@ test("manual stop prevents automation from starting the next queued story", asyn
     firstStoryGate.resolve();
     await harness.backgroundTaskPromise;
 
-    assert.equal(executeRunFlowCalls, 1);
+    assert.equal(executeAutomatedStoryRunCalls, 1);
 
     const statusResponse = await fetch(`${baseUrl}/api/automation/status/${automationRunId}`);
     assert.equal(statusResponse.status, 200);

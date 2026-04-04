@@ -2,7 +2,6 @@ const express = require("express");
 
 const { defineAutomationExecutionPlan } = require("./automationQueue");
 const { runSequentialStoryQueue } = require("./automationRunner");
-const { buildStoryAutomationPrompt } = require("./storyAutomationPrompt");
 
 function normalizeBoolean(value) {
   return value === true || value === 1 || value === "1" || value === "true";
@@ -119,9 +118,7 @@ function createAutomationStartRouter(deps = {}) {
     createAutomationRun,
     updateAutomationRunMetadata,
     recordAutomationStoryExecution,
-    getStoryAutomationContext,
-    attachRunToStory,
-    executeRunFlow,
+    executeAutomatedStoryRun,
     getAutomationRunById,
     getAutomationStoryExecutionsByRunId,
     getAutomationQueueStoriesByTarget,
@@ -140,9 +137,7 @@ function createAutomationStartRouter(deps = {}) {
   if (typeof createAutomationRun !== "function") throw new Error("createAutomationRun dependency is required.");
   if (typeof updateAutomationRunMetadata !== "function") throw new Error("updateAutomationRunMetadata dependency is required.");
   if (typeof recordAutomationStoryExecution !== "function") throw new Error("recordAutomationStoryExecution dependency is required.");
-  if (typeof getStoryAutomationContext !== "function") throw new Error("getStoryAutomationContext dependency is required.");
-  if (typeof attachRunToStory !== "function") throw new Error("attachRunToStory dependency is required.");
-  if (typeof executeRunFlow !== "function") throw new Error("executeRunFlow dependency is required.");
+  if (typeof executeAutomatedStoryRun !== "function") throw new Error("executeAutomatedStoryRun dependency is required.");
   if (typeof getAutomationRunById !== "function") throw new Error("getAutomationRunById dependency is required.");
   if (typeof getAutomationStoryExecutionsByRunId !== "function") throw new Error("getAutomationStoryExecutionsByRunId dependency is required.");
   if (typeof getAutomationQueueStoriesByTarget !== "function") throw new Error("getAutomationQueueStoriesByTarget dependency is required.");
@@ -177,30 +172,17 @@ function createAutomationStartRouter(deps = {}) {
           return isManualStopRequested;
         },
         executeStory: async (storyQueueItem) => {
-          const storyId = Number.parseInt(storyQueueItem?.storyId, 10);
-          if (!Number.isInteger(storyId) || storyId <= 0) {
-            throw new Error("Invalid story id in automation queue.");
-          }
-
-          const storyContext = await getStoryAutomationContext(storyId, { projectName, baseBranch });
-          if (!storyContext) {
-            throw new Error(`Story #${storyId} was not found in project scope '${projectName}:${baseBranch}'.`);
-          }
-
-          const prompt = buildStoryAutomationPrompt(storyContext);
-          const { runId, responsePayload } = await executeRunFlow({
+          const storyResult = await executeAutomatedStoryRun({
+            storyId: storyQueueItem?.storyId,
             projectName,
-            prompt,
-            executionMode: "write",
-            baseBranch
+            baseBranch,
+            executionMode: "write"
           });
 
-          await attachRunToStory(storyId, runId);
-
           return {
-            runId,
-            completionStatus: responsePayload?.completion_status,
-            completionWork: responsePayload?.completion_work ?? null
+            runId: storyResult.runId,
+            completionStatus: storyResult.completionStatus,
+            completionWork: storyResult.completionWork
           };
         },
         onProgress: async (snapshot) => {
