@@ -482,7 +482,7 @@ async function addBundlePart() {
       body: JSON.stringify({
         partType: "feature_background",
         title: `New Part ${bundleParts.length + 1}`,
-        content: "",
+        content: "Add context content for this part.",
         includeInCompiled: true,
         position: bundleParts.length + 1
       })
