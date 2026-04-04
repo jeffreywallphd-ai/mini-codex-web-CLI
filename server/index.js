@@ -154,6 +154,93 @@ function parseJson(value, fallback) {
   }
 }
 
+function parseStrictPositiveInteger(value) {
+  if (typeof value === "number") {
+    return Number.isInteger(value) && value > 0 ? value : null;
+  }
+
+  if (typeof value !== "string") {
+    return null;
+  }
+
+  const normalized = value.trim();
+  if (!/^\d+$/.test(normalized)) {
+    return null;
+  }
+
+  const parsed = Number.parseInt(normalized, 10);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : null;
+}
+
+function parseContextBundleSelectionFromBody(body = {}) {
+  const pluralContextBundleFields = ["contextBundleIds", "context_bundle_ids", "contextBundles"];
+  for (const fieldName of pluralContextBundleFields) {
+    if (!Object.prototype.hasOwnProperty.call(body, fieldName)) {
+      continue;
+    }
+
+    const value = body[fieldName];
+    const normalizedValues = Array.isArray(value)
+      ? value.filter((item) => !(item === null || item === undefined || item === ""))
+      : [];
+
+    if (Array.isArray(value) && normalizedValues.length > 1) {
+      return {
+        invalid: true,
+        message: "Multiple context bundle references are not allowed. Provide only one contextBundleId."
+      };
+    }
+
+    return {
+      invalid: true,
+      message: "Use contextBundleId to select a single context bundle."
+    };
+  }
+
+  if (!Object.prototype.hasOwnProperty.call(body, "contextBundleId")) {
+    return {
+      invalid: false,
+      contextBundleId: null
+    };
+  }
+
+  const rawContextBundleId = body.contextBundleId;
+  if (Array.isArray(rawContextBundleId)) {
+    const normalizedValues = rawContextBundleId.filter((item) => !(item === null || item === undefined || item === ""));
+    if (normalizedValues.length > 1) {
+      return {
+        invalid: true,
+        message: "Multiple context bundle references are not allowed. Provide only one contextBundleId."
+      };
+    }
+
+    return {
+      invalid: true,
+      message: "contextBundleId must be a single positive integer when provided."
+    };
+  }
+
+  if (rawContextBundleId === null || rawContextBundleId === undefined || rawContextBundleId === "") {
+    return {
+      invalid: false,
+      contextBundleId: null
+    };
+  }
+
+  const parsed = parseStrictPositiveInteger(rawContextBundleId);
+  if (!Number.isInteger(parsed) || parsed <= 0) {
+    return {
+      invalid: true,
+      message: "Invalid context bundle id in request body."
+    };
+  }
+
+  return {
+    invalid: false,
+    contextBundleId: parsed
+  };
+}
+
 function getNormalizedTitle(node) {
   if (!node || typeof node !== "object") return "";
 
@@ -305,6 +392,7 @@ async function executeRunFlow({
     getContextBundleById
   });
   const finalPrompt = resolvedPrompt.prompt;
+  const selectedContextBundleId = resolvedPrompt?.promptAssembly?.usedContextBundleId ?? null;
 
   publishRunEvent(streamId, { type: "branch.creating", message: "Creating branch from base..." });
   const branchInfo = await createCodexBranch(repoPath, baseBranch);
@@ -334,7 +422,8 @@ async function executeRunFlow({
     gitDiffMap: gitSnapshot.diffs,
     automationOriginType: runOrigin?.automationType ?? null,
     automationOriginId: runOrigin?.targetId ?? null,
-    automationRunId: runOrigin?.automationRunId ?? null
+    automationRunId: runOrigin?.automationRunId ?? null,
+    contextBundleId: selectedContextBundleId
   });
 
   publishRunEvent(streamId, { type: "run.completed", message: `Run completed and saved (#${runId}).` });
@@ -353,7 +442,8 @@ async function executeRunFlow({
     creditsRemaining: result.creditsRemaining,
     automation_origin_type: runOrigin?.automationType ?? null,
     automation_origin_id: runOrigin?.targetId ?? null,
-    automation_run_id: runOrigin?.automationRunId ?? null
+    automation_run_id: runOrigin?.automationRunId ?? null,
+    context_bundle_id: selectedContextBundleId
   });
   responsePayload.gitStatusFiles = gitSnapshot.files;
   responsePayload.gitDiffMap = gitSnapshot.diffs;
@@ -546,13 +636,16 @@ app.post("/api/run-test", async (req, res) => {
     projectName,
     baseBranch = "main",
     prompt,
-    contextBundleId = null,
     executionMode = "read",
     streamId = null
   } = req.body;
+  const contextBundleSelection = parseContextBundleSelectionFromBody(req.body || {});
 
   if (!EXECUTION_MODE_OPTIONS[executionMode]) {
     return res.status(400).json({ error: "Invalid execution mode" });
+  }
+  if (contextBundleSelection.invalid) {
+    return res.status(400).json({ error: contextBundleSelection.message });
   }
 
   if (!isValidProject(projectName)) {
@@ -585,7 +678,7 @@ app.post("/api/run-test", async (req, res) => {
       prompt,
       executionMode,
       baseBranch: selectedBaseBranch,
-      contextBundleId,
+      contextBundleId: contextBundleSelection.contextBundleId,
       streamId
     });
 
@@ -611,7 +704,8 @@ app.post("/api/stories/:storyId/complete-with-automation", async (req, res) => {
   const projectName = String(req.body?.projectName || "").trim();
   const baseBranch = String(req.body?.baseBranch || "").trim();
   const streamId = String(req.body?.streamId || "").trim() || null;
-  const contextBundleId = req.body?.contextBundleId ?? null;
+  const contextBundleSelection = parseContextBundleSelectionFromBody(req.body || {});
+  const contextBundleId = contextBundleSelection.contextBundleId;
   const stopMergeIfStoryImplementationIncomplete = Boolean(req.body?.stopMergeIfStoryImplementationIncomplete);
   const executionMode = "write";
   let automationRunRecord = null;
@@ -626,6 +720,9 @@ app.post("/api/stories/:storyId/complete-with-automation", async (req, res) => {
   }
   if (!baseBranch) {
     return res.status(400).json({ error: "A base branch is required." });
+  }
+  if (contextBundleSelection.invalid) {
+    return res.status(400).json({ error: contextBundleSelection.message });
   }
   if (activeFeatureAutomation) {
     return res.status(423).json({
@@ -664,7 +761,8 @@ app.post("/api/stories/:storyId/complete-with-automation", async (req, res) => {
       stopOnIncomplete: stopMergeIfStoryImplementationIncomplete,
       automationStatus: "running",
       currentPosition: 1,
-      stopReason: null
+      stopReason: null,
+      contextBundleId
     });
     publishRunEvent(streamId, { type: "automation.started", message: `Story automation started for #${storyId}.` });
 

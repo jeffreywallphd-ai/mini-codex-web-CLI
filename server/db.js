@@ -18,7 +18,7 @@ const dbPath = path.resolve(dataDir, "app.db");
 const db = new sqlite3.Database(dbPath);
 db.run("PRAGMA foreign_keys = ON");
 
-const LATEST_SCHEMA_VERSION = 18;
+const LATEST_SCHEMA_VERSION = 19;
 const VALID_AUTOMATION_TYPES = new Set(["feature", "epic", "story"]);
 const VALID_AUTOMATION_STATUSES = new Set(["pending", "running", "completed", "failed", "stopped"]);
 const VALID_AUTOMATION_STORY_EXECUTION_STATUSES = new Set(["completed", "failed"]);
@@ -64,6 +64,35 @@ function normalizeRunOrigin(runInput = {}) {
     automationOriginId,
     automationRunId
   };
+}
+
+function normalizeOptionalPositiveInteger(value, fieldName) {
+  if (value === null || value === undefined || value === "") {
+    return null;
+  }
+
+  if (typeof value === "number") {
+    if (!Number.isInteger(value) || value <= 0) {
+      throw new Error(`${fieldName} must be a positive integer when provided.`);
+    }
+    return value;
+  }
+
+  if (typeof value !== "string") {
+    throw new Error(`${fieldName} must be a positive integer when provided.`);
+  }
+
+  const normalized = value.trim();
+  if (!/^\d+$/.test(normalized)) {
+    throw new Error(`${fieldName} must be a positive integer when provided.`);
+  }
+
+  const parsed = Number.parseInt(normalized, 10);
+  if (!Number.isInteger(parsed) || parsed <= 0) {
+    throw new Error(`${fieldName} must be a positive integer when provided.`);
+  }
+
+  return parsed;
 }
 
 function run(sql, params = []) {
@@ -175,7 +204,12 @@ async function detectVersionFromSchema() {
                         && await columnExists("context_bundles", "tags")
                         && await columnExists("context_bundles", "project_name")
                         && await columnExists("context_bundles", "summary");
-                      if (hasBundleMetadata) return 18;
+                      if (hasBundleMetadata) {
+                        const hasContextBundleLinkage = await columnExists("runs", "context_bundle_id")
+                          && await columnExists("automation_runs", "context_bundle_id");
+                        if (hasContextBundleLinkage) return 19;
+                        return 18;
+                      }
                       return 17;
                     }
                     if (hasActiveTargetIndex) return 16;
@@ -539,6 +573,11 @@ async function migrateToV18() {
   await ensureColumn("context_bundles", "summary", "TEXT");
 }
 
+async function migrateToV19() {
+  await ensureColumn("runs", "context_bundle_id", "INTEGER REFERENCES context_bundles(id) ON DELETE SET NULL");
+  await ensureColumn("automation_runs", "context_bundle_id", "INTEGER REFERENCES context_bundles(id) ON DELETE SET NULL");
+}
+
 async function runMigrations() {
   let version = await getSchemaVersion();
 
@@ -649,6 +688,12 @@ async function runMigrations() {
   if (version < 18) {
     await migrateToV18();
     version = 18;
+    await setSchemaVersion(version);
+  }
+
+  if (version < 19) {
+    await migrateToV19();
+    version = 19;
     await setSchemaVersion(version);
   }
 
@@ -1467,6 +1512,7 @@ function saveRun(runInput) {
     dbReady
       .then(() => {
         const runOrigin = normalizeRunOrigin(runInput);
+        const contextBundleId = normalizeOptionalPositiveInteger(runInput.contextBundleId, "Context bundle id");
         db.run(
           `INSERT INTO runs
           (
@@ -1496,9 +1542,10 @@ function saveRun(runInput) {
             run_end_time,
             automation_origin_type,
             automation_origin_id,
-            automation_run_id
+            automation_run_id,
+            context_bundle_id
           )
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           [
             runInput.projectName,
             runInput.prompt,
@@ -1526,7 +1573,8 @@ function saveRun(runInput) {
             runInput.runEndTime,
             runOrigin.automationOriginType,
             runOrigin.automationOriginId,
-            runOrigin.automationRunId
+            runOrigin.automationRunId,
+            contextBundleId
           ],
           function onInsert(err) {
             if (err) return reject(err);
@@ -1579,6 +1627,7 @@ function getRuns({ search = "", status = "active" } = {}) {
              automation_origin_type,
              automation_origin_id,
              automation_run_id,
+             context_bundle_id,
              COALESCE(archived, 0) AS archived
            FROM runs
            ${whereSql}
@@ -2010,6 +2059,7 @@ async function createAutomationRun(input = {}) {
   const failureSummary = typeof input.failureSummary === "string" && input.failureSummary.trim()
     ? input.failureSummary.trim()
     : null;
+  const contextBundleId = normalizeOptionalPositiveInteger(input.contextBundleId, "Context bundle id");
 
   if (!automationType) {
     throw new Error("Automation type is required.");
@@ -2058,9 +2108,10 @@ async function createAutomationRun(input = {}) {
           automation_status,
           stop_reason,
           failed_story_id,
-          failure_summary
+          failure_summary,
+          context_bundle_id
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `,
       [
         automationType,
@@ -2073,7 +2124,8 @@ async function createAutomationRun(input = {}) {
         automationStatus,
         stopReason,
         failedStoryId,
-        failureSummary
+        failureSummary,
+        contextBundleId
       ]
     );
   } catch (error) {
@@ -2124,6 +2176,7 @@ async function getAutomationRunById(id) {
         automation_status,
         stop_reason,
         failed_story_id,
+        context_bundle_id,
         failure_summary,
         created_at,
         updated_at
@@ -2200,6 +2253,12 @@ async function updateAutomationRunMetadata(id, updates = {}) {
       : null;
     updateClauses.push("failure_summary = ?");
     params.push(failureSummary);
+  }
+
+  if (Object.prototype.hasOwnProperty.call(updates, "contextBundleId")) {
+    const contextBundleId = normalizeOptionalPositiveInteger(updates.contextBundleId, "Context bundle id");
+    updateClauses.push("context_bundle_id = ?");
+    params.push(contextBundleId);
   }
 
   if (updateClauses.length === 0) {
@@ -2411,6 +2470,7 @@ async function findRunningAutomationByScope(input = {}) {
           current_position,
           automation_status,
           stop_reason,
+          context_bundle_id,
           created_at,
           updated_at
         FROM automation_runs
@@ -2438,6 +2498,7 @@ async function findRunningAutomationByScope(input = {}) {
         current_position,
         automation_status,
         stop_reason,
+        context_bundle_id,
         created_at,
         updated_at
       FROM automation_runs

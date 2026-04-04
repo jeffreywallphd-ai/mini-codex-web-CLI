@@ -92,3 +92,23 @@ test("resolveRunPrompt rejects non-numeric context bundle id values", async () =
     (error) => error && error.code === "context_bundle_invalid_id"
   );
 });
+
+test("resolveRunPrompt rejects multi-reference context bundle id values", async () => {
+  await assert.rejects(
+    () => resolveRunPrompt({
+      prompt: "Run task",
+      contextBundleId: "11,12",
+      getContextBundleById: async () => null
+    }),
+    (error) => error && error.code === "context_bundle_invalid_id"
+  );
+
+  await assert.rejects(
+    () => resolveRunPrompt({
+      prompt: "Run task",
+      contextBundleId: [11, 12],
+      getContextBundleById: async () => null
+    }),
+    (error) => error && error.code === "context_bundle_invalid_id"
+  );
+});

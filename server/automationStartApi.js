@@ -53,11 +53,25 @@ function logAutomationLifecycle(logger, eventType, details = {}) {
 }
 
 function parseTargetId(targetIdRaw) {
-  const targetId = Number.parseInt(targetIdRaw, 10);
-  if (!Number.isInteger(targetId) || targetId <= 0) {
+  return parseStrictPositiveInteger(targetIdRaw);
+}
+
+function parseStrictPositiveInteger(value) {
+  if (typeof value === "number") {
+    return Number.isInteger(value) && value > 0 ? value : null;
+  }
+
+  if (typeof value !== "string") {
     return null;
   }
-  return targetId;
+
+  const normalized = value.trim();
+  if (!/^\d+$/.test(normalized)) {
+    return null;
+  }
+
+  const parsed = Number.parseInt(normalized, 10);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : null;
 }
 
 function parseOptionalTargetId(value) {
@@ -86,7 +100,7 @@ function parseOptionalPositiveId(value) {
     };
   }
 
-  const parsed = Number.parseInt(value, 10);
+  const parsed = parseStrictPositiveInteger(value);
   return {
     provided: true,
     value: Number.isInteger(parsed) && parsed > 0 ? parsed : null,
@@ -94,7 +108,72 @@ function parseOptionalPositiveId(value) {
   };
 }
 
+function parseContextBundleSelection(body = {}) {
+  const pluralContextBundleFields = ["contextBundleIds", "context_bundle_ids", "contextBundles"];
+  for (const fieldName of pluralContextBundleFields) {
+    if (!Object.prototype.hasOwnProperty.call(body, fieldName)) {
+      continue;
+    }
+
+    const value = body[fieldName];
+    const normalizedValues = Array.isArray(value)
+      ? value.filter((item) => !(item === null || item === undefined || item === ""))
+      : [];
+
+    if (Array.isArray(value) && normalizedValues.length > 1) {
+      return {
+        invalid: true,
+        message: "Multiple context bundle references are not allowed. Provide only one contextBundleId."
+      };
+    }
+
+    return {
+      invalid: true,
+      message: "Use contextBundleId to select a single context bundle."
+    };
+  }
+
+  if (!Object.prototype.hasOwnProperty.call(body, "contextBundleId")) {
+    return {
+      invalid: false,
+      provided: false,
+      contextBundleId: null
+    };
+  }
+
+  const rawContextBundleId = body.contextBundleId;
+  if (Array.isArray(rawContextBundleId)) {
+    const normalizedValues = rawContextBundleId.filter((item) => !(item === null || item === undefined || item === ""));
+    if (normalizedValues.length > 1) {
+      return {
+        invalid: true,
+        message: "Multiple context bundle references are not allowed. Provide only one contextBundleId."
+      };
+    }
+
+    return {
+      invalid: true,
+      message: "contextBundleId must be a single positive integer when provided."
+    };
+  }
+
+  const parsedContextBundle = parseOptionalPositiveId(rawContextBundleId);
+  if (parsedContextBundle.invalid) {
+    return {
+      invalid: true,
+      message: "Invalid context bundle id in request body."
+    };
+  }
+
+  return {
+    invalid: false,
+    provided: parsedContextBundle.provided,
+    contextBundleId: parsedContextBundle.value
+  };
+}
+
 function toStatusApiAutomationRun(automationRun) {
+  const contextBundleId = Number.parseInt(automationRun.context_bundle_id, 10);
   return {
     id: automationRun.id,
     automationType: automationRun.automation_type,
@@ -106,6 +185,7 @@ function toStatusApiAutomationRun(automationRun) {
     currentPosition: automationRun.current_position,
     status: automationRun.automation_status,
     stopReason: automationRun.stop_reason,
+    contextBundleId: Number.isInteger(contextBundleId) && contextBundleId > 0 ? contextBundleId : null,
     failedStoryId: automationRun.failed_story_id ?? null,
     failureSummary: automationRun.failure_summary ?? null,
     createdAt: automationRun.created_at,
@@ -416,6 +496,9 @@ function buildAutomationConflictResponse(conflictingRun) {
       targetId: Number.isInteger(targetId) ? targetId : null,
       projectName: projectName || null,
       baseBranch: baseBranch || null,
+      contextBundleId: Number.isInteger(Number.parseInt(conflictingRun?.context_bundle_id, 10))
+        ? Number.parseInt(conflictingRun.context_bundle_id, 10)
+        : null,
       status: String(conflictingRun?.automation_status || "").trim().toLowerCase() || null
     }
   };
@@ -447,6 +530,7 @@ function buildFallbackAutomationConflict({
     target_id: targetId,
     project_name: projectName,
     base_branch: baseBranch,
+    context_bundle_id: null,
     automation_status: "running"
   };
 }
@@ -863,7 +947,7 @@ function createAutomationStartRouter(deps = {}) {
     const requestedAutomationType = String(req.body?.automationType || "").trim().toLowerCase();
     const requestedTargetId = parseOptionalTargetId(req.body?.targetId);
     const scopedTargetId = parseOptionalTargetId(req.body?.[targetParamName]);
-    const contextBundle = parseOptionalPositiveId(req.body?.contextBundleId);
+    const contextBundleSelection = parseContextBundleSelection(req.body || {});
 
     if (!targetId) {
       return res.status(400).json({ error: `Invalid ${automationType} id.` });
@@ -894,8 +978,8 @@ function createAutomationStartRouter(deps = {}) {
         error: `Target mismatch: route id '${targetId}' does not match body ${targetParamName} '${scopedTargetId.targetId}'.`
       });
     }
-    if (contextBundle.invalid) {
-      return res.status(400).json({ error: "Invalid context bundle id in request body." });
+    if (contextBundleSelection.invalid) {
+      return res.status(400).json({ error: contextBundleSelection.message });
     }
 
     if (!projectName || !isValidProject(projectName)) {
@@ -981,7 +1065,8 @@ function createAutomationStartRouter(deps = {}) {
         stopOnIncomplete: stopOnIncompleteStory,
         automationStatus: "running",
         currentPosition: 1,
-        stopReason: null
+        stopReason: null,
+        contextBundleId: contextBundleSelection.contextBundleId
       });
       await recordAutomationRunQueueItems({
         automationRunId: automationRun.id,
@@ -1010,7 +1095,7 @@ function createAutomationStartRouter(deps = {}) {
         stories: queuedStories,
         totalStoriesInRunQueue: queuedStories.length,
         initialPosition: 1,
-        contextBundleId: contextBundle.value
+        contextBundleId: contextBundleSelection.contextBundleId
       });
       return res.status(202).json(
         toLaunchAcceptedResponse({
@@ -1060,12 +1145,12 @@ function createAutomationStartRouter(deps = {}) {
 
   router.post("/resume/:automationRunId", async (req, res) => {
     const automationRunId = parseTargetId(req.params?.automationRunId);
-    const contextBundle = parseOptionalPositiveId(req.body?.contextBundleId);
+    const contextBundleSelection = parseContextBundleSelection(req.body || {});
     if (!automationRunId) {
       return res.status(400).json({ error: "Invalid automation id." });
     }
-    if (contextBundle.invalid) {
-      return res.status(400).json({ error: "Invalid context bundle id in request body." });
+    if (contextBundleSelection.invalid) {
+      return res.status(400).json({ error: contextBundleSelection.message });
     }
 
     const activeConflict = getActiveAutomationConflictPayload(getActiveAutomation());
@@ -1169,12 +1254,19 @@ function createAutomationStartRouter(deps = {}) {
       }
 
       const nextPosition = Number.parseInt(remainingStories[0]?.positionInQueue, 10) || 1;
-      const resumedAutomationRun = await updateAutomationRunMetadata(automationRun.id, {
+      const resumeUpdates = {
         stopFlag: false,
         currentPosition: nextPosition,
         automationStatus: "running",
         stopReason: null
-      });
+      };
+      if (contextBundleSelection.provided) {
+        resumeUpdates.contextBundleId = contextBundleSelection.contextBundleId;
+      }
+      const resumedAutomationRun = await updateAutomationRunMetadata(automationRun.id, resumeUpdates);
+      const contextBundleIdForResume = contextBundleSelection.provided
+        ? contextBundleSelection.contextBundleId
+        : (resumedAutomationRun.context_bundle_id ?? null);
 
       activateAutomationLock({
         runningProjects,
@@ -1198,7 +1290,7 @@ function createAutomationStartRouter(deps = {}) {
         stopOnIncompleteStory: resumedAutomationRun.stop_on_incomplete === 1,
         totalStoriesInRunQueue: persistedQueueStories.length,
         initialPosition: nextPosition,
-        contextBundleId: contextBundle.value
+        contextBundleId: contextBundleIdForResume
       });
 
       return res.status(202).json(

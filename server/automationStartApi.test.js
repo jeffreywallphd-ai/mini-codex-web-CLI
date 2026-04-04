@@ -78,6 +78,7 @@ function createServerHarness(overrides = {}) {
         current_position: input.currentPosition,
         automation_status: input.automationStatus,
         stop_reason: input.stopReason ?? null,
+        context_bundle_id: input.contextBundleId ?? null,
         failed_story_id: input.failedStoryId ?? null,
         failure_summary: input.failureSummary ?? null,
         created_at: "2026-04-04T00:00:00.000Z",
@@ -121,6 +122,7 @@ function createServerHarness(overrides = {}) {
         current_position: 1,
         automation_status: "running",
         stop_reason: null,
+        context_bundle_id: null,
         failed_story_id: null,
         failure_summary: null,
         created_at: "2026-04-04T00:00:00.000Z",
@@ -204,6 +206,7 @@ function createServerHarness(overrides = {}) {
       current_position: 2,
       automation_status: "running",
       stop_reason: null,
+      context_bundle_id: null,
       failed_story_id: null,
       failure_summary: null,
       created_at: "2026-04-04T00:00:00.000Z",
@@ -747,6 +750,21 @@ test("start endpoint rejects mismatched automation scope or target ids cleanly",
     assert.equal(invalidContextBundleResponse.status, 400);
     const invalidContextBundlePayload = await invalidContextBundleResponse.json();
     assert.match(invalidContextBundlePayload.error, /Invalid context bundle id/);
+
+    const multipleContextBundlesResponse = await fetch(`${baseUrl}/api/automation/start/story/301`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        projectName: "demo-project",
+        baseBranch: "main",
+        contextBundleIds: [11, 12]
+      })
+    });
+    assert.equal(multipleContextBundlesResponse.status, 400);
+    const multipleContextBundlesPayload = await multipleContextBundlesResponse.json();
+    assert.match(multipleContextBundlesPayload.error, /Multiple context bundle references are not allowed/i);
   });
 
   assert.equal(harness.calls.createAutomationRun.length, 0);
@@ -1699,6 +1717,7 @@ test("resume endpoint restarts stopped automation from remaining persisted queue
     project_name: "demo-project",
     base_branch: "main",
     stop_on_incomplete: 0,
+    context_bundle_id: 991,
     stop_flag: 1,
     current_position: 2,
     automation_status: "stopped",
@@ -1728,6 +1747,42 @@ test("resume endpoint restarts stopped automation from remaining persisted queue
     harness.calls.executeAutomatedStoryRun.map((call) => call.storyId),
     [302]
   );
+  assert.ok(harness.calls.executeAutomatedStoryRun.every((call) => call.contextBundleId === 991));
+});
+
+test("resume endpoint rejects requests with multiple context bundle references", async () => {
+  const harness = createServerHarness();
+  harness.automationRuns.set(4701, {
+    id: 4701,
+    automation_type: "feature",
+    target_id: 100,
+    project_name: "demo-project",
+    base_branch: "main",
+    stop_on_incomplete: 0,
+    context_bundle_id: null,
+    stop_flag: 1,
+    current_position: 2,
+    automation_status: "stopped",
+    stop_reason: "manual_stop",
+    created_at: "2026-04-04T00:00:00.000Z",
+    updated_at: "2026-04-04T00:02:00.000Z"
+  });
+
+  await withServer(harness, async (baseUrl) => {
+    const response = await fetch(`${baseUrl}/api/automation/resume/4701`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        contextBundleIds: [3, 4]
+      })
+    });
+
+    assert.equal(response.status, 400);
+    const payload = await response.json();
+    assert.match(payload.error, /Multiple context bundle references are not allowed/i);
+  });
 });
 
 test("resume endpoint restarts failed automation from remaining persisted queue items", async () => {
