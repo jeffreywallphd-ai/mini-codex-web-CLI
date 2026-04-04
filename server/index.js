@@ -601,11 +601,13 @@ app.post("/api/stories/:storyId/complete-with-automation", async (req, res) => {
           message: autoMerge.reason
         });
       } catch (mergeError) {
+        const wrappedMergeError = new Error(getErrorMessage(mergeError));
+        wrappedMergeError.code = "merge_failed";
         publishRunEvent(streamId, {
           type: "merge.failed",
-          message: `Auto-merge failed: ${getErrorMessage(mergeError)}`
+          message: `Auto-merge failed: ${wrappedMergeError.message}`
         });
-        throw mergeError;
+        throw wrappedMergeError;
       }
     }
 
@@ -633,7 +635,10 @@ app.post("/api/stories/:storyId/complete-with-automation", async (req, res) => {
       }
     }
     publishRunEvent(streamId, { type: "automation.failed", message: `Story automation failed: ${getErrorMessage(error)}` });
-    res.status(500).json({ error: getErrorMessage(error) });
+    res.status(500).json({
+      error: getErrorMessage(error),
+      errorType: error?.code === "merge_failed" ? "merge_failed" : "execution_failed"
+    });
   } finally {
     runningProjects.delete(projectName);
     activeFeatureAutomation = null;

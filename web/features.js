@@ -34,6 +34,8 @@ let automationTimerInterval = null;
 let activeAutomationStatusMessage = "Automation status will appear here.";
 let activeStoryAutomationTimerNode = null;
 let activeStoryAutomationStatusNode = null;
+const featureAutomationQueueByFeatureId = new Map();
+let activeFeatureAutomationQueue = null;
 let epicDraftId = 0;
 let storyDraftId = 0;
 const epicDrafts = [];
@@ -230,7 +232,9 @@ function startAutomationStream(streamId) {
 }
 
 function isAnyAutomationInFlight() {
-  return storyAutomationInFlight.size > 0 || Boolean(globalAutomationLock?.isActive);
+  return storyAutomationInFlight.size > 0
+    || Boolean(globalAutomationLock?.isActive)
+    || Boolean(activeFeatureAutomationQueue?.isActive);
 }
 
 function matchesQuery(feature, query) {
@@ -342,6 +346,208 @@ function wireStaticCardToggle(toggleButton, contentNode, { defaultOpen = false }
   applyState();
 }
 
+function findStoryById(storyId) {
+  for (const feature of allFeatures) {
+    for (const epic of feature.epics || []) {
+      for (const story of epic.stories || []) {
+        if (story.id === storyId) {
+          return story;
+        }
+      }
+    }
+  }
+
+  return null;
+}
+
+function buildFeatureStoryQueue(feature) {
+  const queue = [];
+
+  for (const epic of feature.epics || []) {
+    for (const story of epic.stories || []) {
+      if (isStoryComplete(story)) {
+        continue;
+      }
+
+      queue.push({
+        storyId: story.id
+      });
+    }
+  }
+
+  return queue;
+}
+
+async function executeStoryAutomation(story, options = {}) {
+  const stopMergeIfStoryImplementationIncomplete = Boolean(options.stopMergeIfStoryImplementationIncomplete);
+  const skipInFlightCheck = Boolean(options.skipInFlightCheck);
+  const projectName = automationScope.projectName;
+  const baseBranch = automationScope.baseBranch;
+  if (!projectName || !baseBranch) {
+    throw new Error("Select a project and branch on the editor page first, then retry automation.");
+  }
+  if (!skipInFlightCheck && isAnyAutomationInFlight() && activeStoryAutomation?.storyId !== story.id) {
+    throw new Error("Automation is already running. Wait for completion before starting another story.");
+  }
+
+  const streamId = createAutomationStreamId();
+  openCards.add(`feature:${story.feature_id}`);
+  openCards.add(`epic:${story.epic_id}`);
+  openCards.add(`story:${story.id}`);
+  storyAutomationInFlight.add(story.id);
+  activeStoryAutomation = {
+    storyId: story.id,
+    startedAt: Date.now(),
+    streamId
+  };
+  setActiveAutomationStatusMessage("Automation status will appear here.");
+  startAutomationTimer();
+  startAutomationStream(streamId);
+  renderFeatureLists();
+  createStatusBox.textContent = `Starting automation for story #${story.id} on project ${projectName} (${baseBranch})...`;
+
+  try {
+    const response = await fetch(`/api/stories/${story.id}/complete-with-automation`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        projectName,
+        baseBranch,
+        streamId,
+        stopMergeIfStoryImplementationIncomplete
+      })
+    });
+    const result = await response.json();
+
+    if (!response.ok) {
+      const error = new Error(result.error || "Unable to run story automation.");
+      error.errorType = result.errorType || "execution_failed";
+      throw error;
+    }
+
+    allFeatures = Array.isArray(result.features) ? result.features : allFeatures;
+    renderFeatureLists();
+    if (result.autoMerge?.status === "merged") {
+      createStatusBox.textContent = `Automation finished for story #${story.id}. Linked run #${result.runId}. Changes merged to '${result.baseBranch}'.`;
+    } else if (result.autoMerge?.status === "skipped") {
+      createStatusBox.textContent = `Automation finished for story #${story.id}. Linked run #${result.runId}. Auto-merge skipped: ${result.autoMerge.reason}.`;
+    } else {
+      createStatusBox.textContent = `Automation finished for story #${story.id}. Linked run #${result.runId}.`;
+    }
+    await loadAutomationLock();
+    return result;
+  } catch (error) {
+    await loadFeatures();
+    throw error;
+  } finally {
+    storyAutomationInFlight.delete(story.id);
+    activeStoryAutomation = null;
+    closeAutomationStream();
+    stopAutomationTimer();
+    setActiveAutomationStatusMessage("Automation status will appear here.");
+    renderFeatureLists();
+  }
+}
+
+async function runFeatureAutomationQueue(featureId) {
+  const queue = featureAutomationQueueByFeatureId.get(featureId);
+  if (!queue || !queue.length) {
+    createStatusBox.textContent = "No incomplete stories in this feature to automate.";
+    featureAutomationQueueByFeatureId.delete(featureId);
+    renderFeatureLists();
+    return;
+  }
+
+  activeFeatureAutomationQueue = {
+    featureId,
+    isActive: true
+  };
+  renderFeatureLists();
+
+  try {
+    while (queue.length > 0) {
+      const nextItem = queue[0];
+      const story = findStoryById(nextItem.storyId);
+      if (!story || isStoryComplete(story)) {
+        queue.shift();
+        continue;
+      }
+
+      try {
+        const result = await executeStoryAutomation(story, {
+          stopMergeIfStoryImplementationIncomplete: false,
+          skipInFlightCheck: true
+        });
+
+        if (result?.autoMerge?.status === "merged") {
+          queue.shift();
+          createStatusBox.textContent = `Feature automation merged story #${story.id}. ${queue.length} story(s) remaining.`;
+          continue;
+        }
+
+        queue.shift();
+      } catch (error) {
+        if (error?.errorType === "merge_failed") {
+          createStatusBox.textContent = `Feature automation stopped on merge failure for story #${story.id}: ${error.message}`;
+          return;
+        }
+
+        queue.shift();
+        createStatusBox.textContent = `Story #${story.id} failed but queue continued: ${error.message}`;
+      }
+    }
+
+    createStatusBox.textContent = "Feature automation queue completed.";
+    featureAutomationQueueByFeatureId.delete(featureId);
+  } finally {
+    activeFeatureAutomationQueue = null;
+    renderFeatureLists();
+  }
+}
+
+function createFeatureAutomationUi(content, feature) {
+  if (isFeatureComplete(feature)) {
+    return;
+  }
+
+  const existingQueue = featureAutomationQueueByFeatureId.get(feature.id);
+  const queueCount = Array.isArray(existingQueue) ? existingQueue.length : 0;
+  if (queueCount > 0) {
+    content.appendChild(createTextNode("p", "inline-hint", `Automation queue: ${queueCount} story(s) remaining.`));
+  }
+
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "secondary-button";
+  button.textContent = activeFeatureAutomationQueue?.featureId === feature.id
+    ? "Automation Running..."
+    : "Complete with Automation";
+  button.disabled = isAnyAutomationInFlight();
+
+  button.addEventListener("click", async () => {
+    const projectName = automationScope.projectName;
+    const baseBranch = automationScope.baseBranch;
+    if (!projectName || !baseBranch) {
+      createStatusBox.textContent = "Select a project and branch on the editor page first, then retry automation.";
+      return;
+    }
+
+    if (isAnyAutomationInFlight()) {
+      createStatusBox.textContent = "Automation is already running. Wait for completion before starting another run.";
+      return;
+    }
+
+    if (!featureAutomationQueueByFeatureId.has(feature.id)) {
+      featureAutomationQueueByFeatureId.set(feature.id, buildFeatureStoryQueue(feature));
+    }
+
+    await runFeatureAutomationQueue(feature.id);
+    await loadAutomationLock();
+  });
+
+  content.appendChild(button);
+}
+
 function createStoryAutomationUi(content, story) {
   const runLine = createTextNode("p", "inline-hint", getStoryRunStatusLabel(story));
   content.appendChild(runLine);
@@ -378,70 +584,12 @@ function createStoryAutomationUi(content, story) {
   automationButton.disabled = isGlobalRunActive;
 
   automationButton.addEventListener("click", async () => {
-    const projectName = automationScope.projectName;
-    const baseBranch = automationScope.baseBranch;
-    if (!projectName || !baseBranch) {
-      createStatusBox.textContent = "Select a project and branch on the editor page first, then retry automation.";
-      return;
-    }
-    if (isAnyAutomationInFlight()) {
-      createStatusBox.textContent = "Automation is already running. Wait for completion before starting another story.";
-      return;
-    }
-
-    const streamId = createAutomationStreamId();
-    openCards.add(`feature:${story.feature_id}`);
-    openCards.add(`epic:${story.epic_id}`);
-    openCards.add(`story:${story.id}`);
-    storyAutomationInFlight.add(story.id);
-    activeStoryAutomation = {
-      storyId: story.id,
-      startedAt: Date.now(),
-      streamId
-    };
-    setActiveAutomationStatusMessage("Automation status will appear here.");
-    startAutomationTimer();
-    startAutomationStream(streamId);
-    renderFeatureLists();
-    createStatusBox.textContent = `Starting automation for story #${story.id} on project ${projectName} (${baseBranch})...`;
-
     try {
-      const response = await fetch(`/api/stories/${story.id}/complete-with-automation`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          projectName,
-          baseBranch,
-          streamId,
-          stopMergeIfStoryImplementationIncomplete: storyStopMergeCheckbox.checked
-        })
+      await executeStoryAutomation(story, {
+        stopMergeIfStoryImplementationIncomplete: storyStopMergeCheckbox.checked
       });
-      const result = await response.json();
-
-      if (!response.ok) {
-        throw new Error(result.error || "Unable to run story automation.");
-      }
-
-      allFeatures = Array.isArray(result.features) ? result.features : allFeatures;
-      renderFeatureLists();
-      if (result.autoMerge?.status === "merged") {
-        createStatusBox.textContent = `Automation finished for story #${story.id}. Linked run #${result.runId}. Changes merged to '${result.baseBranch}'.`;
-      } else if (result.autoMerge?.status === "skipped") {
-        createStatusBox.textContent = `Automation finished for story #${story.id}. Linked run #${result.runId}. Auto-merge skipped: ${result.autoMerge.reason}.`;
-      } else {
-        createStatusBox.textContent = `Automation finished for story #${story.id}. Linked run #${result.runId}.`;
-      }
-      await loadAutomationLock();
     } catch (error) {
       createStatusBox.textContent = `Automation failed: ${error.message}`;
-      await loadFeatures();
-    } finally {
-      storyAutomationInFlight.delete(story.id);
-      activeStoryAutomation = null;
-      closeAutomationStream();
-      stopAutomationTimer();
-      setActiveAutomationStatusMessage("Automation status will appear here.");
-      renderFeatureLists();
     }
   });
 
@@ -517,6 +665,9 @@ function renderFeatureCard(feature, options = {}) {
     status: getFeatureStatus(feature),
     renderBody: (content) => {
       createDescription(content, feature.description);
+      if (options.showAutomation) {
+        createFeatureAutomationUi(content, feature);
+      }
       const epics = feature.epics || [];
       if (!epics.length) {
         content.appendChild(createTextNode("p", "empty-card-copy", "No epics defined."));
