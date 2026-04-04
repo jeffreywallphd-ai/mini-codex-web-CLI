@@ -9,7 +9,7 @@ const dbPath = path.resolve(dataDir, "app.db");
 const db = new sqlite3.Database(dbPath);
 db.run("PRAGMA foreign_keys = ON");
 
-const LATEST_SCHEMA_VERSION = 15;
+const LATEST_SCHEMA_VERSION = 16;
 const VALID_AUTOMATION_TYPES = new Set(["feature", "epic", "story"]);
 const VALID_AUTOMATION_STATUSES = new Set(["pending", "running", "completed", "failed", "stopped"]);
 const VALID_AUTOMATION_STORY_EXECUTION_STATUSES = new Set(["completed", "failed"]);
@@ -439,6 +439,14 @@ async function migrateToV15() {
   await ensureColumn("automation_runs", "failure_summary", "TEXT");
 }
 
+async function migrateToV16() {
+  await run(`
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_automation_runs_active_target
+    ON automation_runs(automation_type, target_id)
+    WHERE automation_status = 'running'
+  `);
+}
+
 async function runMigrations() {
   let version = await getSchemaVersion();
 
@@ -531,6 +539,12 @@ async function runMigrations() {
   if (version < 15) {
     await migrateToV15();
     version = 15;
+    await setSchemaVersion(version);
+  }
+
+  if (version < 16) {
+    await migrateToV16();
+    version = 16;
     await setSchemaVersion(version);
   }
 
@@ -1121,38 +1135,62 @@ async function createAutomationRun(input = {}) {
     throw new Error("Failed story id must be a positive integer when provided.");
   }
 
-  const id = await runWithLastId(
-    `
-      INSERT INTO automation_runs
-      (
-        automation_type,
-        target_id,
-        project_name,
-        base_branch,
-        stop_flag,
-        stop_on_incomplete,
-        current_position,
-        automation_status,
-        stop_reason,
-        failed_story_id,
-        failure_summary
-      )
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `,
-    [
-      automationType,
-      targetId,
-      projectName,
-      baseBranch,
-      stopFlag,
-      stopOnIncomplete,
-      currentPosition,
-      automationStatus,
-      stopReason,
-      failedStoryId,
-      failureSummary
-    ]
-  );
+  let id;
+  try {
+    id = await runWithLastId(
+      `
+        INSERT INTO automation_runs
+        (
+          automation_type,
+          target_id,
+          project_name,
+          base_branch,
+          stop_flag,
+          stop_on_incomplete,
+          current_position,
+          automation_status,
+          stop_reason,
+          failed_story_id,
+          failure_summary
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `,
+      [
+        automationType,
+        targetId,
+        projectName,
+        baseBranch,
+        stopFlag,
+        stopOnIncomplete,
+        currentPosition,
+        automationStatus,
+        stopReason,
+        failedStoryId,
+        failureSummary
+      ]
+    );
+  } catch (error) {
+    const normalizedCode = String(error?.code || "").trim().toLowerCase();
+    const normalizedMessage = String(error?.message || "").trim().toLowerCase();
+    const isActiveTargetConflict = (
+      automationStatus === "running"
+      && (normalizedCode === "sqlite_constraint" || normalizedCode === "sqlite_constraint_unique")
+      && normalizedMessage.includes("automation_runs.automation_type")
+      && normalizedMessage.includes("automation_runs.target_id")
+    );
+    if (isActiveTargetConflict) {
+      const conflictError = new Error(`Automation is already running for ${automationType} #${targetId}.`);
+      conflictError.code = "automation_target_conflict";
+      conflictError.automationType = automationType;
+      conflictError.targetId = targetId;
+      conflictError.projectName = projectName;
+      conflictError.baseBranch = baseBranch;
+      conflictError.cause = error;
+      throw conflictError;
+    }
+
+    throw error;
+  }
 
   return getAutomationRunById(id);
 }
@@ -1436,8 +1474,6 @@ async function findRunningAutomationByScope(input = {}) {
 
   const automationType = String(input.automationType || "").trim().toLowerCase();
   const targetId = Number.parseInt(input.targetId, 10);
-  const projectName = String(input.projectName || "").trim();
-  const baseBranch = String(input.baseBranch || "").trim();
   const excludeAutomationRunId = input.excludeAutomationRunId === null || input.excludeAutomationRunId === undefined || input.excludeAutomationRunId === ""
     ? null
     : Number.parseInt(input.excludeAutomationRunId, 10);
@@ -1447,10 +1483,6 @@ async function findRunningAutomationByScope(input = {}) {
   }
 
   if (!Number.isInteger(targetId) || targetId <= 0) {
-    return null;
-  }
-
-  if (!projectName || !baseBranch) {
     return null;
   }
 
@@ -1477,14 +1509,12 @@ async function findRunningAutomationByScope(input = {}) {
         FROM automation_runs
         WHERE automation_type = ?
           AND target_id = ?
-          AND project_name = ?
-          AND base_branch = ?
           AND automation_status = 'running'
           AND id <> ?
         ORDER BY id DESC
         LIMIT 1
       `,
-      [automationType, targetId, projectName, baseBranch, excludeAutomationRunId]
+      [automationType, targetId, excludeAutomationRunId]
     );
   }
 
@@ -1506,13 +1536,11 @@ async function findRunningAutomationByScope(input = {}) {
       FROM automation_runs
       WHERE automation_type = ?
         AND target_id = ?
-        AND project_name = ?
-        AND base_branch = ?
         AND automation_status = 'running'
       ORDER BY id DESC
       LIMIT 1
     `,
-    [automationType, targetId, projectName, baseBranch]
+    [automationType, targetId]
   );
 }
 

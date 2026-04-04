@@ -90,15 +90,11 @@ function createServerHarness(overrides = {}) {
       calls.findRunningAutomationByScope.push(scope);
       const automationType = String(scope?.automationType || "").trim().toLowerCase();
       const targetId = Number.parseInt(scope?.targetId, 10);
-      const projectName = String(scope?.projectName || "").trim();
-      const baseBranch = String(scope?.baseBranch || "").trim();
       const excludeAutomationRunId = Number.parseInt(scope?.excludeAutomationRunId, 10);
 
       for (const runRecord of automationRuns.values()) {
         if (String(runRecord?.automation_type || "").trim().toLowerCase() !== automationType) continue;
         if (Number.parseInt(runRecord?.target_id, 10) !== targetId) continue;
-        if (String(runRecord?.project_name || "").trim() !== projectName) continue;
-        if (String(runRecord?.base_branch || "").trim() !== baseBranch) continue;
         if (String(runRecord?.automation_status || "").trim().toLowerCase() !== "running") continue;
         if (Number.isInteger(excludeAutomationRunId) && excludeAutomationRunId > 0 && Number(runRecord.id) === excludeAutomationRunId) {
           continue;
@@ -824,6 +820,46 @@ test("start endpoint rejects overlapping automation for the same scoped target w
   });
 
   assert.equal(harness.calls.createAutomationRun.length, 0);
+  assert.equal(harness.calls.detachedTasks.length, 0);
+});
+
+test("start endpoint returns a frontend-friendly conflict when persistence rejects a same-target launch race", async () => {
+  const harness = createServerHarness({
+    createAutomationRun: async () => {
+      const error = new Error("UNIQUE constraint failed: automation_runs.automation_type, automation_runs.target_id");
+      error.code = "automation_target_conflict";
+      throw error;
+    },
+    findRunningAutomationByScope: async () => ({
+      id: 7101,
+      automation_type: "feature",
+      target_id: 100,
+      project_name: "demo-project",
+      base_branch: "main",
+      automation_status: "running"
+    })
+  });
+
+  await withServer(harness, async (baseUrl) => {
+    const response = await fetch(`${baseUrl}/api/automation/start/feature/100`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        projectName: "demo-project",
+        baseBranch: "main"
+      })
+    });
+
+    assert.equal(response.status, 409);
+    const payload = await response.json();
+    assert.equal(payload.errorType, "automation_target_conflict");
+    assert.equal(payload.conflict.automationRunId, 7101);
+    assert.equal(payload.conflict.automationType, "feature");
+    assert.equal(payload.conflict.targetId, 100);
+  });
+
   assert.equal(harness.calls.detachedTasks.length, 0);
 });
 
@@ -1960,6 +1996,53 @@ test("resume endpoint rejects overlap when another run is already active for the
     const payload = await response.json();
     assert.equal(payload.errorType, "automation_target_conflict");
     assert.equal(payload.conflict.automationRunId, 9002);
+    assert.equal(payload.conflict.automationType, "story");
+    assert.equal(payload.conflict.targetId, 301);
+  });
+
+  assert.equal(harness.calls.detachedTasks.length, 0);
+});
+
+test("resume endpoint returns a conflict payload when resume persistence hits an active-target race", async () => {
+  const harness = createServerHarness({
+    updateAutomationRunMetadata: async () => {
+      const error = new Error("UNIQUE constraint failed: automation_runs.automation_type, automation_runs.target_id");
+      error.code = "automation_target_conflict";
+      throw error;
+    },
+    findRunningAutomationByScope: async () => ({
+      id: 9202,
+      automation_type: "story",
+      target_id: 301,
+      project_name: "demo-project",
+      base_branch: "main",
+      automation_status: "running"
+    })
+  });
+  harness.automationRuns.set(9201, {
+    id: 9201,
+    automation_type: "story",
+    target_id: 301,
+    project_name: "demo-project",
+    base_branch: "main",
+    stop_on_incomplete: 0,
+    stop_flag: 1,
+    current_position: 1,
+    automation_status: "stopped",
+    stop_reason: "manual_stop",
+    created_at: "2026-04-04T00:00:00.000Z",
+    updated_at: "2026-04-04T00:02:00.000Z"
+  });
+
+  await withServer(harness, async (baseUrl) => {
+    const response = await fetch(`${baseUrl}/api/automation/resume/9201`, {
+      method: "POST"
+    });
+
+    assert.equal(response.status, 409);
+    const payload = await response.json();
+    assert.equal(payload.errorType, "automation_target_conflict");
+    assert.equal(payload.conflict.automationRunId, 9202);
     assert.equal(payload.conflict.automationType, "story");
     assert.equal(payload.conflict.targetId, 301);
   });

@@ -284,10 +284,13 @@ Each endpoint:
 - returns `422` with `errorType: "target_ineligible"` plus `queueStatus` when
   a selected feature/epic/story has no eligible not-yet-implemented stories (or
   contains no stories)
-- rejects concurrent launches for the exact same automation target
-  (`automationType` + `targetId` + `projectName` + `baseBranch`) while a run is
-  already `running`, returning a frontend-friendly `409` conflict payload
+- rejects concurrent launches for the same automation target
+  (`automationType` + `targetId`) while a run is already `running`, returning a
+  frontend-friendly `409` conflict payload
   (`errorType: "automation_target_conflict"` plus `conflict` metadata)
+- enforces this safeguard at the database layer with a unique active-target
+  index (`idx_automation_runs_active_target`), so overlapping same-target
+  launches are rejected even under concurrent request races
 - creates an `automation_runs` record with initial state
 - initializes a deterministic queue from `defineAutomationExecutionPlan`
 - starts background execution using the shared automated story run pipeline
@@ -371,7 +374,7 @@ Feature Management UI integration:
 - story-card automation startup validates that exactly one story is queued for the selected story target
 - frontend validates the start response scope (`automationRun.automationType` + `automationRun.targetId`) before reporting launch success
 - feature/epic/story automation start controls keep a lightweight per-target in-flight guard to prevent duplicate start clicks while a start request is pending
-- repeated starts on the same target show explicit "already being requested" feedback, while non-duplicate starts continue to rely on the existing active-run lock behavior
+- repeated starts on the same target show explicit "already being requested" feedback, while backend safeguards enforce same-target conflict rejection for overlapping launches
 - story cards include a compact automation status summary badge using the same state model (`not_started`, `running`, `completed`, `stopped`, `failed`) with backend-driven fallback to `not_started` when status data is missing
 
 Automation status response (`200 OK`) includes polling-friendly state:

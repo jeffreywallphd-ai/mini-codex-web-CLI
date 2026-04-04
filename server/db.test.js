@@ -219,6 +219,48 @@ test("automation metadata is persisted and updateable in sqlite", async () => {
   }
 });
 
+test("automation metadata persistence enforces a single active run per automation target", async () => {
+  await dbReady;
+  const targetId = Date.now();
+  let firstRunId = null;
+
+  try {
+    const firstRun = await createAutomationRun({
+      automationType: "story",
+      targetId,
+      projectName: "db-unique-target-project",
+      baseBranch: "main",
+      stopFlag: false,
+      stopOnIncomplete: false,
+      automationStatus: "running",
+      currentPosition: 1,
+      stopReason: null
+    });
+    firstRunId = firstRun.id;
+
+    await assert.rejects(
+      () => createAutomationRun({
+        automationType: "story",
+        targetId,
+        projectName: "db-unique-target-project-alt",
+        baseBranch: "release/1.0",
+        stopFlag: false,
+        stopOnIncomplete: false,
+        automationStatus: "running",
+        currentPosition: 1,
+        stopReason: null
+      }),
+      (error) => {
+        assert.equal(error?.code, "automation_target_conflict");
+        assert.match(String(error?.message || ""), /already running/i);
+        return true;
+      }
+    );
+  } finally {
+    await cleanupAutomationRun(firstRunId);
+  }
+});
+
 test("run records persist automation origin linkage with backward-compatible null defaults", async () => {
   await dbReady;
 
@@ -765,12 +807,12 @@ test("automation run queue snapshot items are persisted for restart-safe progres
   }
 });
 
-test("findRunningAutomationByScope returns only active runs for the exact scoped target", async () => {
+test("findRunningAutomationByScope returns only active runs for the same automation target", async () => {
   await dbReady;
   const targetId = Date.now();
   let runningRunId = null;
   let completedRunId = null;
-  let otherScopeRunId = null;
+  let otherTargetRunId = null;
 
   try {
     const runningRun = await createAutomationRun({
@@ -799,10 +841,10 @@ test("findRunningAutomationByScope returns only active runs for the exact scoped
     });
     completedRunId = completedRun.id;
 
-    const otherScopeRun = await createAutomationRun({
+    const otherTargetRun = await createAutomationRun({
       automationType: "feature",
-      targetId,
-      projectName: "db-conflict-project",
+      targetId: targetId + 1,
+      projectName: "db-conflict-project-alt",
       baseBranch: "release/1.0",
       stopFlag: false,
       stopOnIncomplete: false,
@@ -810,13 +852,11 @@ test("findRunningAutomationByScope returns only active runs for the exact scoped
       currentPosition: 1,
       stopReason: null
     });
-    otherScopeRunId = otherScopeRun.id;
+    otherTargetRunId = otherTargetRun.id;
 
     const exactScopeConflict = await findRunningAutomationByScope({
       automationType: "feature",
-      targetId,
-      projectName: "db-conflict-project",
-      baseBranch: "main"
+      targetId
     });
     assert.equal(exactScopeConflict.id, runningRunId);
     assert.equal(exactScopeConflict.automation_status, "running");
@@ -824,21 +864,17 @@ test("findRunningAutomationByScope returns only active runs for the exact scoped
     const excludedConflict = await findRunningAutomationByScope({
       automationType: "feature",
       targetId,
-      projectName: "db-conflict-project",
-      baseBranch: "main",
       excludeAutomationRunId: runningRunId
     });
     assert.equal(excludedConflict, undefined);
 
-    const unrelatedScopeConflict = await findRunningAutomationByScope({
+    const unrelatedTargetConflict = await findRunningAutomationByScope({
       automationType: "feature",
-      targetId,
-      projectName: "db-conflict-project",
-      baseBranch: "release/1.0"
+      targetId: targetId + 1
     });
-    assert.equal(unrelatedScopeConflict.id, otherScopeRunId);
+    assert.equal(unrelatedTargetConflict.id, otherTargetRunId);
   } finally {
-    await cleanupAutomationRun(otherScopeRunId);
+    await cleanupAutomationRun(otherTargetRunId);
     await cleanupAutomationRun(completedRunId);
     await cleanupAutomationRun(runningRunId);
   }
