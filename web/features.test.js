@@ -71,6 +71,20 @@ test("frontend validates start response scope alignment before reporting launch"
   assert.match(source, /Automation target mismatch:/);
 });
 
+test("frontend formats structured automation validation errors into clear status text", () => {
+  const source = readFeaturesScript();
+
+  assert.match(source, /function formatAutomationStartError\(result,\s*fallbackMessage\)/);
+  assert.match(source, /const conflictRunId = parseRunId\(result\?\.conflict\?\.automationRunId\);/);
+  assert.match(source, /if \(result\?\.errorType === "automation_target_conflict" && conflictRunId\)/);
+  assert.match(source, /Active run #\$\{conflictRunId\}/);
+  assert.match(source, /const validationErrors = Array\.isArray\(result\?\.validationErrors\) \? result\.validationErrors : \[\];/);
+  assert.match(source, /validationErrors\s*\.slice\(0,\s*3\)/m);
+  assert.match(source, /throw new Error\(formatAutomationStartError\(result,\s*"Unable to start feature automation\."\)\);/);
+  assert.match(source, /throw new Error\(formatAutomationStartError\(result,\s*"Unable to start epic automation\."\)\);/);
+  assert.match(source, /throw new Error\(formatAutomationStartError\(result,\s*"Unable to start story automation\."\)\);/);
+});
+
 test("feature card automation UI keeps existing card copy and eligibility affordance", () => {
   const source = readFeaturesScript();
 
@@ -140,6 +154,18 @@ test("story card automation UI stays lightweight without story-level stop-on-inc
   assert.doesNotMatch(source, /Stop Merge if Story Implementation is Incomplete/);
 });
 
+test("frontend story eligibility mirrors backend completion normalization", () => {
+  const source = readFeaturesScript();
+
+  assert.match(source, /function normalizeStoryCompletionStatus\(story = \{\}\)/);
+  assert.match(source, /const rawStatus = story\?\.COMPLETION_STATUS/);
+  assert.match(source, /story\?\.completion_status/);
+  assert.match(source, /story\?\.run_completion_status/);
+  assert.match(source, /function isStoryEligibleForAutomation\(story\)/);
+  assert.match(source, /return normalizeStoryCompletionStatus\(story\) !== "complete";/);
+  assert.match(source, /"Automation unavailable: this story is already complete\."/);
+});
+
 test("automation status summaries show persisted stop reasons for failure, incomplete stop, and manual stop", () => {
   const source = readFeaturesScript();
 
@@ -203,7 +229,10 @@ test("automation status and history expose run-details links with graceful fallb
   assert.match(source, /unavailable\.textContent = "Run details unavailable";/);
   assert.match(source, /function appendAutomationExecutionHistory\(content,\s*automationType,\s*targetId\)/);
   assert.match(source, /heading\.textContent = "Recent story runs:";/);
+  assert.match(source, /storyTitle: String\(item\?\.storyTitle \|\| ""\)\.trim\(\) \|\| null,/);
+  assert.match(source, /error: String\(item\?\.error \|\| ""\)\.trim\(\) \|\| null/);
   assert.match(source, /appendRunDetailsInline\(line,\s*item\.runId\);/);
+  assert.match(source, /errorLine\.textContent = `Failure reason: \$\{item\.error\}`;/);
   assert.match(source, /appendAutomationExecutionHistory\(content,\s*"feature",\s*feature\?\.id\);/);
   assert.match(source, /appendAutomationExecutionHistory\(content,\s*"epic",\s*epic\?\.id\);/);
   assert.match(source, /appendAutomationExecutionHistory\(content,\s*"story",\s*story\?\.id\);/);
@@ -215,4 +244,54 @@ test("story cards link associated runs to run-details page", () => {
   assert.match(source, /function appendStoryRunLinkLine\(content,\s*story,\s*\{ includeLabel = true \} = \{\}\)/);
   assert.match(source, /appendRunDetailsInline\(row,\s*story\?\.run_id\);/);
   assert.match(source, /appendStoryRunLinkLine\(content,\s*story\);/);
+});
+
+test("feature/epic/story automation controls support explicit resume mode from persisted run id", () => {
+  const source = readFeaturesScript();
+
+  assert.match(source, /async function resumeAutomationRun\(automationRunId\)/);
+  assert.match(source, /fetch\(`\/api\/automation\/resume\/\$\{encodeURIComponent\(String\(normalizedRunId\)\)\}`,\s*\{\s*method:\s*"POST"/m);
+  assert.match(source, /button\.textContent = isActiveFeatureRun \|\| isFeatureStartInFlight[\s\S]*"Resume Automation" : "Complete with Automation"/m);
+  assert.match(source, /button\.textContent = isActiveEpicRun \|\| isEpicStartInFlight[\s\S]*"Resume Automation" : "Complete with Automation"/m);
+  assert.match(source, /automationButton\.textContent = isStoryStartInFlight \|\| isActiveStoryRun[\s\S]*"Resume Automation" : "Complete with Automation"/m);
+  assert.match(source, /const isResumeLaunch = String\(result\?\.launchMode \|\| ""\)\.toLowerCase\(\) === "resume";/);
+});
+
+test("feature page syncs open cards with active queue story and auto-collapses completed nodes", () => {
+  const source = readFeaturesScript();
+
+  assert.match(source, /function syncAutomationDrivenCardState\(\)/);
+  assert.match(source, /openCards\.add\(`feature:\$\{activeStory\.featureId\}`\);/);
+  assert.match(source, /openCards\.add\(`epic:\$\{activeStory\.epicId\}`\);/);
+  assert.match(source, /openCards\.add\(`story:\$\{activeStory\.storyId\}`\);/);
+  assert.match(source, /openCards\.delete\(`story:\$\{storyId\}`\);/);
+  assert.match(source, /if \(isEpicComplete\(epic\)\) \{\s*openCards\.delete\(`epic:\$\{epic\.id\}`\);/m);
+  assert.match(source, /removeFeatureDescendantOpenCards\(activeRun\.targetId\);/);
+});
+
+test("feature page shows active story elapsed time and fixed-size running command box", () => {
+  const source = readFeaturesScript();
+
+  assert.match(source, /function appendActiveStoryRuntime\(content,\s*story\)/);
+  assert.match(source, /Time elapsed: \$\{elapsedText\}/);
+  assert.match(source, /commandBox\.className = "active-story-command-box";/);
+  assert.match(source, /commandBox\.textContent = activeStory\.runningCodexCommand \|\| "Waiting for command output\.\.\.";/);
+  assert.match(source, /setInterval\(\(\) => \{\s*refreshActiveStoryRuntimeIndicators\(\);\s*\}, 1000\);/m);
+  assert.match(source, /card\.scrollIntoView\(\{ block: "start", behavior: "smooth" \}\);/);
+});
+
+test("feature page refresh reloads tree data so completion pills update without manual browser refresh", () => {
+  const source = readFeaturesScript();
+
+  assert.match(source, /async function refreshAutomationState\(\)/);
+  assert.match(source, /await loadFeatures\(\{ shouldRender: false \}\);/);
+  assert.match(source, /renderFeatureLists\(\);/);
+});
+
+test("automation stop reason summary includes merge failure guidance", () => {
+  const source = readFeaturesScript();
+
+  assert.match(source, /if \(normalizedReason === "merge_failed"\)/);
+  assert.match(source, /Stopped because a story auto-merge failed\./);
+  assert.match(source, /Automation stopped due to an auto-merge failure/);
 });

@@ -143,8 +143,14 @@ Shared automation planning rules are defined in `server/automationQueue.js`.
   scope-aware plan for a selected `automationType` + `targetId`.
 - `buildScopedStoryExecutionQueue(features, selection)` returns deterministic
   queues, a flattened list of stories with `positionInQueue`, and
-  `queueStatus` (`ready`, `target_not_found`, `empty_queue`) so invalid/empty
-  queue states are surfaced cleanly.
+  `queueStatus` (`ready`, `target_not_found`, `empty_queue`, `target_ineligible`, `validation_failed`)
+  so invalid/empty/ineligible queue states are surfaced cleanly.
+- Automation eligibility is intentionally simple: a story is eligible when it is
+  not marked `complete`; completed stories are filtered out of feature/epic
+  queues and story-target automation rejects completed stories.
+- Story prompt readiness is validated before queue launch: each runnable story
+  must include both story title and story description; otherwise that story is
+  excluded and returned in `validationErrors` with missing field details.
 - Queue story items include execution/reporting metadata:
   - `automationType`
   - `targetId`
@@ -181,7 +187,16 @@ Shared automation planning rules are defined in `server/automationQueue.js`.
   - `queue_action` (`advanced`, `stopped`, or `failed`)
   - `run_id` (linked run when available)
   - `completion_status` and `completion_work` (when available)
-  - `error` (failure detail when execution failed)
+  - `error` (actionable failure summary when execution failed, including cause context when available)
+- Per-run queue snapshots are persisted in SQLite table
+  `automation_run_queue_items` with:
+  - `automation_run_id`
+  - `position_in_queue`
+  - `feature_id`, `feature_title`
+  - `epic_id`, `epic_title`
+  - `story_id`, `story_title`, `story_description`, `story_created_at`
+  This keeps queue composition stable for progress reporting and restart behavior,
+  even if feature tree data changes after automation starts.
 - Automated runs also persist origin linkage directly in `runs`:
   - `automation_origin_type` (`feature`, `epic`, or `story`)
   - `automation_origin_id` (selected planning entity id)
@@ -194,8 +209,11 @@ Shared automation planning rules are defined in `server/automationQueue.js`.
 `server/automationRunner.js` provides a lightweight sequential queue runner that
 is compatible with the existing story run lifecycle.
 
-- `runSequentialStoryQueue({ stories, executeStory, stopOnIncompleteStory, onProgress })`
+- `runSequentialStoryQueue({ stories, executeStory, stopOnIncompleteStory, onProgress, onStoryStart })`
   executes queued stories strictly one at a time.
+- Story execution order is enforced by `positionInQueue` (ascending, stable
+  tie-break by original list index) so execution always matches generated queue
+  order, even if story arrays are reloaded in a different order.
 - The next story does not start until the current `executeStory` call resolves
   (terminal completion for that run).
 - The runner stops when:
@@ -207,6 +225,9 @@ is compatible with the existing story run lifecycle.
   persisted and displayed.
 - `onProgress` is invoked after each story to support persistence of queue
   progress (for example, updating `automation_runs.current_position`).
+- `onStoryStart` is invoked immediately before each queued story begins so
+  orchestration can emit lifecycle logs and diagnostics with deterministic queue
+  position context.
 - `onStoryResult` is invoked after each story with deterministic
   `queueAction` (`advanced`, `stopped`, `failed`) and completion fields so
   each story outcome can be persisted for automation status displays.
@@ -234,6 +255,7 @@ automation runs by scope:
 - `POST /api/automation/start/feature/:featureId`
 - `POST /api/automation/start/epic/:epicId`
 - `POST /api/automation/start/story/:storyId`
+- `POST /api/automation/resume/:automationRunId`
 - `POST /api/automation/stop/:automationRunId`
 - `GET /api/automation/status/:automationRunId`
 
@@ -246,10 +268,26 @@ Each endpoint:
 - validates scope consistency between route and request body when
   `automationType`, `targetId`, or scoped ids are supplied
 - validates the selected target is eligible (non-empty runnable queue)
+- validates runnable stories include required prompt data before automation starts
+- rejects completed targets as ineligible when all scoped stories are already
+  complete (prevents accidental re-runs without deliberate action)
+- rejects concurrent launches for the exact same automation target
+  (`automationType` + `targetId` + `projectName` + `baseBranch`) while a run is
+  already `running`, returning a frontend-friendly `409` conflict payload
+  (`errorType: "automation_target_conflict"` plus `conflict` metadata)
 - creates an `automation_runs` record with initial state
 - initializes a deterministic queue from `defineAutomationExecutionPlan`
 - starts background execution using the shared automated story run pipeline
   (`createAutomatedStoryRunExecutor` + `executeRunFlow` + sequential queue runner)
+- keeps start/resume launch orchestration in a shared lightweight code path
+  (lock activation, detached execution handoff, lifecycle launch logging, and
+  launch-response shape) to reduce duplication without adding extra layers
+- emits lightweight structured lifecycle logs through `logger.info` for:
+  - launch accepted (`start` or `resume`)
+  - background automation start
+  - story start and story completion
+  - stop reason
+  - final automation result (including outcome and error context on failures)
 
 Request body fields:
 
@@ -262,11 +300,35 @@ Request body fields:
 
 Success response (`202 Accepted`) includes tracking metadata for the UI:
 
+- `launchMode` (`start` for fresh launches)
 - `automationRun` (id, type, target, status, stop flags, timestamps)
 - `automationRun.projectName` and `automationRun.baseBranch` for traceability
 - `queue` (`totalStories`, `storyIds`, and queue readiness metadata)
 - `projectName`
 - `baseBranch`
+
+Resume behavior (`POST /api/automation/resume/:automationRunId`):
+
+- accepts only stopped/failed runs and rejects already-running/already-completed runs
+- uses persisted queue snapshot (`automation_run_queue_items`) plus persisted
+  story outcomes (`automation_story_executions`) to compute remaining work
+- normalizes persisted queue and execution rows by `position_in_queue` so resume
+  order remains deterministic even if storage read order changes
+- skips previously completed story executions by default during resume
+- restarts the same automation run id in `running` state with updated
+  `current_position` and clears prior stop flags/reasons for the resumed pass
+- returns `launchMode: "resume"` plus queue summary
+  (`totalStoriesInRunQueue`, `skippedCompletedStories`) so UI can clearly show
+  that the action is a resume, not a fresh start
+
+Validation failure response (`422 Unprocessable Entity`) is returned when a
+target exists but has no runnable stories because required prompt fields are
+missing:
+
+- `errorType: "validation_failed"`
+- `error` (human-readable summary)
+- `queueStatus` (includes `code: "validation_failed"`)
+- `validationErrors` (per-story missing prompt field details)
 
 Feature Management UI integration:
 
@@ -285,6 +347,8 @@ Feature Management UI integration:
 - epic cards include a `Stop Run For Incomplete Stories` checkbox that controls `stopOnIncompleteStory` in the start request (defaults to unchecked)
 - epic cards include the same compact automation status summary badge pattern (`not_started`, `running`, `completed`, `stopped`, `failed`) and show active-run context when an epic run is in progress
 - incomplete story cards surface a **Complete with Automation** button
+- completed story cards show an explicit ineligible hint instead of an
+  automation control
 - the story button starts automation via `POST /api/automation/start/story/:storyId`
 - story automation requests include explicit scope metadata (`automationType`, `targetId`, `storyId`) so backend scope validation can reject mismatched launches
 - story-card automation startup validates that exactly one story is queued for the selected story target
@@ -297,8 +361,13 @@ Automation status response (`200 OK`) includes polling-friendly state:
 
 - `automationRun` (id, type, target, project/branch scope, stop flags, current queue position, status, timestamps)
 - `queue` (`totalStories`, `processedStories`, `remainingStories`, and `currentItem` while running)
+- queue progress is derived from persisted `automation_run_queue_items` plus
+  persisted story execution outcomes, so refresh/restart does not depend on
+  reconstructing queue state from mutable feature tree data
+- queue snapshots are normalized by `position_in_queue` before calculating
+  current/remaining items to avoid relying on accidental row order
 - `summary` (completed/failed/stopped execution counts)
-- `completedSteps` and `failedSteps` (per-story summarized outcomes with run linkage)
+- `completedSteps` and `failedSteps` (per-story summarized outcomes with run linkage, failed story id/title, and failure reasons when available)
 - `finalResult` (`status` + `stopReason`) when automation is no longer running
 - when no active automation lock exists, the feature page can still request the last persisted run id for the selected scope to recover recent completed/stopped status details after refresh
 

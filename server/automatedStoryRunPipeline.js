@@ -43,6 +43,9 @@ function createAutomatedStoryRunExecutor(deps = {}) {
     const baseBranch = String(input.baseBranch || "").trim();
     const executionMode = String(input.executionMode || "write").trim() || "write";
     const streamId = input.streamId ?? null;
+    const onProgressEvent = typeof input.onProgressEvent === "function"
+      ? input.onProgressEvent
+      : null;
 
     if (!Number.isInteger(storyId) || storyId <= 0) {
       throw new Error("Invalid story id in automation queue.");
@@ -87,6 +90,7 @@ function createAutomatedStoryRunExecutor(deps = {}) {
       executionMode,
       baseBranch,
       streamId,
+      onProgressEvent,
       runOrigin: {
         automationType,
         targetId,

@@ -42,6 +42,30 @@ test("runner executes queued stories one at a time in queue order", async () => 
   );
 });
 
+test("runner executes stories by normalized queue position regardless of input array order", async () => {
+  const stories = [
+    { storyId: 703, positionInQueue: 3 },
+    { storyId: 701, positionInQueue: 1 },
+    { storyId: 702, positionInQueue: 2 }
+  ];
+  const executionOrder = [];
+
+  const result = await runSequentialStoryQueue({
+    stories,
+    executeStory: async (story) => {
+      executionOrder.push(story.storyId);
+      return { runId: story.storyId * 10, completionStatus: "complete" };
+    }
+  });
+
+  assert.equal(result.status, "completed");
+  assert.deepEqual(executionOrder, [701, 702, 703]);
+  assert.deepEqual(
+    result.storyResults.map((storyResult) => storyResult.positionInQueue),
+    [1, 2, 3]
+  );
+});
+
 test("runner advances only after current story execution resolves", async () => {
   const stories = [
     { storyId: 201, positionInQueue: 1 },
@@ -112,6 +136,52 @@ test("runner reports progress after each story execution", async () => {
     progressSnapshots.map((snapshot) => snapshot.remainingStories),
     [1, 0]
   );
+});
+
+test("runner reports story start before execution begins", async () => {
+  const startedStories = [];
+  const executionEvents = [];
+  const stories = [
+    { storyId: 321, storyTitle: "Story 321", positionInQueue: 1 },
+    { storyId: 322, storyTitle: "Story 322", positionInQueue: 2 }
+  ];
+
+  const result = await runSequentialStoryQueue({
+    stories,
+    onStoryStart: async (storyStart) => {
+      startedStories.push(storyStart);
+      executionEvents.push(`start:${storyStart.storyId}`);
+    },
+    executeStory: async (story) => {
+      executionEvents.push(`execute:${story.storyId}`);
+      return {
+        runId: story.storyId * 10,
+        completionStatus: "complete"
+      };
+    }
+  });
+
+  assert.equal(result.status, "completed");
+  assert.deepEqual(executionEvents, [
+    "start:321",
+    "execute:321",
+    "start:322",
+    "execute:322"
+  ]);
+  assert.deepEqual(startedStories, [
+    {
+      storyId: 321,
+      storyTitle: "Story 321",
+      positionInQueue: 1,
+      totalStories: 2
+    },
+    {
+      storyId: 322,
+      storyTitle: "Story 322",
+      positionInQueue: 2,
+      totalStories: 2
+    }
+  ]);
 });
 
 test("runner exposes per-story completion work and queue action via callback", async () => {
@@ -223,7 +293,7 @@ test("runner continues past incomplete stories when stopOnIncompleteStory is dis
 
 test("runner stops queue when story execution throws", async () => {
   const stories = [
-    { storyId: 501, positionInQueue: 1 },
+    { storyId: 501, storyTitle: "Story 501", positionInQueue: 1 },
     { storyId: 502, positionInQueue: 2 }
   ];
   const callOrder = [];
@@ -233,7 +303,9 @@ test("runner stops queue when story execution throws", async () => {
     executeStory: async (story) => {
       callOrder.push(story.storyId);
       if (story.storyId === 501) {
-        throw new Error("execution failed");
+        throw new Error("execution failed", {
+          cause: new Error("codex spawn timeout")
+        });
       }
       return { runId: story.storyId * 10, completionStatus: "complete" };
     }
@@ -244,6 +316,9 @@ test("runner stops queue when story execution throws", async () => {
   assert.equal(result.stopReason, AUTOMATION_STOP_REASON.EXECUTION_FAILED);
   assert.equal(result.processedStories, 1);
   assert.equal(result.storyResults[0].status, "failed");
+  assert.equal(result.storyResults[0].storyId, 501);
+  assert.equal(result.storyResults[0].storyTitle, "Story 501");
+  assert.equal(result.storyResults[0].error, "execution failed (cause: codex spawn timeout)");
   assert.equal(result.storyResults[0].queueAction, "failed");
 });
 

@@ -9,12 +9,29 @@ function normalizeStories(stories) {
     throw new TypeError("stories must be an array");
   }
 
-  return stories.map((story, index) => ({
-    ...story,
-    positionInQueue: Number.isInteger(story?.positionInQueue) && story.positionInQueue > 0
-      ? story.positionInQueue
-      : index + 1
-  }));
+  return stories
+    .map((story, index) => {
+      const normalizedPosition = Number.isInteger(story?.positionInQueue) && story.positionInQueue > 0
+        ? story.positionInQueue
+        : index + 1;
+
+      return {
+        story: {
+          ...story,
+          positionInQueue: normalizedPosition
+        },
+        index,
+        positionInQueue: normalizedPosition
+      };
+    })
+    .sort((a, b) => {
+      if (a.positionInQueue !== b.positionInQueue) {
+        return a.positionInQueue - b.positionInQueue;
+      }
+
+      return a.index - b.index;
+    })
+    .map((entry) => entry.story);
 }
 
 function getStoryCompletionStatus(executionResult = {}) {
@@ -33,6 +50,25 @@ function getStoryCompletionWork(executionResult = {}) {
     ?? executionResult?.completion_work
     ?? executionResult?.run?.completion_work
     ?? null;
+}
+
+function summarizeExecutionFailure(error) {
+  if (!error) {
+    return "Unknown error";
+  }
+
+  const message = typeof error?.message === "string" && error.message.trim()
+    ? error.message.trim()
+    : String(error);
+  const causeMessage = typeof error?.cause?.message === "string" && error.cause.message.trim()
+    ? error.cause.message.trim()
+    : "";
+
+  if (!causeMessage || causeMessage === message) {
+    return message;
+  }
+
+  return `${message} (cause: ${causeMessage})`;
 }
 
 function createProgressSnapshot({
@@ -80,6 +116,7 @@ async function runSequentialStoryQueue(input = {}) {
   const executeStory = input.executeStory;
   const stopOnIncompleteStory = Boolean(input.stopOnIncompleteStory);
   const onProgress = input.onProgress;
+  const onStoryStart = input.onStoryStart;
   const onStoryResult = input.onStoryResult;
   const shouldStop = input.shouldStop;
 
@@ -110,6 +147,17 @@ async function runSequentialStoryQueue(input = {}) {
     }
 
     try {
+      if (typeof onStoryStart === "function") {
+        await onStoryStart({
+          storyId: story.storyId ?? null,
+          storyTitle: typeof story?.storyTitle === "string" && story.storyTitle.trim()
+            ? story.storyTitle.trim()
+            : null,
+          positionInQueue: story.positionInQueue,
+          totalStories: result.totalStories
+        });
+      }
+
       const executionResult = await executeStory(story);
       const completionStatus = getStoryCompletionStatus(executionResult);
       const storyResult = {
@@ -169,9 +217,13 @@ async function runSequentialStoryQueue(input = {}) {
         await onStoryResult(storyResult, result);
       }
     } catch (error) {
-      const failureMessage = error?.message ? String(error.message) : String(error);
+      const failureMessage = summarizeExecutionFailure(error);
+      const normalizedErrorCode = String(error?.code || "").trim().toLowerCase();
       const storyResult = {
         storyId: story.storyId ?? null,
+        storyTitle: typeof story?.storyTitle === "string" && story.storyTitle.trim()
+          ? story.storyTitle.trim()
+          : null,
         positionInQueue: story.positionInQueue,
         status: "failed",
         completionStatus: "unknown",
@@ -195,7 +247,9 @@ async function runSequentialStoryQueue(input = {}) {
 
       const stopEvaluation = evaluateAutomationStopCondition({ type: "execution_failed" });
       result.status = stopEvaluation.shouldStop ? "failed" : "running";
-      result.stopReason = stopEvaluation.reason;
+      result.stopReason = normalizedErrorCode === "merge_failed"
+        ? "merge_failed"
+        : stopEvaluation.reason;
       if (typeof onStoryResult === "function") {
         await onStoryResult(storyResult, result);
       }
