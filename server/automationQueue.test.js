@@ -110,6 +110,79 @@ test("generateStoryExecutionQueues skips epics with no stories", () => {
   assert.equal(queues[0].epicId, "epic-filled");
 });
 
+test("generateStoryExecutionQueues supports DB-shaped name fields", () => {
+  const queues = generateStoryExecutionQueues([
+    {
+      id: 101,
+      name: "Feature From DB",
+      epics: [
+        {
+          id: 201,
+          name: "Epic From DB",
+          stories: [
+            { id: 301, name: "Story From DB" }
+          ]
+        }
+      ]
+    }
+  ]);
+
+  assert.equal(queues.length, 1);
+  assert.equal(queues[0].featureTitle, "Feature From DB");
+  assert.equal(queues[0].epicTitle, "Epic From DB");
+  assert.equal(queues[0].stories.length, 1);
+  assert.equal(queues[0].stories[0].storyTitle, "Story From DB");
+  assert.equal(queues[0].stories[0].featureId, 101);
+  assert.equal(queues[0].stories[0].epicId, 201);
+  assert.equal(queues[0].stories[0].storyId, 301);
+});
+
+test("generateStoryExecutionQueues accepts numeric-string order values", () => {
+  const queues = generateStoryExecutionQueues([
+    {
+      id: "feature-10",
+      title: "Feature 10",
+      order: "10",
+      epics: [
+        {
+          id: "epic-10",
+          title: "Epic 10",
+          order: "10",
+          stories: [
+            { id: "story-10", title: "Story 10", order: "10" }
+          ]
+        }
+      ]
+    },
+    {
+      id: "feature-2",
+      title: "Feature 2",
+      order: "2",
+      epics: [
+        {
+          id: "epic-2",
+          title: "Epic 2",
+          order: "2",
+          stories: [
+            { id: "story-2", title: "Story 2", order: "2" }
+          ]
+        }
+      ]
+    }
+  ]);
+
+  const orderedStories = flattenStoryExecutionQueues(queues);
+
+  assert.deepEqual(
+    orderedStories.map((story) => story.storyId),
+    ["story-2", "story-10"]
+  );
+  assert.deepEqual(
+    orderedStories.map((story) => story.storyOrder),
+    [2, 10]
+  );
+});
+
 test("generateStoryExecutionQueues throws when features input is invalid", () => {
   assert.throws(
     () => generateStoryExecutionQueues(null),

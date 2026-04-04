@@ -50,7 +50,16 @@ const STOP_CONDITION_RULE_MAP = Object.freeze({
 });
 
 function toOrderKey(value) {
-  return Number.isFinite(value) ? value : Number.MAX_SAFE_INTEGER;
+  if (Number.isFinite(value)) {
+    return value;
+  }
+
+  if (typeof value === "string" && value.trim()) {
+    const parsed = Number(value.trim());
+    return Number.isFinite(parsed) ? parsed : Number.MAX_SAFE_INTEGER;
+  }
+
+  return Number.MAX_SAFE_INTEGER;
 }
 
 function withStableOrdering(items, getOrder) {
@@ -71,15 +80,17 @@ function withStableOrdering(items, getOrder) {
 }
 
 function createQueueStory(feature, epic, story, positionInQueue) {
+  const storyOrder = toOrderKey(story?.order);
+
   return {
     positionInQueue,
-    featureId: feature.id ?? null,
-    featureTitle: feature.title ?? "",
-    epicId: epic.id ?? null,
-    epicTitle: epic.title ?? "",
-    storyId: story.id ?? null,
-    storyTitle: story.title ?? "",
-    storyOrder: Number.isFinite(story.order) ? story.order : null
+    featureId: feature?.id ?? null,
+    featureTitle: String(feature?.title ?? feature?.name ?? ""),
+    epicId: epic?.id ?? null,
+    epicTitle: String(epic?.title ?? epic?.name ?? ""),
+    storyId: story?.id ?? null,
+    storyTitle: String(story?.title ?? story?.name ?? ""),
+    storyOrder: storyOrder === Number.MAX_SAFE_INTEGER ? null : storyOrder
   };
 }
 
@@ -108,10 +119,10 @@ function generateStoryExecutionQueues(features) {
       }
 
       queues.push({
-        featureId: feature.id ?? null,
-        featureTitle: feature.title ?? "",
-        epicId: epic.id ?? null,
-        epicTitle: epic.title ?? "",
+        featureId: feature?.id ?? null,
+        featureTitle: String(feature?.title ?? feature?.name ?? ""),
+        epicId: epic?.id ?? null,
+        epicTitle: String(epic?.title ?? epic?.name ?? ""),
         stories: queuedStories
       });
     }
