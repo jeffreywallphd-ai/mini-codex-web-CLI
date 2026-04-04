@@ -9,9 +9,11 @@ const dbPath = path.resolve(dataDir, "app.db");
 const db = new sqlite3.Database(dbPath);
 db.run("PRAGMA foreign_keys = ON");
 
-const LATEST_SCHEMA_VERSION = 10;
+const LATEST_SCHEMA_VERSION = 11;
 const VALID_AUTOMATION_TYPES = new Set(["feature", "epic", "story"]);
 const VALID_AUTOMATION_STATUSES = new Set(["pending", "running", "completed", "failed", "stopped"]);
+const VALID_AUTOMATION_STORY_EXECUTION_STATUSES = new Set(["completed", "failed"]);
+const VALID_AUTOMATION_STORY_QUEUE_ACTIONS = new Set(["advanced", "stopped", "failed"]);
 
 function run(sql, params = []) {
   return new Promise((resolve, reject) => {
@@ -82,7 +84,11 @@ async function detectVersionFromSchema() {
       const hasAutomationStatus = await columnExists("automation_runs", "automation_status");
       if (hasStopOnIncomplete && hasAutomationStatus) {
         const hasStopReason = await columnExists("automation_runs", "stop_reason");
-        if (hasStopReason) return 10;
+        if (hasStopReason) {
+          const hasStoryExecutionTable = await tableExists("automation_story_executions");
+          if (hasStoryExecutionTable) return 11;
+          return 10;
+        }
         return 9;
       }
       return 8;
@@ -288,6 +294,36 @@ async function migrateToV10() {
   await ensureColumn("automation_runs", "stop_reason", "TEXT");
 }
 
+async function migrateToV11() {
+  await run(`
+    CREATE TABLE IF NOT EXISTS automation_story_executions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      automation_run_id INTEGER NOT NULL REFERENCES automation_runs(id) ON DELETE CASCADE,
+      story_id INTEGER NOT NULL REFERENCES stories(id) ON DELETE CASCADE,
+      position_in_queue INTEGER NOT NULL,
+      execution_status TEXT NOT NULL,
+      queue_action TEXT NOT NULL,
+      run_id INTEGER REFERENCES runs(id) ON DELETE SET NULL,
+      completion_status TEXT,
+      completion_work TEXT,
+      error TEXT,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )
+  `);
+  await run(`
+    CREATE INDEX IF NOT EXISTS idx_automation_story_executions_automation_run
+    ON automation_story_executions(automation_run_id, position_in_queue, id)
+  `);
+  await run(`
+    CREATE INDEX IF NOT EXISTS idx_automation_story_executions_story
+    ON automation_story_executions(story_id)
+  `);
+  await run(`
+    CREATE INDEX IF NOT EXISTS idx_automation_story_executions_run
+    ON automation_story_executions(run_id)
+  `);
+}
+
 async function runMigrations() {
   let version = await getSchemaVersion();
 
@@ -350,6 +386,12 @@ async function runMigrations() {
   if (version < 10) {
     await migrateToV10();
     version = 10;
+    await setSchemaVersion(version);
+  }
+
+  if (version < 11) {
+    await migrateToV11();
+    version = 11;
     await setSchemaVersion(version);
   }
 
@@ -927,6 +969,161 @@ async function updateAutomationRunMetadata(id, updates = {}) {
   return getAutomationRunById(runId);
 }
 
+function normalizeAutomationStoryCompletionStatus(completionStatus) {
+  if (completionStatus === null || completionStatus === undefined || completionStatus === "") {
+    return null;
+  }
+
+  const normalized = String(completionStatus).trim().toLowerCase();
+  if (!normalized) {
+    return null;
+  }
+
+  if (normalized === "complete" || normalized === "incomplete" || normalized === "unknown") {
+    return normalized;
+  }
+
+  return normalized;
+}
+
+async function getAutomationStoryExecutionById(id) {
+  await dbReady;
+  const executionId = Number.parseInt(id, 10);
+  if (!Number.isInteger(executionId) || executionId <= 0) {
+    return null;
+  }
+
+  return get(
+    `
+      SELECT
+        id,
+        automation_run_id,
+        story_id,
+        position_in_queue,
+        execution_status,
+        queue_action,
+        run_id,
+        completion_status,
+        completion_work,
+        error,
+        created_at
+      FROM automation_story_executions
+      WHERE id = ?
+    `,
+    [executionId]
+  );
+}
+
+async function recordAutomationStoryExecution(input = {}) {
+  await dbReady;
+
+  const automationRunId = Number.parseInt(input.automationRunId, 10);
+  const storyId = Number.parseInt(input.storyId, 10);
+  const positionInQueue = Number.parseInt(input.positionInQueue, 10);
+  const executionStatus = String(input.executionStatus || "").trim().toLowerCase();
+  const queueAction = String(input.queueAction || "").trim().toLowerCase();
+  const runId = input.runId === null || input.runId === undefined || input.runId === ""
+    ? null
+    : Number.parseInt(input.runId, 10);
+  const completionStatus = normalizeAutomationStoryCompletionStatus(input.completionStatus);
+  const completionWork = typeof input.completionWork === "string" && input.completionWork.trim()
+    ? input.completionWork
+    : null;
+  const errorMessage = typeof input.error === "string" && input.error.trim()
+    ? input.error
+    : null;
+
+  if (!Number.isInteger(automationRunId) || automationRunId <= 0) {
+    throw new Error("Automation run id must be a positive integer.");
+  }
+
+  if (!Number.isInteger(storyId) || storyId <= 0) {
+    throw new Error("Story id must be a positive integer.");
+  }
+
+  if (!Number.isInteger(positionInQueue) || positionInQueue <= 0) {
+    throw new Error("Position in queue must be a positive integer.");
+  }
+
+  if (!executionStatus) {
+    throw new Error("Execution status is required.");
+  }
+  if (!VALID_AUTOMATION_STORY_EXECUTION_STATUSES.has(executionStatus)) {
+    throw new Error("Execution status must be completed or failed.");
+  }
+
+  if (!queueAction) {
+    throw new Error("Queue action is required.");
+  }
+  if (!VALID_AUTOMATION_STORY_QUEUE_ACTIONS.has(queueAction)) {
+    throw new Error("Queue action must be advanced, stopped, or failed.");
+  }
+
+  if (runId !== null && (!Number.isInteger(runId) || runId <= 0)) {
+    throw new Error("Run id must be a positive integer when provided.");
+  }
+
+  const id = await runWithLastId(
+    `
+      INSERT INTO automation_story_executions
+      (
+        automation_run_id,
+        story_id,
+        position_in_queue,
+        execution_status,
+        queue_action,
+        run_id,
+        completion_status,
+        completion_work,
+        error
+      )
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `,
+    [
+      automationRunId,
+      storyId,
+      positionInQueue,
+      executionStatus,
+      queueAction,
+      runId,
+      completionStatus,
+      completionWork,
+      errorMessage
+    ]
+  );
+
+  return getAutomationStoryExecutionById(id);
+}
+
+async function getAutomationStoryExecutionsByRunId(automationRunId) {
+  await dbReady;
+  const runId = Number.parseInt(automationRunId, 10);
+  if (!Number.isInteger(runId) || runId <= 0) {
+    return [];
+  }
+
+  return all(
+    `
+      SELECT
+        id,
+        automation_run_id,
+        story_id,
+        position_in_queue,
+        execution_status,
+        queue_action,
+        run_id,
+        completion_status,
+        completion_work,
+        error,
+        created_at
+      FROM automation_story_executions
+      WHERE automation_run_id = ?
+      ORDER BY position_in_queue ASC, id ASC
+    `,
+    [runId]
+  );
+}
+
 function setRunArchived(id, archived) {
   return new Promise((resolve, reject) => {
     dbReady
@@ -974,6 +1171,8 @@ module.exports = {
   createAutomationRun,
   getAutomationRunById,
   updateAutomationRunMetadata,
+  recordAutomationStoryExecution,
+  getAutomationStoryExecutionsByRunId,
   getCompletionEligibleRuns,
   setRunArchived,
   deleteRunById,

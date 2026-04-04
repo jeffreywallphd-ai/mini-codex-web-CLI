@@ -36,6 +36,10 @@ test("runner executes queued stories one at a time in queue order", async () => 
   assert.equal(result.status, "completed");
   assert.equal(result.stopReason, AUTOMATION_STOP_REASON.ALL_WORK_COMPLETE);
   assert.equal(result.processedStories, 3);
+  assert.deepEqual(
+    result.storyResults.map((storyResult) => storyResult.queueAction),
+    ["advanced", "advanced", "advanced"]
+  );
 });
 
 test("runner advances only after current story execution resolves", async () => {
@@ -110,6 +114,30 @@ test("runner reports progress after each story execution", async () => {
   );
 });
 
+test("runner exposes per-story completion work and queue action via callback", async () => {
+  const recordedStoryResults = [];
+  const stories = [{ storyId: 351, positionInQueue: 1 }];
+
+  const result = await runSequentialStoryQueue({
+    stories,
+    executeStory: async () => ({
+      runId: 3510,
+      completionStatus: "complete",
+      completionWork: "Applied API persistence updates."
+    }),
+    onStoryResult: async (storyResult) => {
+      recordedStoryResults.push(storyResult);
+    }
+  });
+
+  assert.equal(result.status, "completed");
+  assert.equal(recordedStoryResults.length, 1);
+  assert.equal(recordedStoryResults[0].runId, 3510);
+  assert.equal(recordedStoryResults[0].completionStatus, "complete");
+  assert.equal(recordedStoryResults[0].completionWork, "Applied API persistence updates.");
+  assert.equal(recordedStoryResults[0].queueAction, "advanced");
+});
+
 test("runner stops when stopOnIncompleteStory is enabled and story is incomplete", async () => {
   const stories = [
     { storyId: 401, positionInQueue: 1 },
@@ -133,6 +161,7 @@ test("runner stops when stopOnIncompleteStory is enabled and story is incomplete
   assert.equal(result.status, "stopped");
   assert.equal(result.stopReason, AUTOMATION_STOP_REASON.STORY_INCOMPLETE);
   assert.equal(result.processedStories, 1);
+  assert.equal(result.storyResults[0].queueAction, "stopped");
 });
 
 test("runner continues past incomplete stories when stopOnIncompleteStory is disabled", async () => {
@@ -185,6 +214,7 @@ test("runner stops queue when story execution throws", async () => {
   assert.equal(result.stopReason, AUTOMATION_STOP_REASON.EXECUTION_FAILED);
   assert.equal(result.processedStories, 1);
   assert.equal(result.storyResults[0].status, "failed");
+  assert.equal(result.storyResults[0].queueAction, "failed");
 });
 
 test("runner marks empty queue as complete", async () => {

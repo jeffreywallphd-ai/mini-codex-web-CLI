@@ -28,6 +28,13 @@ function getStoryCompletionStatus(executionResult = {}) {
   });
 }
 
+function getStoryCompletionWork(executionResult = {}) {
+  return executionResult?.completionWork
+    ?? executionResult?.completion_work
+    ?? executionResult?.run?.completion_work
+    ?? null;
+}
+
 function createProgressSnapshot({
   totalStories,
   processedStories,
@@ -55,6 +62,7 @@ async function runSequentialStoryQueue(input = {}) {
   const executeStory = input.executeStory;
   const stopOnIncompleteStory = Boolean(input.stopOnIncompleteStory);
   const onProgress = input.onProgress;
+  const onStoryResult = input.onStoryResult;
 
   if (typeof executeStory !== "function") {
     throw new TypeError("executeStory must be a function");
@@ -83,6 +91,8 @@ async function runSequentialStoryQueue(input = {}) {
         positionInQueue: story.positionInQueue,
         status: "completed",
         completionStatus,
+        completionWork: getStoryCompletionWork(executionResult),
+        queueAction: "advanced",
         runId: executionResult?.runId ?? executionResult?.run?.runId ?? null
       };
 
@@ -109,9 +119,16 @@ async function runSequentialStoryQueue(input = {}) {
       );
 
       if (stopEvaluation.shouldStop) {
+        storyResult.queueAction = "stopped";
         result.status = "stopped";
         result.stopReason = stopEvaluation.reason;
+        if (typeof onStoryResult === "function") {
+          await onStoryResult(storyResult, result);
+        }
         return result;
+      }
+      if (typeof onStoryResult === "function") {
+        await onStoryResult(storyResult, result);
       }
     } catch (error) {
       const failureMessage = error?.message ? String(error.message) : String(error);
@@ -120,6 +137,8 @@ async function runSequentialStoryQueue(input = {}) {
         positionInQueue: story.positionInQueue,
         status: "failed",
         completionStatus: "unknown",
+        completionWork: null,
+        queueAction: "failed",
         error: failureMessage
       };
 
@@ -139,6 +158,9 @@ async function runSequentialStoryQueue(input = {}) {
       const stopEvaluation = evaluateAutomationStopCondition({ type: "execution_failed" });
       result.status = stopEvaluation.shouldStop ? "failed" : "running";
       result.stopReason = stopEvaluation.reason;
+      if (typeof onStoryResult === "function") {
+        await onStoryResult(storyResult, result);
+      }
       return result;
     }
   }
