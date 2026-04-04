@@ -45,7 +45,7 @@ const { createAutomatedStoryRunExecutor } = require("./automatedStoryRunPipeline
 const { createCodexBranch, getGitSnapshot, listLocalBranches, mergeBranch, pullRepository } = require("./git");
 const { createAutomationStartRouter } = require("./automationStartApi");
 const { createContextBundlesRouter } = require("./contextBundlesApi");
-const { resolveRunPrompt } = require("./runPromptContext");
+const { resolveRunPrompt, validateContextBundleSelection: validateContextBundleSelectionHelper } = require("./runPromptContext");
 
 const app = express();
 app.use(cors());
@@ -107,6 +107,53 @@ function getErrorMessage(error) {
   }
 
   return String(error);
+}
+
+function buildContextBundleErrorResponse(error) {
+  const errorCode = String(error?.code || "").trim().toLowerCase();
+  if (!errorCode) {
+    return null;
+  }
+
+  if (errorCode === "context_bundle_invalid_id") {
+    return {
+      status: 400,
+      payload: {
+        error: getErrorMessage(error),
+        errorType: "context_bundle_invalid_id"
+      }
+    };
+  }
+
+  if (errorCode === "context_bundle_not_found") {
+    return {
+      status: 404,
+      payload: {
+        error: getErrorMessage(error),
+        errorType: "context_bundle_not_found"
+      }
+    };
+  }
+
+  if (errorCode === "context_bundle_compile_failed") {
+    return {
+      status: 422,
+      payload: {
+        error: getErrorMessage(error),
+        errorType: "context_bundle_compile_failed",
+        validationErrors: Array.isArray(error?.validationErrors) ? error.validationErrors : []
+      }
+    };
+  }
+
+  return null;
+}
+
+async function validateContextBundleSelection({ contextBundleId = null }) {
+  return validateContextBundleSelectionHelper({
+    contextBundleId,
+    getContextBundleById
+  });
 }
 
 function getFeatureAutomationLock() {
@@ -506,6 +553,7 @@ app.use("/api/automation", createAutomationStartRouter({
   getAutomationRunQueueItemsByRunId,
   getAutomationQueueStoriesByTarget,
   mergeAutomationStoryRun,
+  validateContextBundleSelection,
   getErrorMessage,
   runningProjects,
   getActiveAutomation: () => activeFeatureAutomation,
@@ -688,11 +736,9 @@ app.post("/api/run-test", async (req, res) => {
   } catch (err) {
     console.error("run-test failed:", err);
     publishRunEvent(streamId, { type: "run.failed", message: `Run failed: ${getErrorMessage(err)}` });
-    if (err?.code === "context_bundle_invalid_id") {
-      return res.status(400).json({ error: getErrorMessage(err) });
-    }
-    if (err?.code === "context_bundle_not_found") {
-      return res.status(404).json({ error: getErrorMessage(err) });
+    const contextBundleError = buildContextBundleErrorResponse(err);
+    if (contextBundleError) {
+      return res.status(contextBundleError.status).json(contextBundleError.payload);
     }
     res.status(500).json({ error: getErrorMessage(err) });
   } finally {
@@ -746,6 +792,9 @@ app.post("/api/stories/:storyId/complete-with-automation", async (req, res) => {
     if (!storyContext) {
       return res.status(404).json({ error: "Story not found." });
     }
+    await validateContextBundleSelection({
+      contextBundleId
+    });
 
     runningProjects.add(projectName);
     activeFeatureAutomation = {
@@ -910,11 +959,9 @@ app.post("/api/stories/:storyId/complete-with-automation", async (req, res) => {
       }
     }
     publishRunEvent(streamId, { type: "automation.failed", message: `Story automation failed: ${getErrorMessage(error)}` });
-    if (error?.code === "context_bundle_not_found") {
-      return res.status(404).json({ error: getErrorMessage(error), errorType: "context_bundle_not_found" });
-    }
-    if (error?.code === "context_bundle_invalid_id") {
-      return res.status(400).json({ error: getErrorMessage(error), errorType: "context_bundle_invalid_id" });
+    const contextBundleError = buildContextBundleErrorResponse(error);
+    if (contextBundleError) {
+      return res.status(contextBundleError.status).json(contextBundleError.payload);
     }
     res.status(500).json({
       error: getErrorMessage(error),

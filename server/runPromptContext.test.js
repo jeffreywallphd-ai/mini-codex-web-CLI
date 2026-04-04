@@ -114,3 +114,33 @@ test("resolveRunPrompt rejects multi-reference context bundle id values", async 
     (error) => error && error.code === "context_bundle_invalid_id"
   );
 });
+
+test("resolveRunPrompt rejects unusable bundles when compilation returns error-level quality warnings", async () => {
+  await assert.rejects(
+    () => resolveRunPrompt({
+      prompt: "Run task",
+      contextBundleId: 55,
+      getContextBundleById: async () => ({
+        id: 55,
+        title: "Broken Bundle",
+        parts: []
+      }),
+      compileBundle: () => ({
+        compiledText: "placeholder",
+        qualityWarnings: [
+          {
+            code: "invalid_part_required_field_missing",
+            severity: "error",
+            message: "Part 88 is missing content.",
+            partIds: [88],
+            sectionKeys: ["background_context"]
+          }
+        ]
+      })
+    }),
+    (error) => error
+      && error.code === "context_bundle_compile_failed"
+      && Array.isArray(error.validationErrors)
+      && error.validationErrors.length === 1
+  );
+});

@@ -4,6 +4,7 @@ const PROMPT_INJECTION_POLICY = "bundle_context_before_task_prompt_v1";
 const COMPILED_CONTEXT_HEADING = "## Compiled Context Bundle";
 const TASK_PROMPT_HEADING = "## Task Prompt";
 const EMPTY_COMPILED_CONTEXT_NOTICE = "[No compiled context included from selected bundle.]";
+const CONTEXT_BUNDLE_COMPILE_ERROR_CODE = "context_bundle_compile_failed";
 
 function normalizePrompt(prompt) {
   return typeof prompt === "string" ? prompt.trim() : "";
@@ -62,13 +63,46 @@ function createInvalidBundleIdError() {
   return error;
 }
 
-async function resolveRunPrompt({
-  prompt,
+function createBundleCompilationError({
+  bundleId,
+  message,
+  validationErrors = []
+}) {
+  const normalizedBundleId = normalizePositiveInteger(bundleId);
+  const fallbackMessage = Number.isInteger(normalizedBundleId)
+    ? `Context bundle #${normalizedBundleId} is unusable and cannot be compiled for execution.`
+    : "Selected context bundle is unusable and cannot be compiled for execution.";
+  const error = new Error(message || fallbackMessage);
+  error.code = CONTEXT_BUNDLE_COMPILE_ERROR_CODE;
+  error.validationErrors = Array.isArray(validationErrors) ? validationErrors : [];
+  return error;
+}
+
+function getCompileValidationErrors(compiledBundle) {
+  if (!compiledBundle || typeof compiledBundle !== "object") {
+    return [];
+  }
+
+  const qualityWarnings = Array.isArray(compiledBundle.qualityWarnings)
+    ? compiledBundle.qualityWarnings
+    : [];
+
+  return qualityWarnings
+    .filter((warning) => String(warning?.severity || "").trim().toLowerCase() === "error")
+    .map((warning) => ({
+      code: String(warning?.code || "bundle_compile_error").trim() || "bundle_compile_error",
+      message: String(warning?.message || "Bundle compilation failed due to invalid context content.").trim(),
+      severity: "error",
+      partIds: Array.isArray(warning?.partIds) ? warning.partIds.filter(Number.isFinite) : [],
+      sectionKeys: Array.isArray(warning?.sectionKeys) ? warning.sectionKeys.filter(Boolean) : []
+    }));
+}
+
+async function validateContextBundleSelection({
   contextBundleId = null,
   getContextBundleById,
   compileBundle = compileContextBundle
 }) {
-  const basePrompt = normalizePrompt(prompt);
   const hasBundleSelection = !(
     contextBundleId === null
     || contextBundleId === undefined
@@ -78,12 +112,9 @@ async function resolveRunPrompt({
 
   if (!hasBundleSelection) {
     return {
-      prompt: basePrompt,
-      promptAssembly: {
-        promptInjectionPolicy: PROMPT_INJECTION_POLICY,
-        usedContextBundleId: null,
-        usedContextBundleTitle: null
-      }
+      contextBundleId: null,
+      bundle: null,
+      compiledBundle: null
     };
   }
   if (normalizedBundleId === null) {
@@ -99,7 +130,67 @@ async function resolveRunPrompt({
     throw createMissingBundleError(normalizedBundleId);
   }
 
-  const compiledBundle = compileBundle(bundle);
+  let compiledBundle;
+  try {
+    compiledBundle = compileBundle(bundle);
+  } catch (error) {
+    throw createBundleCompilationError({
+      bundleId: normalizedBundleId,
+      message: `Context bundle #${normalizedBundleId} failed compilation: ${error?.message || "unknown compiler error"}.`
+    });
+  }
+
+  const compiledText = typeof compiledBundle?.compiledText === "string"
+    ? compiledBundle.compiledText
+    : (typeof compiledBundle?.compiledString === "string" ? compiledBundle.compiledString : null);
+  if (compiledText === null) {
+    throw createBundleCompilationError({
+      bundleId: normalizedBundleId,
+      message: `Context bundle #${normalizedBundleId} produced invalid compiled output.`
+    });
+  }
+
+  const compileValidationErrors = getCompileValidationErrors(compiledBundle);
+  if (compileValidationErrors.length > 0) {
+    throw createBundleCompilationError({
+      bundleId: normalizedBundleId,
+      validationErrors: compileValidationErrors
+    });
+  }
+
+  return {
+    contextBundleId: normalizedBundleId,
+    bundle,
+    compiledBundle
+  };
+}
+
+async function resolveRunPrompt({
+  prompt,
+  contextBundleId = null,
+  getContextBundleById,
+  compileBundle = compileContextBundle
+}) {
+  const basePrompt = normalizePrompt(prompt);
+  const validatedBundleSelection = await validateContextBundleSelection({
+    contextBundleId,
+    getContextBundleById,
+    compileBundle
+  });
+
+  if (!validatedBundleSelection?.bundle) {
+    return {
+      prompt: basePrompt,
+      promptAssembly: {
+        promptInjectionPolicy: PROMPT_INJECTION_POLICY,
+        usedContextBundleId: null,
+        usedContextBundleTitle: null
+      }
+    };
+  }
+  const normalizedBundleId = validatedBundleSelection.contextBundleId;
+  const bundle = validatedBundleSelection.bundle;
+  const compiledBundle = validatedBundleSelection.compiledBundle;
   const compiledPrompt = buildRunPromptWithCompiledBundle({
     taskPrompt: basePrompt,
     bundle,
@@ -123,5 +214,6 @@ async function resolveRunPrompt({
 module.exports = {
   PROMPT_INJECTION_POLICY,
   buildRunPromptWithCompiledBundle,
-  resolveRunPrompt
+  resolveRunPrompt,
+  validateContextBundleSelection
 };
