@@ -25,8 +25,28 @@ const DEFAULT_AUTOMATION_RULES = Object.freeze({
     stopOnStoryBlocked: true,
     stopOnStoryCancelled: true,
     stopOnEpicFailure: true,
-    stopOnFeatureFailure: true
+    stopOnEpicBlocked: true,
+    stopOnEpicCancelled: true,
+    stopOnFeatureFailure: true,
+    stopOnFeatureBlocked: true,
+    stopOnFeatureCancelled: true
   }
+});
+
+const STOP_CONDITION_KEYS = Object.freeze(
+  Object.keys(DEFAULT_AUTOMATION_RULES.stopConditions)
+);
+
+const STOP_CONDITION_RULE_MAP = Object.freeze({
+  [`${AUTOMATION_SCOPE.STORY}.${AUTOMATION_OUTCOME.FAILED}`]: "stopOnStoryFailure",
+  [`${AUTOMATION_SCOPE.STORY}.${AUTOMATION_OUTCOME.BLOCKED}`]: "stopOnStoryBlocked",
+  [`${AUTOMATION_SCOPE.STORY}.${AUTOMATION_OUTCOME.CANCELLED}`]: "stopOnStoryCancelled",
+  [`${AUTOMATION_SCOPE.EPIC}.${AUTOMATION_OUTCOME.FAILED}`]: "stopOnEpicFailure",
+  [`${AUTOMATION_SCOPE.EPIC}.${AUTOMATION_OUTCOME.BLOCKED}`]: "stopOnEpicBlocked",
+  [`${AUTOMATION_SCOPE.EPIC}.${AUTOMATION_OUTCOME.CANCELLED}`]: "stopOnEpicCancelled",
+  [`${AUTOMATION_SCOPE.FEATURE}.${AUTOMATION_OUTCOME.FAILED}`]: "stopOnFeatureFailure",
+  [`${AUTOMATION_SCOPE.FEATURE}.${AUTOMATION_OUTCOME.BLOCKED}`]: "stopOnFeatureBlocked",
+  [`${AUTOMATION_SCOPE.FEATURE}.${AUTOMATION_OUTCOME.CANCELLED}`]: "stopOnFeatureCancelled"
 });
 
 function toOrderKey(value) {
@@ -120,16 +140,24 @@ function flattenStoryExecutionQueues(queues) {
 
 function createAutomationRules(overrides = {}) {
   const normalizedOverrides = overrides && typeof overrides === "object" ? overrides : {};
+  const rawStopOverrides = normalizedOverrides.stopConditions;
+  const normalizedStopOverrides = {};
+  if (rawStopOverrides && typeof rawStopOverrides === "object") {
+    for (const key of STOP_CONDITION_KEYS) {
+      if (Object.prototype.hasOwnProperty.call(rawStopOverrides, key)) {
+        normalizedStopOverrides[key] = Boolean(rawStopOverrides[key]);
+      }
+    }
+  }
 
   return {
     ordering: {
       levels: [...DEFAULT_AUTOMATION_RULES.ordering.levels],
-      strategy: DEFAULT_AUTOMATION_RULES.ordering.strategy,
-      ...(normalizedOverrides.ordering || {})
+      strategy: DEFAULT_AUTOMATION_RULES.ordering.strategy
     },
     stopConditions: {
       ...DEFAULT_AUTOMATION_RULES.stopConditions,
-      ...(normalizedOverrides.stopConditions || {})
+      ...normalizedStopOverrides
     }
   };
 }
@@ -152,18 +180,8 @@ function evaluateAutomationStopCondition(event, rules = DEFAULT_AUTOMATION_RULES
 
   const stopRules = createAutomationRules(rules).stopConditions;
 
-  let shouldStop = false;
-  if (entityType === AUTOMATION_SCOPE.STORY && outcome === AUTOMATION_OUTCOME.FAILED) {
-    shouldStop = Boolean(stopRules.stopOnStoryFailure);
-  } else if (entityType === AUTOMATION_SCOPE.STORY && outcome === AUTOMATION_OUTCOME.BLOCKED) {
-    shouldStop = Boolean(stopRules.stopOnStoryBlocked);
-  } else if (entityType === AUTOMATION_SCOPE.STORY && outcome === AUTOMATION_OUTCOME.CANCELLED) {
-    shouldStop = Boolean(stopRules.stopOnStoryCancelled);
-  } else if (entityType === AUTOMATION_SCOPE.EPIC && outcome === AUTOMATION_OUTCOME.FAILED) {
-    shouldStop = Boolean(stopRules.stopOnEpicFailure);
-  } else if (entityType === AUTOMATION_SCOPE.FEATURE && outcome === AUTOMATION_OUTCOME.FAILED) {
-    shouldStop = Boolean(stopRules.stopOnFeatureFailure);
-  }
+  const ruleKey = STOP_CONDITION_RULE_MAP[`${entityType}.${outcome}`];
+  const shouldStop = ruleKey ? Boolean(stopRules[ruleKey]) : false;
 
   return {
     shouldStop,

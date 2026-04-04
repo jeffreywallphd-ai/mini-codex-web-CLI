@@ -133,22 +133,37 @@ test("automation rule defaults define strict feature epic story ordering", () =>
   assert.equal(DEFAULT_AUTOMATION_RULES.ordering.strategy, "order-asc-stable");
   assert.equal(DEFAULT_AUTOMATION_RULES.stopConditions.stopOnStoryFailure, true);
   assert.equal(DEFAULT_AUTOMATION_RULES.stopConditions.stopOnEpicFailure, true);
+  assert.equal(DEFAULT_AUTOMATION_RULES.stopConditions.stopOnEpicBlocked, true);
+  assert.equal(DEFAULT_AUTOMATION_RULES.stopConditions.stopOnEpicCancelled, true);
+  assert.equal(DEFAULT_AUTOMATION_RULES.stopConditions.stopOnFeatureFailure, true);
+  assert.equal(DEFAULT_AUTOMATION_RULES.stopConditions.stopOnFeatureBlocked, true);
+  assert.equal(DEFAULT_AUTOMATION_RULES.stopConditions.stopOnFeatureCancelled, true);
 });
 
-test("createAutomationRules merges stop-condition overrides", () => {
+test("createAutomationRules merges recognized stop-condition overrides", () => {
   const rules = createAutomationRules({
+    ordering: {
+      levels: [AUTOMATION_SCOPE.STORY],
+      strategy: "custom"
+    },
     stopConditions: {
-      stopOnStoryFailure: false
+      stopOnStoryFailure: false,
+      stopOnEpicCancelled: false,
+      stopOnUnknownCondition: false
     }
   });
 
   assert.equal(rules.stopConditions.stopOnStoryFailure, false);
+  assert.equal(rules.stopConditions.stopOnEpicCancelled, false);
   assert.equal(rules.stopConditions.stopOnStoryBlocked, true);
+  assert.equal(rules.stopConditions.stopOnFeatureFailure, true);
+  assert.equal(rules.stopConditions.stopOnUnknownCondition, undefined);
   assert.deepEqual(rules.ordering.levels, [
     AUTOMATION_SCOPE.FEATURE,
     AUTOMATION_SCOPE.EPIC,
     AUTOMATION_SCOPE.STORY
   ]);
+  assert.equal(rules.ordering.strategy, "order-asc-stable");
 });
 
 test("evaluateAutomationStopCondition applies fail-fast rules", () => {
@@ -194,6 +209,39 @@ test("evaluateAutomationStopCondition applies fail-fast rules", () => {
       shouldStop: false,
       entityType: AUTOMATION_SCOPE.STORY,
       outcome: AUTOMATION_OUTCOME.SUCCESS,
+      reason: null
+    }
+  );
+
+  assert.deepEqual(
+    evaluateAutomationStopCondition({
+      entityType: AUTOMATION_SCOPE.EPIC,
+      outcome: AUTOMATION_OUTCOME.BLOCKED
+    }),
+    {
+      shouldStop: true,
+      entityType: AUTOMATION_SCOPE.EPIC,
+      outcome: AUTOMATION_OUTCOME.BLOCKED,
+      reason: "epic.blocked"
+    }
+  );
+
+  assert.deepEqual(
+    evaluateAutomationStopCondition(
+      {
+        entityType: AUTOMATION_SCOPE.FEATURE,
+        outcome: AUTOMATION_OUTCOME.CANCELLED
+      },
+      {
+        stopConditions: {
+          stopOnFeatureCancelled: false
+        }
+      }
+    ),
+    {
+      shouldStop: false,
+      entityType: AUTOMATION_SCOPE.FEATURE,
+      outcome: AUTOMATION_OUTCOME.CANCELLED,
       reason: null
     }
   );

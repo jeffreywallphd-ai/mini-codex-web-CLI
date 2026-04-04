@@ -142,6 +142,13 @@ automation domain.
   - stories sort by `order` ascending, then original input position
 - `flattenStoryExecutionQueues(queues)` returns one flat execution list with
   `positionInQueue` for strict run sequencing.
+- Stop-condition defaults are fail-fast for these outcomes:
+  - `story`: `failed`, `blocked`, `cancelled`
+  - `epic`: `failed`, `blocked`, `cancelled`
+  - `feature`: `failed`, `blocked`, `cancelled`
+- `createAutomationRules(overrides)` only accepts known stop-condition keys and
+  coerces override values to booleans, preventing unknown rule keys from entering
+  active automation plans.
 
 ## Security
 
