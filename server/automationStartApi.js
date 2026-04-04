@@ -77,6 +77,23 @@ function parseOptionalTargetId(value) {
   };
 }
 
+function parseOptionalPositiveId(value) {
+  if (value === null || value === undefined || value === "") {
+    return {
+      provided: false,
+      value: null,
+      invalid: false
+    };
+  }
+
+  const parsed = Number.parseInt(value, 10);
+  return {
+    provided: true,
+    value: Number.isInteger(parsed) && parsed > 0 ? parsed : null,
+    invalid: !(Number.isInteger(parsed) && parsed > 0)
+  };
+}
+
 function toStatusApiAutomationRun(automationRun) {
   return {
     id: automationRun.id,
@@ -297,7 +314,8 @@ function launchAutomation({
   stopOnIncompleteStory,
   stories,
   totalStoriesInRunQueue,
-  initialPosition
+  initialPosition,
+  contextBundleId = null
 }) {
   runDetached(() => executeAutomationInBackground({
     automationRun,
@@ -308,7 +326,8 @@ function launchAutomation({
     stories,
     stopOnIncompleteStory,
     totalStoriesInRunQueue,
-    initialPosition
+    initialPosition,
+    contextBundleId
   }), logger);
 
   const lifecyclePayload = {
@@ -325,6 +344,9 @@ function launchAutomation({
   if (launchMode === "resume" && Number.isInteger(totalStoriesInRunQueue) && totalStoriesInRunQueue > 0) {
     lifecyclePayload.totalStoriesInRunQueue = totalStoriesInRunQueue;
     lifecyclePayload.skippedCompletedStories = totalStoriesInRunQueue - stories.length;
+  }
+  if (Number.isInteger(contextBundleId) && contextBundleId > 0) {
+    lifecyclePayload.contextBundleId = contextBundleId;
   }
 
   logAutomationLifecycle(logger, "automation_launch_accepted", lifecyclePayload);
@@ -501,7 +523,8 @@ function createAutomationStartRouter(deps = {}) {
     stories,
     stopOnIncompleteStory,
     totalStoriesInRunQueue = null,
-    initialPosition = null
+    initialPosition = null,
+    contextBundleId = null
   }) {
     const normalizedTotalStoriesInRunQueue = Number.isInteger(totalStoriesInRunQueue) && totalStoriesInRunQueue > 0
       ? totalStoriesInRunQueue
@@ -540,6 +563,7 @@ function createAutomationStartRouter(deps = {}) {
             projectName,
             baseBranch,
             executionMode: "write",
+            contextBundleId,
             automationType,
             targetId,
             automationRunId: automationRun.id,
@@ -839,6 +863,7 @@ function createAutomationStartRouter(deps = {}) {
     const requestedAutomationType = String(req.body?.automationType || "").trim().toLowerCase();
     const requestedTargetId = parseOptionalTargetId(req.body?.targetId);
     const scopedTargetId = parseOptionalTargetId(req.body?.[targetParamName]);
+    const contextBundle = parseOptionalPositiveId(req.body?.contextBundleId);
 
     if (!targetId) {
       return res.status(400).json({ error: `Invalid ${automationType} id.` });
@@ -868,6 +893,9 @@ function createAutomationStartRouter(deps = {}) {
       return res.status(400).json({
         error: `Target mismatch: route id '${targetId}' does not match body ${targetParamName} '${scopedTargetId.targetId}'.`
       });
+    }
+    if (contextBundle.invalid) {
+      return res.status(400).json({ error: "Invalid context bundle id in request body." });
     }
 
     if (!projectName || !isValidProject(projectName)) {
@@ -981,7 +1009,8 @@ function createAutomationStartRouter(deps = {}) {
         stopOnIncompleteStory,
         stories: queuedStories,
         totalStoriesInRunQueue: queuedStories.length,
-        initialPosition: 1
+        initialPosition: 1,
+        contextBundleId: contextBundle.value
       });
       return res.status(202).json(
         toLaunchAcceptedResponse({
@@ -1031,8 +1060,12 @@ function createAutomationStartRouter(deps = {}) {
 
   router.post("/resume/:automationRunId", async (req, res) => {
     const automationRunId = parseTargetId(req.params?.automationRunId);
+    const contextBundle = parseOptionalPositiveId(req.body?.contextBundleId);
     if (!automationRunId) {
       return res.status(400).json({ error: "Invalid automation id." });
+    }
+    if (contextBundle.invalid) {
+      return res.status(400).json({ error: "Invalid context bundle id in request body." });
     }
 
     const activeConflict = getActiveAutomationConflictPayload(getActiveAutomation());
@@ -1164,7 +1197,8 @@ function createAutomationStartRouter(deps = {}) {
         stories: remainingStories,
         stopOnIncompleteStory: resumedAutomationRun.stop_on_incomplete === 1,
         totalStoriesInRunQueue: persistedQueueStories.length,
-        initialPosition: nextPosition
+        initialPosition: nextPosition,
+        contextBundleId: contextBundle.value
       });
 
       return res.status(202).json(

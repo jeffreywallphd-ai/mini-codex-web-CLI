@@ -45,6 +45,7 @@ const { createAutomatedStoryRunExecutor } = require("./automatedStoryRunPipeline
 const { createCodexBranch, getGitSnapshot, listLocalBranches, mergeBranch, pullRepository } = require("./git");
 const { createAutomationStartRouter } = require("./automationStartApi");
 const { createContextBundlesRouter } = require("./contextBundlesApi");
+const { resolveRunPrompt } = require("./runPromptContext");
 
 const app = express();
 app.use(cors());
@@ -291,18 +292,25 @@ async function executeRunFlow({
   prompt,
   executionMode = "read",
   baseBranch = "main",
+  contextBundleId = null,
   streamId = null,
   onProgressEvent = null,
   runOrigin = null
 }) {
   const repoPath = getRepoPath(projectName);
   const runStartTime = Date.now();
+  const resolvedPrompt = await resolveRunPrompt({
+    prompt,
+    contextBundleId,
+    getContextBundleById
+  });
+  const finalPrompt = resolvedPrompt.prompt;
 
   publishRunEvent(streamId, { type: "branch.creating", message: "Creating branch from base..." });
   const branchInfo = await createCodexBranch(repoPath, baseBranch);
   publishRunEvent(streamId, { type: "branch.created", message: `Branch created: ${branchInfo.branchName || "unknown"}.` });
 
-  const result = await runCodexWithUsage(repoPath, prompt, executionMode, (event) => {
+  const result = await runCodexWithUsage(repoPath, finalPrompt, executionMode, (event) => {
     publishRunEvent(streamId, event);
     if (typeof onProgressEvent === "function") {
       onProgressEvent(event);
@@ -316,7 +324,7 @@ async function executeRunFlow({
 
   const runId = await saveRun({
     projectName,
-    prompt,
+    prompt: finalPrompt,
     ...branchInfo,
     ...result,
     runStartTime,
@@ -334,7 +342,7 @@ async function executeRunFlow({
   const responsePayload = hydrateRun({
     runId,
     projectName,
-    prompt,
+    prompt: finalPrompt,
     ...branchInfo,
     ...result,
     run_start_time: runStartTime,
@@ -351,6 +359,7 @@ async function executeRunFlow({
   responsePayload.gitDiffMap = gitSnapshot.diffs;
   responsePayload.completion_status = result.completionStatus ?? null;
   responsePayload.completion_work = result.completionWork ?? null;
+  responsePayload.prompt_assembly = resolvedPrompt.promptAssembly;
 
   return {
     runId,
@@ -537,6 +546,7 @@ app.post("/api/run-test", async (req, res) => {
     projectName,
     baseBranch = "main",
     prompt,
+    contextBundleId = null,
     executionMode = "read",
     streamId = null
   } = req.body;
@@ -575,6 +585,7 @@ app.post("/api/run-test", async (req, res) => {
       prompt,
       executionMode,
       baseBranch: selectedBaseBranch,
+      contextBundleId,
       streamId
     });
 
@@ -582,6 +593,12 @@ app.post("/api/run-test", async (req, res) => {
   } catch (err) {
     console.error("run-test failed:", err);
     publishRunEvent(streamId, { type: "run.failed", message: `Run failed: ${getErrorMessage(err)}` });
+    if (err?.code === "context_bundle_invalid_id") {
+      return res.status(400).json({ error: getErrorMessage(err) });
+    }
+    if (err?.code === "context_bundle_not_found") {
+      return res.status(404).json({ error: getErrorMessage(err) });
+    }
     res.status(500).json({ error: getErrorMessage(err) });
   } finally {
     runningProjects.delete(projectName);
@@ -594,6 +611,7 @@ app.post("/api/stories/:storyId/complete-with-automation", async (req, res) => {
   const projectName = String(req.body?.projectName || "").trim();
   const baseBranch = String(req.body?.baseBranch || "").trim();
   const streamId = String(req.body?.streamId || "").trim() || null;
+  const contextBundleId = req.body?.contextBundleId ?? null;
   const stopMergeIfStoryImplementationIncomplete = Boolean(req.body?.stopMergeIfStoryImplementationIncomplete);
   const executionMode = "write";
   let automationRunRecord = null;
@@ -655,6 +673,7 @@ app.post("/api/stories/:storyId/complete-with-automation", async (req, res) => {
       projectName,
       baseBranch,
       executionMode,
+      contextBundleId,
       streamId,
       automationType: "story",
       targetId: storyId,
@@ -791,6 +810,12 @@ app.post("/api/stories/:storyId/complete-with-automation", async (req, res) => {
       }
     }
     publishRunEvent(streamId, { type: "automation.failed", message: `Story automation failed: ${getErrorMessage(error)}` });
+    if (error?.code === "context_bundle_not_found") {
+      return res.status(404).json({ error: getErrorMessage(error), errorType: "context_bundle_not_found" });
+    }
+    if (error?.code === "context_bundle_invalid_id") {
+      return res.status(400).json({ error: getErrorMessage(error), errorType: "context_bundle_invalid_id" });
+    }
     res.status(500).json({
       error: getErrorMessage(error),
       errorType: error?.code === "merge_failed"

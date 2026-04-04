@@ -359,7 +359,8 @@ test("feature/epic/story start endpoints launch automation and return tracking p
         body: JSON.stringify({
           projectName: "demo-project",
           baseBranch: "main",
-          stopOnIncompleteStory: true
+          stopOnIncompleteStory: true,
+          contextBundleId: 44
         })
       });
 
@@ -399,11 +400,12 @@ test("feature/epic/story start endpoints launch automation and return tracking p
   assert.equal(harness.calls.executeAutomatedStoryRun.length, 5);
   assert.equal(harness.calls.mergeAutomationStoryRun.length, 5);
   assert.ok(
-    harness.calls.executeAutomatedStoryRun.every((call) => (
-      call.projectName === "demo-project"
-      && call.baseBranch === "main"
-      && call.executionMode === "write"
-    ))
+      harness.calls.executeAutomatedStoryRun.every((call) => (
+        call.projectName === "demo-project"
+        && call.baseBranch === "main"
+        && call.executionMode === "write"
+        && call.contextBundleId === 44
+      ))
   );
 });
 
@@ -730,6 +732,21 @@ test("start endpoint rejects mismatched automation scope or target ids cleanly",
     assert.equal(invalidBodyTargetResponse.status, 400);
     const invalidBodyTargetPayload = await invalidBodyTargetResponse.json();
     assert.match(invalidBodyTargetPayload.error, /Invalid target id/);
+
+    const invalidContextBundleResponse = await fetch(`${baseUrl}/api/automation/start/story/301`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        projectName: "demo-project",
+        baseBranch: "main",
+        contextBundleId: "bad-id"
+      })
+    });
+    assert.equal(invalidContextBundleResponse.status, 400);
+    const invalidContextBundlePayload = await invalidContextBundleResponse.json();
+    assert.match(invalidContextBundlePayload.error, /Invalid context bundle id/);
   });
 
   assert.equal(harness.calls.createAutomationRun.length, 0);
