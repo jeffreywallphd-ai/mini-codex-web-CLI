@@ -3,6 +3,7 @@ const pullButton = document.getElementById("pullButton");
 const executionModeSelect = document.getElementById("executionModeSelect");
 const promptInput = document.getElementById("promptInput");
 const runButton = document.getElementById("runButton");
+const muteToggleButton = document.getElementById("muteToggleButton");
 const pasteClipboardButton = document.getElementById("pasteClipboardButton");
 const clearStateButton = document.getElementById("clearStateButton");
 const runTimer = document.getElementById("runTimer");
@@ -15,6 +16,7 @@ const errorCard = document.getElementById("errorCard");
 const errorCardMessage = document.getElementById("errorCardMessage");
 
 const EDITOR_STATE_KEY = "mini-codex-editor-state";
+const TTS_MUTED_KEY = "mini-codex-tts-muted";
 let allRuns = [];
 let runningProjects = new Set();
 let isRunningRequestInFlight = false;
@@ -22,6 +24,26 @@ let isPullRequestInFlight = false;
 let activeRunStream = null;
 let activeRunStartedAt = null;
 let runTimerInterval = null;
+let isTtsMuted = false;
+
+function loadMutedState() {
+  isTtsMuted = localStorage.getItem(TTS_MUTED_KEY) === "true";
+}
+
+function renderMuteToggle() {
+  if (!muteToggleButton) return;
+  muteToggleButton.textContent = isTtsMuted ? "Unmute TTS" : "Mute TTS";
+  muteToggleButton.setAttribute("aria-pressed", isTtsMuted ? "true" : "false");
+}
+
+function setTtsMuted(nextMuted) {
+  isTtsMuted = Boolean(nextMuted);
+  localStorage.setItem(TTS_MUTED_KEY, String(isTtsMuted));
+  if (isTtsMuted && typeof window !== "undefined" && window.speechSynthesis) {
+    window.speechSynthesis.cancel();
+  }
+  renderMuteToggle();
+}
 
 function escapeHtml(text) {
   return String(text ?? "")
@@ -72,6 +94,10 @@ function stopRunTimer() {
 }
 
 function announceRunComplete() {
+  if (isTtsMuted) {
+    return;
+  }
+
   const supportsTts = typeof window !== "undefined"
     && typeof window.speechSynthesis !== "undefined"
     && typeof window.SpeechSynthesisUtterance !== "undefined";
@@ -516,6 +542,10 @@ clearStateButton.addEventListener("click", async () => {
   await refreshRunningProjects();
   statusBox.textContent = "Saved form state cleared and running-project cache refreshed.";
 });
+muteToggleButton.addEventListener("click", () => {
+  setTtsMuted(!isTtsMuted);
+  statusBox.textContent = isTtsMuted ? "TTS muted." : "TTS unmuted.";
+});
 
 [projectSelect, executionModeSelect, promptInput].forEach((element) => {
   element.addEventListener("change", saveEditorState);
@@ -527,6 +557,8 @@ runSearchInput.addEventListener("input", filterRuns);
 
 (async () => {
   try {
+    loadMutedState();
+    renderMuteToggle();
     await Promise.all([loadProjects(), loadRuns(), loadRunningProjects()]);
   } catch (error) {
     const message = `Initial page load failed: ${error.message}`;
