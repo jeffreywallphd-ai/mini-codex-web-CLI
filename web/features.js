@@ -164,6 +164,66 @@ function createDescription(content, text) {
   content.appendChild(createTextNode("p", "card-description", text || "(no description)"));
 }
 
+function parseRunId(value) {
+  const runId = Number.parseInt(value, 10);
+  if (!Number.isInteger(runId) || runId <= 0) {
+    return null;
+  }
+  return runId;
+}
+
+function createRunDetailsLink(runId, label = "View run details") {
+  const link = document.createElement("a");
+  link.className = "inline-run-link";
+  link.href = `/run-details.html?id=${encodeURIComponent(String(runId))}`;
+  link.textContent = label;
+  return link;
+}
+
+function appendRunDetailsInline(parent, runId) {
+  const normalizedRunId = parseRunId(runId);
+  if (!normalizedRunId) {
+    const unavailable = document.createElement("span");
+    unavailable.className = "inline-run-link-missing";
+    unavailable.textContent = "Run details unavailable";
+    parent.appendChild(unavailable);
+    return;
+  }
+
+  parent.appendChild(createRunDetailsLink(normalizedRunId, `Run #${normalizedRunId}`));
+}
+
+function findStoryInFeatureTreeById(storyId) {
+  const normalizedStoryId = Number.parseInt(storyId, 10);
+  if (!Number.isInteger(normalizedStoryId) || normalizedStoryId <= 0) {
+    return null;
+  }
+
+  for (const feature of allFeatures) {
+    for (const epic of feature?.epics || []) {
+      for (const story of epic?.stories || []) {
+        if (Number(story?.id) === normalizedStoryId) {
+          return story;
+        }
+      }
+    }
+  }
+
+  return null;
+}
+
+function appendStoryRunLinkLine(content, story, { includeLabel = true } = {}) {
+  const row = document.createElement("p");
+  row.className = "inline-hint";
+
+  if (includeLabel) {
+    row.appendChild(document.createTextNode("Associated run: "));
+  }
+
+  appendRunDetailsInline(row, story?.run_id);
+  content.appendChild(row);
+}
+
 function createCardHeader(name, status) {
   const button = document.createElement("button");
   button.type = "button";
@@ -374,6 +434,15 @@ function appendCurrentExecutingStoryLine(content, automationType, targetId) {
   const row = document.createElement("p");
   row.className = "feature-automation-status-row";
   row.textContent = `Current story: ${summary}`;
+
+  const storyInTree = findStoryInFeatureTreeById(currentStory.storyId);
+  const linkedRunId = parseRunId(storyInTree?.run_id);
+  if (linkedRunId) {
+    row.appendChild(document.createTextNode(" ("));
+    row.appendChild(createRunDetailsLink(linkedRunId, "Run details"));
+    row.appendChild(document.createTextNode(")"));
+  }
+
   content.appendChild(row);
 }
 
@@ -426,6 +495,65 @@ function getStoryAutomationStatus(story) {
   return "not_started";
 }
 
+function getAutomationExecutionHistory(automationType, targetId) {
+  const activeRun = globalAutomationStatus?.automationRun;
+  if (!activeRun) {
+    return [];
+  }
+
+  if (String(activeRun.automationType || "").toLowerCase() !== String(automationType || "").toLowerCase()) {
+    return [];
+  }
+
+  if (Number(activeRun.targetId) !== Number(targetId)) {
+    return [];
+  }
+
+  const completed = Array.isArray(globalAutomationStatus?.completedSteps)
+    ? globalAutomationStatus.completedSteps
+    : [];
+  const failed = Array.isArray(globalAutomationStatus?.failedSteps)
+    ? globalAutomationStatus.failedSteps
+    : [];
+
+  return [...completed, ...failed]
+    .map((item) => ({
+      storyId: Number.parseInt(item?.storyId, 10) || null,
+      positionInQueue: Number.parseInt(item?.positionInQueue, 10) || null,
+      executionStatus: String(item?.executionStatus || "").trim().toLowerCase() || "unknown",
+      runId: parseRunId(item?.runId)
+    }))
+    .sort((left, right) => {
+      const leftPosition = Number.isInteger(left.positionInQueue) ? left.positionInQueue : Number.MAX_SAFE_INTEGER;
+      const rightPosition = Number.isInteger(right.positionInQueue) ? right.positionInQueue : Number.MAX_SAFE_INTEGER;
+      return leftPosition - rightPosition;
+    });
+}
+
+function appendAutomationExecutionHistory(content, automationType, targetId) {
+  const historyItems = getAutomationExecutionHistory(automationType, targetId).slice(-3);
+  if (!historyItems.length) {
+    return;
+  }
+
+  const heading = document.createElement("p");
+  heading.className = "feature-automation-status-row";
+  heading.textContent = "Recent story runs:";
+  content.appendChild(heading);
+
+  for (const item of historyItems) {
+    const line = document.createElement("p");
+    line.className = "feature-automation-status-row feature-automation-status-row--history";
+    const storyLabel = Number.isInteger(item.storyId) && item.storyId > 0
+      ? `Story #${item.storyId}`
+      : "Story";
+    const statusLabel = item.executionStatus || "unknown";
+    line.appendChild(document.createTextNode(`${storyLabel}: ${statusLabel} - `));
+    appendRunDetailsInline(line, item.runId);
+    content.appendChild(line);
+  }
+}
+
 function createFeatureAutomationStatusSummary(content, feature) {
   const status = getFeatureAutomationStatus(feature);
   const label = getFeatureAutomationStatusLabel(status);
@@ -439,9 +567,11 @@ function createFeatureAutomationStatusSummary(content, feature) {
   badge.textContent = label;
   row.appendChild(badge);
 
-  const runId = Number.parseInt(feature?.feature_automation_run_id, 10);
-  if (Number.isInteger(runId) && runId > 0 && status !== "not_started") {
-    row.appendChild(document.createTextNode(` (#${runId})`));
+  const runId = parseRunId(feature?.feature_automation_run_id);
+  if (status !== "not_started") {
+    row.appendChild(document.createTextNode(" ("));
+    appendRunDetailsInline(row, runId);
+    row.appendChild(document.createTextNode(")"));
   }
 
   content.appendChild(row);
@@ -450,6 +580,7 @@ function createFeatureAutomationStatusSummary(content, feature) {
     stopReason: feature?.feature_automation_stop_reason
   });
   appendCurrentExecutingStoryLine(content, "feature", feature?.id);
+  appendAutomationExecutionHistory(content, "feature", feature?.id);
 }
 
 function createEpicAutomationStatusSummary(content, epic) {
@@ -465,9 +596,11 @@ function createEpicAutomationStatusSummary(content, epic) {
   badge.textContent = label;
   row.appendChild(badge);
 
-  const runId = Number.parseInt(epic?.epic_automation_run_id, 10);
-  if (Number.isInteger(runId) && runId > 0 && status !== "not_started") {
-    row.appendChild(document.createTextNode(` (#${runId})`));
+  const runId = parseRunId(epic?.epic_automation_run_id);
+  if (status !== "not_started") {
+    row.appendChild(document.createTextNode(" ("));
+    appendRunDetailsInline(row, runId);
+    row.appendChild(document.createTextNode(")"));
   }
 
   content.appendChild(row);
@@ -476,6 +609,7 @@ function createEpicAutomationStatusSummary(content, epic) {
     stopReason: epic?.epic_automation_stop_reason
   });
   appendCurrentExecutingStoryLine(content, "epic", epic?.id);
+  appendAutomationExecutionHistory(content, "epic", epic?.id);
 }
 
 function createStoryAutomationStatusSummary(content, story) {
@@ -491,9 +625,11 @@ function createStoryAutomationStatusSummary(content, story) {
   badge.textContent = label;
   row.appendChild(badge);
 
-  const runId = Number.parseInt(story?.story_automation_run_id, 10);
-  if (Number.isInteger(runId) && runId > 0 && status !== "not_started") {
-    row.appendChild(document.createTextNode(` (#${runId})`));
+  const runId = parseRunId(story?.story_automation_run_id);
+  if (status !== "not_started") {
+    row.appendChild(document.createTextNode(" ("));
+    appendRunDetailsInline(row, runId);
+    row.appendChild(document.createTextNode(")"));
   }
 
   content.appendChild(row);
@@ -501,6 +637,7 @@ function createStoryAutomationStatusSummary(content, story) {
     status,
     stopReason: story?.story_automation_stop_reason
   });
+  appendAutomationExecutionHistory(content, "story", story?.id);
 }
 
 async function startFeatureAutomation(featureId, options = {}) {
@@ -738,10 +875,7 @@ function createStoryAutomationUi(content, story) {
   const runLine = createTextNode("p", "inline-hint", getStoryRunStatusLabel(story));
   content.appendChild(runLine);
 
-  const linkedRunId = Number.parseInt(story?.run_id, 10);
-  if (Number.isInteger(linkedRunId) && linkedRunId > 0) {
-    content.appendChild(createTextNode("p", "inline-hint", `Associated run: #${linkedRunId}`));
-  }
+  appendStoryRunLinkLine(content, story);
 
   if (isStoryComplete(story)) {
     return;
@@ -812,10 +946,7 @@ function renderStoryCard(story, options = {}) {
       } else {
         const runStatusLine = createTextNode("p", "inline-hint", getStoryRunStatusLabel(story));
         content.appendChild(runStatusLine);
-        const linkedRunId = Number.parseInt(story?.run_id, 10);
-        if (Number.isInteger(linkedRunId) && linkedRunId > 0) {
-          content.appendChild(createTextNode("p", "inline-hint", `Associated run: #${linkedRunId}`));
-        }
+        appendStoryRunLinkLine(content, story);
       }
     }
   });

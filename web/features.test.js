@@ -123,6 +123,7 @@ test("automation summaries render current executing story from backend status pa
   assert.match(source, /row\.textContent = `Current story: \$\{summary\}`;/);
   assert.match(source, /appendCurrentExecutingStoryLine\(content,\s*"feature",\s*feature\?\.id\);/);
   assert.match(source, /appendCurrentExecutingStoryLine\(content,\s*"epic",\s*epic\?\.id\);/);
+  assert.match(source, /createRunDetailsLink\(linkedRunId,\s*"Run details"\)/);
 });
 
 test("frontend polls automation status endpoint using active backend automation run id", () => {
@@ -133,4 +134,26 @@ test("frontend polls automation status endpoint using active backend automation 
   assert.match(source, /fetch\(`\/api\/automation\/status\/\$\{encodeURIComponent\(String\(runId\)\)\}`\)/);
   assert.match(source, /globalAutomationStatus = result;/);
   assert.match(source, /await loadAutomationLock\(\);\s*await loadAutomationStatus\(\);\s*renderFeatureLists\(\);/m);
+});
+
+test("automation status and history expose run-details links with graceful fallback", () => {
+  const source = readFeaturesScript();
+
+  assert.match(source, /function createRunDetailsLink\(runId,\s*label = "View run details"\)/);
+  assert.match(source, /link\.href = `\/run-details\.html\?id=\$\{encodeURIComponent\(String\(runId\)\)\}`;/);
+  assert.match(source, /unavailable\.textContent = "Run details unavailable";/);
+  assert.match(source, /function appendAutomationExecutionHistory\(content,\s*automationType,\s*targetId\)/);
+  assert.match(source, /heading\.textContent = "Recent story runs:";/);
+  assert.match(source, /appendRunDetailsInline\(line,\s*item\.runId\);/);
+  assert.match(source, /appendAutomationExecutionHistory\(content,\s*"feature",\s*feature\?\.id\);/);
+  assert.match(source, /appendAutomationExecutionHistory\(content,\s*"epic",\s*epic\?\.id\);/);
+  assert.match(source, /appendAutomationExecutionHistory\(content,\s*"story",\s*story\?\.id\);/);
+});
+
+test("story cards link associated runs to run-details page", () => {
+  const source = readFeaturesScript();
+
+  assert.match(source, /function appendStoryRunLinkLine\(content,\s*story,\s*\{ includeLabel = true \} = \{\}\)/);
+  assert.match(source, /appendRunDetailsInline\(row,\s*story\?\.run_id\);/);
+  assert.match(source, /appendStoryRunLinkLine\(content,\s*story\);/);
 });
