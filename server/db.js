@@ -9,7 +9,7 @@ const dbPath = path.resolve(dataDir, "app.db");
 const db = new sqlite3.Database(dbPath);
 db.run("PRAGMA foreign_keys = ON");
 
-const LATEST_SCHEMA_VERSION = 4;
+const LATEST_SCHEMA_VERSION = 5;
 
 function run(sql, params = []) {
   return new Promise((resolve, reject) => {
@@ -64,6 +64,14 @@ async function detectVersionFromSchema() {
   const runsExists = await tableExists("runs");
   if (!runsExists) {
     return 0;
+  }
+
+  const hasFeatureTables = await tableExists("features")
+    && await tableExists("epics")
+    && await tableExists("stories");
+  if (hasFeatureTables) {
+    const hasStoryRunId = await columnExists("stories", "run_id");
+    return hasStoryRunId ? 5 : 4;
   }
 
   const hasCompletion = await columnExists("runs", "completion_status");
@@ -192,6 +200,7 @@ async function migrateToV4() {
       name TEXT NOT NULL,
       description TEXT NOT NULL DEFAULT '',
       is_complete INTEGER NOT NULL DEFAULT 0,
+      run_id INTEGER REFERENCES runs(id) ON DELETE SET NULL,
       completion_run_id INTEGER,
       completed_at DATETIME,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP
@@ -200,6 +209,17 @@ async function migrateToV4() {
 
   await run(`CREATE INDEX IF NOT EXISTS idx_epics_feature_id ON epics(feature_id)`);
   await run(`CREATE INDEX IF NOT EXISTS idx_stories_epic_id ON stories(epic_id)`);
+}
+
+async function migrateToV5() {
+  await ensureColumn("stories", "run_id", "INTEGER REFERENCES runs(id) ON DELETE SET NULL");
+  await run(`
+    UPDATE stories
+    SET run_id = completion_run_id
+    WHERE run_id IS NULL
+      AND completion_run_id IS NOT NULL
+  `);
+  await run(`CREATE INDEX IF NOT EXISTS idx_stories_run_id ON stories(run_id)`);
 }
 
 async function runMigrations() {
@@ -228,6 +248,12 @@ async function runMigrations() {
   if (version < 4) {
     await migrateToV4();
     version = 4;
+    await setSchemaVersion(version);
+  }
+
+  if (version < 5) {
+    await migrateToV5();
+    version = 5;
     await setSchemaVersion(version);
   }
 
@@ -421,9 +447,24 @@ async function getFeaturesTree() {
     all(`SELECT id, name, description, created_at FROM features ORDER BY id DESC`),
     all(`SELECT id, feature_id, name, description, created_at FROM epics ORDER BY id ASC`),
     all(`
-      SELECT id, epic_id, name, description, is_complete, completion_run_id, completed_at, created_at
+      SELECT
+        stories.id,
+        stories.epic_id,
+        stories.name,
+        stories.description,
+        stories.is_complete AS persisted_is_complete,
+        stories.run_id,
+        stories.completion_run_id,
+        stories.completed_at,
+        stories.created_at,
+        runs.id AS linked_run_id,
+        runs.completion_status AS linked_run_completion_status,
+        runs.code AS linked_run_code,
+        runs.created_at AS linked_run_created_at
       FROM stories
-      ORDER BY id ASC
+      LEFT JOIN runs
+        ON runs.id = COALESCE(stories.run_id, stories.completion_run_id)
+      ORDER BY stories.id ASC
     `)
   ]);
 
@@ -442,9 +483,24 @@ async function getFeaturesTree() {
   for (const story of stories) {
     const parentEpic = epicsById.get(story.epic_id);
     if (!parentEpic) continue;
+
+    const associatedRunId = story.linked_run_id || story.run_id || story.completion_run_id || null;
+    const normalizedCompletionStatus = story.linked_run_completion_status === "complete"
+      ? "complete"
+      : story.linked_run_completion_status === "incomplete"
+        ? "incomplete"
+        : "unknown";
+    const isComplete = normalizedCompletionStatus === "complete";
+    const runStatus = associatedRunId
+      ? (normalizedCompletionStatus === "unknown" ? "in_progress" : normalizedCompletionStatus)
+      : "not_started";
+
     parentEpic.stories.push({
       ...story,
-      is_complete: story.is_complete === 1
+      run_id: associatedRunId,
+      run_status: runStatus,
+      run_completion_status: normalizedCompletionStatus,
+      is_complete: isComplete
     });
   }
 
@@ -469,11 +525,12 @@ async function syncStoryCompletionFromRun(storyId, runId) {
     `
       UPDATE stories
       SET is_complete = ?,
+          run_id = ?,
           completion_run_id = ?,
           completed_at = CASE WHEN ? = 1 THEN CURRENT_TIMESTAMP ELSE NULL END
       WHERE id = ?
     `,
-    [isComplete, runRecord.id, isComplete, storyId]
+    [isComplete, runRecord.id, runRecord.id, isComplete, storyId]
   );
 
   return {
@@ -497,6 +554,57 @@ async function getCompletionEligibleRuns(limit = 100) {
   );
 }
 
+async function getStoryAutomationContext(storyId) {
+  await dbReady;
+  return get(
+    `
+      SELECT
+        stories.id AS story_id,
+        stories.name AS story_name,
+        stories.description AS story_description,
+        stories.run_id AS story_run_id,
+        epics.id AS epic_id,
+        epics.name AS epic_name,
+        epics.description AS epic_description,
+        features.id AS feature_id,
+        features.name AS feature_name,
+        features.description AS feature_description
+      FROM stories
+      INNER JOIN epics ON epics.id = stories.epic_id
+      INNER JOIN features ON features.id = epics.feature_id
+      WHERE stories.id = ?
+    `,
+    [storyId]
+  );
+}
+
+async function attachRunToStory(storyId, runId) {
+  await dbReady;
+
+  const story = await get(`SELECT id FROM stories WHERE id = ?`, [storyId]);
+  if (!story) {
+    throw new Error("Story not found.");
+  }
+
+  const runRecord = await get(`SELECT id, completion_status FROM runs WHERE id = ?`, [runId]);
+  if (!runRecord) {
+    throw new Error("Run not found.");
+  }
+
+  const isComplete = runRecord.completion_status === "complete" ? 1 : 0;
+  await run(
+    `
+      UPDATE stories
+      SET is_complete = ?,
+          run_id = ?,
+          completion_run_id = ?,
+          completed_at = CASE WHEN ? = 1 THEN CURRENT_TIMESTAMP ELSE NULL END
+      WHERE id = ?
+    `,
+    [isComplete, runRecord.id, runRecord.id, isComplete, storyId]
+  );
+}
+
 module.exports = {
   saveRun,
   getRuns,
@@ -504,6 +612,8 @@ module.exports = {
   updateRunMerge,
   createFeatureTree,
   getFeaturesTree,
+  getStoryAutomationContext,
+  attachRunToStory,
   syncStoryCompletionFromRun,
   getCompletionEligibleRuns,
   dbReady

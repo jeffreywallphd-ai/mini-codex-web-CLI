@@ -374,7 +374,6 @@ details pre {
   }
 
   .search-row,
-  .story-sync-row,
   .draft-actions {
     flex-direction: column;
   }
@@ -531,11 +530,3 @@ details pre {
   color: var(--muted);
 }
 
-.story-sync-row {
-  display: flex;
-  gap: 8px;
-}
-
-.story-run-select {
-  margin-bottom: 0;
-}

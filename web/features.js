@@ -11,18 +11,13 @@ const completeSearchInput = document.getElementById("completeSearchInput");
 const clearCompleteSearchButton = document.getElementById("clearCompleteSearchButton");
 const incompleteListContainer = document.getElementById("incompleteListContainer");
 const completeListContainer = document.getElementById("completeListContainer");
+const EDITOR_STATE_KEY = "mini-codex-editor-state";
 
 let allFeatures = [];
-let completionRuns = [];
+const storyAutomationInFlight = new Set();
 let epicDraftId = 0;
 let storyDraftId = 0;
 const epicDrafts = [];
-
-function normalizeStatus(status) {
-  if (status === "complete") return "complete";
-  if (status === "incomplete") return "incomplete";
-  return "unknown";
-}
 
 function isStoryComplete(story) {
   return Boolean(story?.is_complete);
@@ -50,6 +45,32 @@ function getFeatureStatus(feature) {
 
 function getStoryStatus(story) {
   return isStoryComplete(story) ? "complete" : "incomplete";
+}
+
+function getCurrentProjectName() {
+  const rawState = localStorage.getItem(EDITOR_STATE_KEY);
+  if (!rawState) return "";
+
+  try {
+    const state = JSON.parse(rawState);
+    return String(state?.projectName || "").trim();
+  } catch (error) {
+    return "";
+  }
+}
+
+function getStoryRunStatusLabel(story) {
+  const runStatus = String(story?.run_status || "").toLowerCase();
+  if (runStatus === "complete") {
+    return "Run status: complete";
+  }
+  if (runStatus === "incomplete") {
+    return "Run status: incomplete";
+  }
+  if (runStatus === "in_progress") {
+    return "Run status: in progress";
+  }
+  return "Run status: not started";
 }
 
 function matchesQuery(feature, query) {
@@ -132,92 +153,83 @@ function createCollapsibleCard({ levelClass, name, status, renderBody }) {
   return card;
 }
 
-function buildRunSummary(run) {
-  const title = run.change_title ? ` | ${run.change_title}` : "";
-  const completion = normalizeStatus(run.completion_status);
-  return `#${run.id} | ${run.project_name || "project"}${title} | ${completion}`;
-}
+function createStoryAutomationUi(content, story) {
+  const runLine = createTextNode("p", "inline-hint", getStoryRunStatusLabel(story));
+  content.appendChild(runLine);
 
-function createStorySyncUi(content, story) {
-  const row = document.createElement("div");
-  row.className = "story-sync-row";
-
-  const select = document.createElement("select");
-  select.className = "story-run-select";
-  const defaultOption = document.createElement("option");
-  defaultOption.value = "";
-  defaultOption.textContent = "Select run to sync completion";
-  select.appendChild(defaultOption);
-
-  for (const run of completionRuns) {
-    const option = document.createElement("option");
-    option.value = String(run.id);
-    option.textContent = buildRunSummary(run);
-    if (story.completion_run_id === run.id) {
-      option.selected = true;
-    }
-    select.appendChild(option);
+  const linkedRunId = Number.parseInt(story?.run_id, 10);
+  if (Number.isInteger(linkedRunId) && linkedRunId > 0) {
+    content.appendChild(createTextNode("p", "inline-hint", `Associated run: #${linkedRunId}`));
   }
 
-  const syncButton = document.createElement("button");
-  syncButton.type = "button";
-  syncButton.className = "secondary-button";
-  syncButton.textContent = "Sync Status From Run";
+  const automationButton = document.createElement("button");
+  automationButton.type = "button";
+  automationButton.className = "secondary-button";
+  automationButton.textContent = storyAutomationInFlight.has(story.id)
+    ? "Automation Running..."
+    : "Complete with Automation";
+  automationButton.disabled = storyAutomationInFlight.has(story.id);
 
-  const hint = createTextNode("p", "inline-hint", "Story status is persisted based on selected run completion status.");
-
-  syncButton.addEventListener("click", async () => {
-    const runId = Number.parseInt(select.value, 10);
-    if (!Number.isInteger(runId)) {
-      createStatusBox.textContent = "Select a run before syncing story completion.";
+  automationButton.addEventListener("click", async () => {
+    const projectName = getCurrentProjectName();
+    if (!projectName) {
+      createStatusBox.textContent = "Select a project on the editor page first, then retry automation.";
       return;
     }
 
-    syncButton.disabled = true;
-    createStatusBox.textContent = `Syncing story #${story.id} completion from run #${runId}...`;
+    storyAutomationInFlight.add(story.id);
+    renderFeatureLists();
+    createStatusBox.textContent = `Starting automation for story #${story.id} on project ${projectName}...`;
 
     try {
-      const response = await fetch(`/api/stories/${story.id}/sync-completion`, {
+      const response = await fetch(`/api/stories/${story.id}/complete-with-automation`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ runId })
+        body: JSON.stringify({ projectName })
       });
       const result = await response.json();
 
       if (!response.ok) {
-        throw new Error(result.error || "Unable to sync story completion.");
+        throw new Error(result.error || "Unable to run story automation.");
       }
 
-      createStatusBox.textContent = result.isComplete
-        ? `Story #${story.id} marked complete from run #${runId}.`
-        : `Story #${story.id} marked incomplete from run #${runId}.`;
-      await reloadAllData();
+      allFeatures = Array.isArray(result.features) ? result.features : allFeatures;
+      renderFeatureLists();
+      createStatusBox.textContent = `Automation finished for story #${story.id}. Linked run #${result.runId}.`;
     } catch (error) {
-      createStatusBox.textContent = `Sync failed: ${error.message}`;
+      createStatusBox.textContent = `Automation failed: ${error.message}`;
+      await loadFeatures();
     } finally {
-      syncButton.disabled = false;
+      storyAutomationInFlight.delete(story.id);
+      renderFeatureLists();
     }
   });
 
-  row.appendChild(select);
-  row.appendChild(syncButton);
-  content.appendChild(row);
-  content.appendChild(hint);
+  content.appendChild(automationButton);
 }
 
-function renderStoryCard(story) {
+function renderStoryCard(story, options = {}) {
   return createCollapsibleCard({
     levelClass: "hier-card--story",
     name: story.name,
     status: getStoryStatus(story),
     renderBody: (content) => {
       createDescription(content, story.description);
-      createStorySyncUi(content, story);
+      if (options.showAutomation) {
+        createStoryAutomationUi(content, story);
+      } else {
+        const runStatusLine = createTextNode("p", "inline-hint", getStoryRunStatusLabel(story));
+        content.appendChild(runStatusLine);
+        const linkedRunId = Number.parseInt(story?.run_id, 10);
+        if (Number.isInteger(linkedRunId) && linkedRunId > 0) {
+          content.appendChild(createTextNode("p", "inline-hint", `Associated run: #${linkedRunId}`));
+        }
+      }
     }
   });
 }
 
-function renderEpicCard(epic) {
+function renderEpicCard(epic, options = {}) {
   return createCollapsibleCard({
     levelClass: "hier-card--epic",
     name: epic.name,
@@ -233,14 +245,14 @@ function renderEpicCard(epic) {
       const stack = document.createElement("div");
       stack.className = "hier-stack";
       for (const story of stories) {
-        stack.appendChild(renderStoryCard(story));
+        stack.appendChild(renderStoryCard(story, options));
       }
       content.appendChild(stack);
     }
   });
 }
 
-function renderFeatureCard(feature) {
+function renderFeatureCard(feature, options = {}) {
   return createCollapsibleCard({
     levelClass: "hier-card--feature",
     name: feature.name,
@@ -256,14 +268,14 @@ function renderFeatureCard(feature) {
       const stack = document.createElement("div");
       stack.className = "hier-stack";
       for (const epic of epics) {
-        stack.appendChild(renderEpicCard(epic));
+        stack.appendChild(renderEpicCard(epic, options));
       }
       content.appendChild(stack);
     }
   });
 }
 
-function renderSection(container, features) {
+function renderSection(container, features, options = {}) {
   container.innerHTML = "";
 
   if (!features.length) {
@@ -272,7 +284,7 @@ function renderSection(container, features) {
   }
 
   for (const feature of features) {
-    container.appendChild(renderFeatureCard(feature));
+    container.appendChild(renderFeatureCard(feature, options));
   }
 }
 
@@ -288,8 +300,8 @@ function renderFeatureLists() {
     .filter((feature) => isFeatureComplete(feature))
     .filter((feature) => matchesQuery(feature, completeQuery));
 
-  renderSection(incompleteListContainer, incompleteFeatures);
-  renderSection(completeListContainer, completeFeatures);
+  renderSection(incompleteListContainer, incompleteFeatures, { showAutomation: true });
+  renderSection(completeListContainer, completeFeatures, { showAutomation: false });
 }
 
 function createStoryDraft() {
@@ -465,19 +477,8 @@ async function loadFeatures() {
   renderFeatureLists();
 }
 
-async function loadCompletionRuns() {
-  const response = await fetch("/api/features/completion-runs");
-  const result = await response.json();
-
-  if (!response.ok) {
-    throw new Error(result.error || "Failed to load completion runs.");
-  }
-
-  completionRuns = result;
-}
-
 async function reloadAllData() {
-  await Promise.all([loadFeatures(), loadCompletionRuns()]);
+  await loadFeatures();
 }
 
 async function saveFeatureTree() {
