@@ -338,7 +338,8 @@ missing:
 - `errorType: "validation_failed"`
 - `error` (human-readable summary)
 - `queueStatus` (includes `code: "validation_failed"`)
-- `validationErrors` (per-story missing prompt field details)
+- `validationErrors` (per-story missing prompt field details, including
+  automation scope and missing required prompt field names)
 
 Feature Management UI integration:
 

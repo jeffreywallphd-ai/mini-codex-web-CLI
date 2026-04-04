@@ -766,7 +766,8 @@ function defineAutomationExecutionPlan(features, selection, overrides = {}) {
     rules,
     queues: queueResult.queues,
     stories: queueResult.stories,
-    queueStatus: queueResult.queueStatus
+    queueStatus: queueResult.queueStatus,
+    validationErrors: queueResult.validationErrors
   };
 }
 
