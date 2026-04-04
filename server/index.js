@@ -13,10 +13,13 @@ const {
   updateRunMerge,
   createFeatureTree,
   getFeaturesTree,
+  getStoryAutomationContext,
+  attachRunToStory,
   syncStoryCompletionFromRun,
   getCompletionEligibleRuns,
   dbReady
 } = require("./db");
+const { buildStoryAutomationPrompt } = require("./storyAutomationPrompt");
 const { createCodexBranch, getGitSnapshot, mergeBranch, pullRepository } = require("./git");
 
 const app = express();
@@ -125,6 +128,66 @@ function hydrateRun(run) {
   };
 }
 
+async function executeRunFlow({
+  projectName,
+  prompt,
+  executionMode = "read",
+  streamId = null
+}) {
+  const repoPath = getRepoPath(projectName);
+  const runStartTime = Date.now();
+
+  publishRunEvent(streamId, { type: "branch.creating", message: "Creating branch from base..." });
+  const branchInfo = await createCodexBranch(repoPath);
+  publishRunEvent(streamId, { type: "branch.created", message: `Branch created: ${branchInfo.branchName || "unknown"}.` });
+
+  const result = await runCodexWithUsage(repoPath, prompt, executionMode, (event) => {
+    publishRunEvent(streamId, event);
+  });
+
+  publishRunEvent(streamId, { type: "snapshot.collecting", message: "Collecting git snapshot..." });
+  const gitSnapshot = await getGitSnapshot(repoPath);
+  publishRunEvent(streamId, { type: "run.persisting", message: "Saving run record..." });
+  const runEndTime = Date.now();
+
+  const runId = await saveRun({
+    projectName,
+    prompt,
+    ...branchInfo,
+    ...result,
+    runStartTime,
+    runEndTime,
+    gitStatus: gitSnapshot.gitStatus,
+    gitStatusFiles: gitSnapshot.files,
+    gitDiffMap: gitSnapshot.diffs
+  });
+
+  publishRunEvent(streamId, { type: "run.completed", message: `Run completed and saved (#${runId}).` });
+
+  const responsePayload = hydrateRun({
+    runId,
+    projectName,
+    prompt,
+    ...branchInfo,
+    ...result,
+    run_start_time: runStartTime,
+    run_end_time: runEndTime,
+    gitStatus: gitSnapshot.gitStatus,
+    gitStatusFiles: gitSnapshot.files,
+    gitDiffMap: gitSnapshot.diffs,
+    creditsRemaining: result.creditsRemaining
+  });
+  responsePayload.gitStatusFiles = gitSnapshot.files;
+  responsePayload.gitDiffMap = gitSnapshot.diffs;
+  responsePayload.completion_status = result.completionStatus ?? null;
+  responsePayload.completion_work = result.completionWork ?? null;
+
+  return {
+    runId,
+    responsePayload
+  };
+}
+
 app.get("/api/projects", (req, res) => {
   const dirs = fs.readdirSync(PROJECTS_DIR, { withFileTypes: true })
     .filter((dirent) => dirent.isDirectory())
@@ -221,53 +284,15 @@ app.post("/api/run-test", async (req, res) => {
     return res.status(400).json({ error: "Project already running" });
   }
 
-  const repoPath = getRepoPath(projectName);
   runningProjects.add(projectName);
-  const runStartTime = Date.now();
 
   try {
-    publishRunEvent(streamId, { type: "branch.creating", message: "Creating branch from base..." });
-    const branchInfo = await createCodexBranch(repoPath);
-    publishRunEvent(streamId, { type: "branch.created", message: `Branch created: ${branchInfo.branchName || "unknown"}.` });
-    const result = await runCodexWithUsage(repoPath, prompt, executionMode, (event) => {
-      publishRunEvent(streamId, event);
-    });
-    publishRunEvent(streamId, { type: "snapshot.collecting", message: "Collecting git snapshot..." });
-    const gitSnapshot = await getGitSnapshot(repoPath);
-    publishRunEvent(streamId, { type: "run.persisting", message: "Saving run record..." });
-    const runEndTime = Date.now();
-
-    const runId = await saveRun({
+    const { responsePayload } = await executeRunFlow({
       projectName,
       prompt,
-      ...branchInfo,
-      ...result,
-      runStartTime,
-      runEndTime,
-      gitStatus: gitSnapshot.gitStatus,
-      gitStatusFiles: gitSnapshot.files,
-      gitDiffMap: gitSnapshot.diffs
+      executionMode,
+      streamId
     });
-
-    publishRunEvent(streamId, { type: "run.completed", message: `Run completed and saved (#${runId}).` });
-
-    const responsePayload = hydrateRun({
-      runId,
-      projectName,
-      prompt,
-      ...branchInfo,
-      ...result,
-      run_start_time: runStartTime,
-      run_end_time: runEndTime,
-      gitStatus: gitSnapshot.gitStatus,
-      gitStatusFiles: gitSnapshot.files,
-      gitDiffMap: gitSnapshot.diffs,
-      creditsRemaining: result.creditsRemaining
-    });
-    responsePayload.gitStatusFiles = gitSnapshot.files;
-    responsePayload.gitDiffMap = gitSnapshot.diffs;
-    responsePayload.completion_status = result.completionStatus ?? null;
-    responsePayload.completion_work = result.completionWork ?? null;
 
     res.json(responsePayload);
   } catch (err) {
@@ -277,6 +302,55 @@ app.post("/api/run-test", async (req, res) => {
   } finally {
     runningProjects.delete(projectName);
     closeRunStream(streamId);
+  }
+});
+
+app.post("/api/stories/:storyId/complete-with-automation", async (req, res) => {
+  const storyId = Number.parseInt(req.params.storyId, 10);
+  const projectName = String(req.body?.projectName || "").trim();
+  const executionMode = "write";
+
+  if (!Number.isInteger(storyId) || storyId <= 0) {
+    return res.status(400).json({ error: "Invalid story id." });
+  }
+
+  if (!projectName || !isValidProject(projectName)) {
+    return res.status(400).json({ error: "A valid project name is required." });
+  }
+
+  if (runningProjects.has(projectName)) {
+    return res.status(400).json({ error: "Project already running" });
+  }
+
+  try {
+    const storyContext = await getStoryAutomationContext(storyId);
+    if (!storyContext) {
+      return res.status(404).json({ error: "Story not found." });
+    }
+
+    const prompt = buildStoryAutomationPrompt(storyContext);
+    runningProjects.add(projectName);
+
+    const { runId, responsePayload } = await executeRunFlow({
+      projectName,
+      prompt,
+      executionMode
+    });
+
+    await attachRunToStory(storyId, runId);
+    const updatedFeatures = await getFeaturesTree();
+
+    res.json({
+      storyId,
+      runId,
+      prompt,
+      run: responsePayload,
+      features: updatedFeatures
+    });
+  } catch (error) {
+    res.status(500).json({ error: getErrorMessage(error) });
+  } finally {
+    runningProjects.delete(projectName);
   }
 });
 
