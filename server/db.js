@@ -9,7 +9,7 @@ const dbPath = path.resolve(dataDir, "app.db");
 const db = new sqlite3.Database(dbPath);
 db.run("PRAGMA foreign_keys = ON");
 
-const LATEST_SCHEMA_VERSION = 16;
+const LATEST_SCHEMA_VERSION = 17;
 const VALID_AUTOMATION_TYPES = new Set(["feature", "epic", "story"]);
 const VALID_AUTOMATION_STATUSES = new Set(["pending", "running", "completed", "failed", "stopped"]);
 const VALID_AUTOMATION_STORY_EXECUTION_STATUSES = new Set(["completed", "failed"]);
@@ -75,6 +75,15 @@ function runWithLastId(sql, params = []) {
   });
 }
 
+function runWithChanges(sql, params = []) {
+  return new Promise((resolve, reject) => {
+    db.run(sql, params, function onRun(err) {
+      if (err) return reject(err);
+      resolve(this.changes);
+    });
+  });
+}
+
 function get(sql, params = []) {
   return new Promise((resolve, reject) => {
     db.get(sql, params, (err, row) => (err ? reject(err) : resolve(row)));
@@ -91,6 +100,14 @@ async function tableExists(tableName) {
   const row = await get(
     `SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?`,
     [tableName]
+  );
+  return Boolean(row);
+}
+
+async function indexExists(indexName) {
+  const row = await get(
+    `SELECT name FROM sqlite_master WHERE type = 'index' AND name = ?`,
+    [indexName]
   );
   return Boolean(row);
 }
@@ -140,7 +157,14 @@ async function detectVersionFromSchema() {
                 if (hasQueueSnapshotTable) {
                   const hasFailedStoryDetails = await columnExists("automation_runs", "failed_story_id")
                     && await columnExists("automation_runs", "failure_summary");
-                  if (hasFailedStoryDetails) return 15;
+                  if (hasFailedStoryDetails) {
+                    const hasActiveTargetIndex = await indexExists("idx_automation_runs_active_target");
+                    const hasContextBundleTables = await tableExists("context_bundles")
+                      && await tableExists("context_bundle_parts");
+                    if (hasContextBundleTables) return 17;
+                    if (hasActiveTargetIndex) return 16;
+                    return 15;
+                  }
                   return 14;
                 }
                 return 13;
@@ -447,6 +471,47 @@ async function migrateToV16() {
   `);
 }
 
+async function migrateToV17() {
+  await run(`
+    CREATE TABLE IF NOT EXISTS context_bundles (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      title TEXT NOT NULL,
+      description TEXT NOT NULL DEFAULT '',
+      status TEXT NOT NULL DEFAULT 'draft',
+      token_estimate INTEGER,
+      is_active INTEGER,
+      last_used_at DATETIME,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )
+  `);
+
+  await run(`
+    CREATE TABLE IF NOT EXISTS context_bundle_parts (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      bundle_id INTEGER NOT NULL REFERENCES context_bundles(id) ON DELETE CASCADE,
+      part_type TEXT NOT NULL,
+      title TEXT NOT NULL,
+      content TEXT NOT NULL DEFAULT '',
+      instructions TEXT,
+      notes TEXT,
+      position INTEGER NOT NULL,
+      include_in_compiled INTEGER NOT NULL DEFAULT 1,
+      include_in_preview INTEGER NOT NULL DEFAULT 1,
+      token_estimate INTEGER,
+      is_active INTEGER,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE(bundle_id, position)
+    )
+  `);
+
+  await run(`
+    CREATE INDEX IF NOT EXISTS idx_context_bundle_parts_bundle_position
+    ON context_bundle_parts(bundle_id, position, id)
+  `);
+}
+
 async function runMigrations() {
   let version = await getSchemaVersion();
 
@@ -548,12 +613,550 @@ async function runMigrations() {
     await setSchemaVersion(version);
   }
 
+  if (version < 17) {
+    await migrateToV17();
+    version = 17;
+    await setSchemaVersion(version);
+  }
+
   if (version > LATEST_SCHEMA_VERSION) {
     throw new Error(`Unsupported schema version ${version}. Latest supported is ${LATEST_SCHEMA_VERSION}.`);
   }
 }
 
 const dbReady = runMigrations();
+
+function normalizeNullableInteger(value, fieldName) {
+  if (value === null || value === undefined || value === "") {
+    return null;
+  }
+
+  const parsed = Number.parseInt(value, 10);
+  if (!Number.isInteger(parsed) || parsed < 0) {
+    throw new Error(`${fieldName} must be a non-negative integer when provided.`);
+  }
+
+  return parsed;
+}
+
+function normalizeNullableFlag(value, fieldName) {
+  if (value === null || value === undefined || value === "") {
+    return null;
+  }
+
+  if (value === true || value === false) {
+    return value ? 1 : 0;
+  }
+
+  const parsed = Number.parseInt(value, 10);
+  if (parsed === 0 || parsed === 1) {
+    return parsed;
+  }
+
+  throw new Error(`${fieldName} must be 0 or 1 when provided.`);
+}
+
+function normalizePositiveInteger(value, fieldName) {
+  const parsed = Number.parseInt(value, 10);
+  if (!Number.isInteger(parsed) || parsed <= 0) {
+    throw new Error(`${fieldName} must be a positive integer.`);
+  }
+
+  return parsed;
+}
+
+async function createContextBundle(input = {}) {
+  await dbReady;
+
+  const title = String(input.title || "").trim();
+  const description = typeof input.description === "string" ? input.description.trim() : "";
+  const status = String(input.status || "draft").trim().toLowerCase();
+  const tokenEstimate = normalizeNullableInteger(input.tokenEstimate, "Bundle token estimate");
+  const isActive = normalizeNullableFlag(input.isActive, "Bundle active flag");
+  const lastUsedAt = typeof input.lastUsedAt === "string" && input.lastUsedAt.trim()
+    ? input.lastUsedAt.trim()
+    : null;
+
+  if (!title) {
+    throw new Error("Context bundle title is required.");
+  }
+
+  if (!status) {
+    throw new Error("Context bundle status is required.");
+  }
+
+  const id = await runWithLastId(
+    `
+      INSERT INTO context_bundles
+      (
+        title,
+        description,
+        status,
+        token_estimate,
+        is_active,
+        last_used_at
+      )
+      VALUES (?, ?, ?, ?, ?, ?)
+    `,
+    [title, description, status, tokenEstimate, isActive, lastUsedAt]
+  );
+
+  return getContextBundleById(id);
+}
+
+async function getContextBundleById(id, options = {}) {
+  await dbReady;
+
+  const bundleId = Number.parseInt(id, 10);
+  if (!Number.isInteger(bundleId) || bundleId <= 0) {
+    return null;
+  }
+
+  const bundle = await get(
+    `
+      SELECT
+        id,
+        title,
+        description,
+        status,
+        token_estimate,
+        is_active,
+        last_used_at,
+        created_at,
+        updated_at
+      FROM context_bundles
+      WHERE id = ?
+    `,
+    [bundleId]
+  );
+
+  if (!bundle) {
+    return null;
+  }
+
+  if (options.includeParts === false) {
+    return bundle;
+  }
+
+  const parts = await getContextBundlePartsByBundleId(bundle.id);
+  return {
+    ...bundle,
+    parts
+  };
+}
+
+async function getContextBundles(options = {}) {
+  await dbReady;
+
+  const bundles = await all(
+    `
+      SELECT
+        id,
+        title,
+        description,
+        status,
+        token_estimate,
+        is_active,
+        last_used_at,
+        created_at,
+        updated_at
+      FROM context_bundles
+      ORDER BY id DESC
+    `
+  );
+
+  if (options.includeParts === false || bundles.length <= 0) {
+    return bundles;
+  }
+
+  const bundleIds = bundles.map((bundle) => bundle.id);
+  const placeholders = bundleIds.map(() => "?").join(", ");
+  const parts = await all(
+    `
+      SELECT
+        id,
+        bundle_id,
+        part_type,
+        title,
+        content,
+        instructions,
+        notes,
+        position,
+        include_in_compiled,
+        include_in_preview,
+        token_estimate,
+        is_active,
+        created_at,
+        updated_at
+      FROM context_bundle_parts
+      WHERE bundle_id IN (${placeholders})
+      ORDER BY bundle_id ASC, position ASC, id ASC
+    `,
+    bundleIds
+  );
+
+  const partsByBundleId = new Map();
+  for (const part of parts) {
+    const existing = partsByBundleId.get(part.bundle_id) || [];
+    existing.push(part);
+    partsByBundleId.set(part.bundle_id, existing);
+  }
+
+  return bundles.map((bundle) => ({
+    ...bundle,
+    parts: partsByBundleId.get(bundle.id) || []
+  }));
+}
+
+async function updateContextBundle(id, updates = {}) {
+  await dbReady;
+
+  const bundleId = normalizePositiveInteger(id, "Context bundle id");
+  const clauses = [];
+  const params = [];
+
+  if (Object.prototype.hasOwnProperty.call(updates, "title")) {
+    const title = String(updates.title || "").trim();
+    if (!title) {
+      throw new Error("Context bundle title is required.");
+    }
+    clauses.push("title = ?");
+    params.push(title);
+  }
+
+  if (Object.prototype.hasOwnProperty.call(updates, "description")) {
+    clauses.push("description = ?");
+    params.push(typeof updates.description === "string" ? updates.description.trim() : "");
+  }
+
+  if (Object.prototype.hasOwnProperty.call(updates, "status")) {
+    const status = String(updates.status || "").trim().toLowerCase();
+    if (!status) {
+      throw new Error("Context bundle status is required.");
+    }
+    clauses.push("status = ?");
+    params.push(status);
+  }
+
+  if (Object.prototype.hasOwnProperty.call(updates, "tokenEstimate")) {
+    clauses.push("token_estimate = ?");
+    params.push(normalizeNullableInteger(updates.tokenEstimate, "Bundle token estimate"));
+  }
+
+  if (Object.prototype.hasOwnProperty.call(updates, "isActive")) {
+    clauses.push("is_active = ?");
+    params.push(normalizeNullableFlag(updates.isActive, "Bundle active flag"));
+  }
+
+  if (Object.prototype.hasOwnProperty.call(updates, "lastUsedAt")) {
+    const lastUsedAt = typeof updates.lastUsedAt === "string" && updates.lastUsedAt.trim()
+      ? updates.lastUsedAt.trim()
+      : null;
+    clauses.push("last_used_at = ?");
+    params.push(lastUsedAt);
+  }
+
+  if (clauses.length <= 0) {
+    throw new Error("At least one context bundle field must be provided.");
+  }
+
+  clauses.push("updated_at = CURRENT_TIMESTAMP");
+  params.push(bundleId);
+
+  await run(
+    `
+      UPDATE context_bundles
+      SET ${clauses.join(", ")}
+      WHERE id = ?
+    `,
+    params
+  );
+
+  return getContextBundleById(bundleId);
+}
+
+async function deleteContextBundleById(id) {
+  await dbReady;
+
+  const bundleId = Number.parseInt(id, 10);
+  if (!Number.isInteger(bundleId) || bundleId <= 0) {
+    return 0;
+  }
+
+  return runWithChanges(
+    `
+      DELETE FROM context_bundles
+      WHERE id = ?
+    `,
+    [bundleId]
+  );
+}
+
+async function createContextBundlePart(input = {}) {
+  await dbReady;
+
+  const bundleId = normalizePositiveInteger(input.bundleId, "Context bundle id");
+  const partType = String(input.partType || input.type || "").trim().toLowerCase();
+  const title = String(input.title || "").trim();
+  const content = typeof input.content === "string"
+    ? input.content
+    : (typeof input.body === "string" ? input.body : "");
+  const instructions = typeof input.instructions === "string" && input.instructions.trim()
+    ? input.instructions
+    : null;
+  const notes = typeof input.notes === "string" && input.notes.trim()
+    ? input.notes
+    : null;
+  const position = normalizePositiveInteger(input.position, "Context bundle part position");
+  const includeInCompiled = Object.prototype.hasOwnProperty.call(input, "includeInCompiled")
+    ? (normalizeNullableFlag(input.includeInCompiled, "Part include_in_compiled flag") ?? 1)
+    : 1;
+  const includeInPreview = Object.prototype.hasOwnProperty.call(input, "includeInPreview")
+    ? (normalizeNullableFlag(input.includeInPreview, "Part include_in_preview flag") ?? 1)
+    : 1;
+  const tokenEstimate = normalizeNullableInteger(input.tokenEstimate, "Part token estimate");
+  const isActive = normalizeNullableFlag(input.isActive, "Part active flag");
+
+  if (!partType) {
+    throw new Error("Context bundle part type is required.");
+  }
+
+  if (!title) {
+    throw new Error("Context bundle part title is required.");
+  }
+
+  const bundle = await get(
+    `
+      SELECT id
+      FROM context_bundles
+      WHERE id = ?
+    `,
+    [bundleId]
+  );
+  if (!bundle) {
+    throw new Error("Context bundle not found.");
+  }
+
+  const id = await runWithLastId(
+    `
+      INSERT INTO context_bundle_parts
+      (
+        bundle_id,
+        part_type,
+        title,
+        content,
+        instructions,
+        notes,
+        position,
+        include_in_compiled,
+        include_in_preview,
+        token_estimate,
+        is_active
+      )
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `,
+    [
+      bundleId,
+      partType,
+      title,
+      content,
+      instructions,
+      notes,
+      position,
+      includeInCompiled,
+      includeInPreview,
+      tokenEstimate,
+      isActive
+    ]
+  );
+
+  return getContextBundlePartById(id);
+}
+
+async function getContextBundlePartById(id) {
+  await dbReady;
+
+  const partId = Number.parseInt(id, 10);
+  if (!Number.isInteger(partId) || partId <= 0) {
+    return null;
+  }
+
+  return get(
+    `
+      SELECT
+        id,
+        bundle_id,
+        part_type,
+        title,
+        content,
+        instructions,
+        notes,
+        position,
+        include_in_compiled,
+        include_in_preview,
+        token_estimate,
+        is_active,
+        created_at,
+        updated_at
+      FROM context_bundle_parts
+      WHERE id = ?
+    `,
+    [partId]
+  );
+}
+
+async function getContextBundlePartsByBundleId(bundleId) {
+  await dbReady;
+
+  const normalizedBundleId = Number.parseInt(bundleId, 10);
+  if (!Number.isInteger(normalizedBundleId) || normalizedBundleId <= 0) {
+    return [];
+  }
+
+  return all(
+    `
+      SELECT
+        id,
+        bundle_id,
+        part_type,
+        title,
+        content,
+        instructions,
+        notes,
+        position,
+        include_in_compiled,
+        include_in_preview,
+        token_estimate,
+        is_active,
+        created_at,
+        updated_at
+      FROM context_bundle_parts
+      WHERE bundle_id = ?
+      ORDER BY position ASC, id ASC
+    `,
+    [normalizedBundleId]
+  );
+}
+
+async function updateContextBundlePart(id, updates = {}) {
+  await dbReady;
+
+  const partId = normalizePositiveInteger(id, "Context bundle part id");
+  const clauses = [];
+  const params = [];
+
+  if (Object.prototype.hasOwnProperty.call(updates, "partType")
+    || Object.prototype.hasOwnProperty.call(updates, "type")) {
+    const partType = String(updates.partType || updates.type || "").trim().toLowerCase();
+    if (!partType) {
+      throw new Error("Context bundle part type is required.");
+    }
+    clauses.push("part_type = ?");
+    params.push(partType);
+  }
+
+  if (Object.prototype.hasOwnProperty.call(updates, "title")) {
+    const title = String(updates.title || "").trim();
+    if (!title) {
+      throw new Error("Context bundle part title is required.");
+    }
+    clauses.push("title = ?");
+    params.push(title);
+  }
+
+  if (Object.prototype.hasOwnProperty.call(updates, "content")
+    || Object.prototype.hasOwnProperty.call(updates, "body")) {
+    const content = typeof updates.content === "string"
+      ? updates.content
+      : (typeof updates.body === "string" ? updates.body : "");
+    clauses.push("content = ?");
+    params.push(content);
+  }
+
+  if (Object.prototype.hasOwnProperty.call(updates, "instructions")) {
+    const instructions = typeof updates.instructions === "string" && updates.instructions.trim()
+      ? updates.instructions
+      : null;
+    clauses.push("instructions = ?");
+    params.push(instructions);
+  }
+
+  if (Object.prototype.hasOwnProperty.call(updates, "notes")) {
+    const notes = typeof updates.notes === "string" && updates.notes.trim()
+      ? updates.notes
+      : null;
+    clauses.push("notes = ?");
+    params.push(notes);
+  }
+
+  if (Object.prototype.hasOwnProperty.call(updates, "position")) {
+    clauses.push("position = ?");
+    params.push(normalizePositiveInteger(updates.position, "Context bundle part position"));
+  }
+
+  if (Object.prototype.hasOwnProperty.call(updates, "includeInCompiled")) {
+    const includeInCompiled = normalizeNullableFlag(
+      updates.includeInCompiled,
+      "Part include_in_compiled flag"
+    );
+    clauses.push("include_in_compiled = ?");
+    params.push(includeInCompiled === null ? 1 : includeInCompiled);
+  }
+
+  if (Object.prototype.hasOwnProperty.call(updates, "includeInPreview")) {
+    const includeInPreview = normalizeNullableFlag(
+      updates.includeInPreview,
+      "Part include_in_preview flag"
+    );
+    clauses.push("include_in_preview = ?");
+    params.push(includeInPreview === null ? 1 : includeInPreview);
+  }
+
+  if (Object.prototype.hasOwnProperty.call(updates, "tokenEstimate")) {
+    clauses.push("token_estimate = ?");
+    params.push(normalizeNullableInteger(updates.tokenEstimate, "Part token estimate"));
+  }
+
+  if (Object.prototype.hasOwnProperty.call(updates, "isActive")) {
+    clauses.push("is_active = ?");
+    params.push(normalizeNullableFlag(updates.isActive, "Part active flag"));
+  }
+
+  if (clauses.length <= 0) {
+    throw new Error("At least one context bundle part field must be provided.");
+  }
+
+  clauses.push("updated_at = CURRENT_TIMESTAMP");
+  params.push(partId);
+
+  await run(
+    `
+      UPDATE context_bundle_parts
+      SET ${clauses.join(", ")}
+      WHERE id = ?
+    `,
+    params
+  );
+
+  return getContextBundlePartById(partId);
+}
+
+async function deleteContextBundlePartById(id) {
+  await dbReady;
+
+  const partId = Number.parseInt(id, 10);
+  if (!Number.isInteger(partId) || partId <= 0) {
+    return 0;
+  }
+
+  return runWithChanges(
+    `
+      DELETE FROM context_bundle_parts
+      WHERE id = ?
+    `,
+    [partId]
+  );
+}
 
 function saveRun(runInput) {
   return new Promise((resolve, reject) => {
@@ -1860,6 +2463,16 @@ module.exports = {
   updateRunMerge,
   createFeatureTree,
   getFeaturesTree,
+  createContextBundle,
+  getContextBundleById,
+  getContextBundles,
+  updateContextBundle,
+  deleteContextBundleById,
+  createContextBundlePart,
+  getContextBundlePartById,
+  getContextBundlePartsByBundleId,
+  updateContextBundlePart,
+  deleteContextBundlePartById,
   getStoryAutomationContext,
   attachRunToStory,
   syncStoryCompletionFromRun,

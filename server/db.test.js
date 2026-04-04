@@ -10,6 +10,16 @@ const {
   getRuns,
   createFeatureTree,
   getFeaturesTree,
+  createContextBundle,
+  getContextBundleById,
+  getContextBundles,
+  updateContextBundle,
+  deleteContextBundleById,
+  createContextBundlePart,
+  getContextBundlePartById,
+  getContextBundlePartsByBundleId,
+  updateContextBundlePart,
+  deleteContextBundlePartById,
   syncStoryCompletionFromRun,
   createAutomationRun,
   getAutomationRunById,
@@ -24,6 +34,17 @@ const {
 } = require("./db");
 
 const dbPath = path.resolve(__dirname, "../data/app.db");
+
+function getDbRow(sql, params = []) {
+  return new Promise((resolve, reject) => {
+    const db = new sqlite3.Database(dbPath);
+    db.get(sql, params, (err, row) => {
+      db.close();
+      if (err) return reject(err);
+      resolve(row);
+    });
+  });
+}
 
 function cleanupAutomationRun(id) {
   return new Promise((resolve, reject) => {
@@ -92,6 +113,22 @@ function cleanupFeatureScope(scope = {}) {
         resolve();
       }
     );
+  });
+}
+
+function cleanupContextBundle(id) {
+  return new Promise((resolve, reject) => {
+    if (!Number.isInteger(id) || id <= 0) {
+      resolve();
+      return;
+    }
+
+    const db = new sqlite3.Database(dbPath);
+    db.run("DELETE FROM context_bundles WHERE id = ?", [id], (err) => {
+      db.close();
+      if (err) return reject(err);
+      resolve();
+    });
   });
 }
 
@@ -1288,5 +1325,210 @@ test("feature tree includes latest epic and story automation status summaries wi
       await cleanupAutomationRun(automationRunId);
     }
     await cleanupFeatureScope(scope);
+  }
+});
+
+test("context bundle schema migration creates bundle foundation tables", async () => {
+  await dbReady;
+
+  const schemaVersion = await getDbRow("SELECT version FROM schema_version LIMIT 1");
+  assert.ok(Number.isInteger(schemaVersion?.version));
+  assert.ok(schemaVersion.version >= 17);
+
+  const bundleTable = await getDbRow(
+    "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'context_bundles'"
+  );
+  const partTable = await getDbRow(
+    "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'context_bundle_parts'"
+  );
+
+  assert.equal(bundleTable?.name, "context_bundles");
+  assert.equal(partTable?.name, "context_bundle_parts");
+});
+
+test("context bundles support multiple bundles with deterministic ordered parts", async () => {
+  await dbReady;
+
+  const stamp = Date.now();
+  const createdBundleIds = [];
+
+  try {
+    const bundleA = await createContextBundle({
+      title: `Bundle A ${stamp}`,
+      description: "Bundle A description",
+      status: "draft"
+    });
+    createdBundleIds.push(bundleA.id);
+
+    const bundleB = await createContextBundle({
+      title: `Bundle B ${stamp}`,
+      description: "Bundle B description",
+      status: "active"
+    });
+    createdBundleIds.push(bundleB.id);
+
+    assert.notEqual(bundleA.id, bundleB.id);
+
+    await createContextBundlePart({
+      bundleId: bundleA.id,
+      partType: "constraints",
+      title: "Constraints",
+      content: "Never mutate unrelated files.",
+      instructions: "Enforce before planning.",
+      position: 2,
+      includeInCompiled: true,
+      includeInPreview: false
+    });
+    await createContextBundlePart({
+      bundleId: bundleA.id,
+      partType: "objective",
+      title: "Objective",
+      content: "Implement story scope only.",
+      notes: "Primary context section.",
+      position: 1,
+      includeInCompiled: true,
+      includeInPreview: true
+    });
+    await createContextBundlePart({
+      bundleId: bundleB.id,
+      partType: "reference",
+      title: "Reference",
+      content: "Use existing architecture patterns.",
+      position: 1,
+      includeInCompiled: false,
+      includeInPreview: true
+    });
+
+    const loadedA = await getContextBundleById(bundleA.id);
+    assert.equal(loadedA.id, bundleA.id);
+    assert.equal(loadedA.parts.length, 2);
+    assert.deepEqual(
+      loadedA.parts.map((part) => part.position),
+      [1, 2]
+    );
+    assert.deepEqual(
+      loadedA.parts.map((part) => part.bundle_id),
+      [bundleA.id, bundleA.id]
+    );
+
+    const loadedPartsA = await getContextBundlePartsByBundleId(bundleA.id);
+    assert.equal(loadedPartsA[0].part_type, "objective");
+    assert.equal(loadedPartsA[1].part_type, "constraints");
+
+    const allBundles = await getContextBundles();
+    const byId = new Map(allBundles.map((bundle) => [bundle.id, bundle]));
+    assert.equal(byId.get(bundleA.id)?.parts?.length, 2);
+    assert.equal(byId.get(bundleB.id)?.parts?.length, 1);
+    assert.deepEqual(
+      (byId.get(bundleB.id)?.parts || []).map((part) => part.bundle_id),
+      [bundleB.id]
+    );
+  } finally {
+    for (const bundleId of createdBundleIds) {
+      await cleanupContextBundle(bundleId);
+    }
+  }
+});
+
+test("context bundle and part models support create update and delete", async () => {
+  await dbReady;
+
+  let bundleId = null;
+  let partId = null;
+  let cascadePartId = null;
+
+  try {
+    const createdBundle = await createContextBundle({
+      title: `Bundle CRUD ${Date.now()}`,
+      description: "Initial description",
+      status: "draft"
+    });
+    bundleId = createdBundle.id;
+
+    const updatedBundle = await updateContextBundle(bundleId, {
+      title: "Bundle CRUD Updated",
+      description: "Updated description",
+      status: "active",
+      tokenEstimate: 256,
+      isActive: 1,
+      lastUsedAt: "2026-04-04T12:34:56.000Z"
+    });
+    assert.equal(updatedBundle.title, "Bundle CRUD Updated");
+    assert.equal(updatedBundle.status, "active");
+    assert.equal(updatedBundle.token_estimate, 256);
+    assert.equal(updatedBundle.is_active, 1);
+    assert.equal(updatedBundle.last_used_at, "2026-04-04T12:34:56.000Z");
+
+    const createdPart = await createContextBundlePart({
+      bundleId,
+      partType: "instruction",
+      title: "Part Initial",
+      content: "Initial content",
+      instructions: "Initial instruction",
+      notes: "Initial note",
+      position: 1,
+      includeInCompiled: true,
+      includeInPreview: true,
+      tokenEstimate: 64,
+      isActive: 1
+    });
+    partId = createdPart.id;
+
+    const updatedPart = await updateContextBundlePart(partId, {
+      partType: "policy",
+      title: "Part Updated",
+      content: "Updated content",
+      instructions: "",
+      notes: "",
+      position: 3,
+      includeInCompiled: false,
+      includeInPreview: true,
+      tokenEstimate: 96,
+      isActive: 0
+    });
+    assert.equal(updatedPart.part_type, "policy");
+    assert.equal(updatedPart.title, "Part Updated");
+    assert.equal(updatedPart.content, "Updated content");
+    assert.equal(updatedPart.instructions, null);
+    assert.equal(updatedPart.notes, null);
+    assert.equal(updatedPart.position, 3);
+    assert.equal(updatedPart.include_in_compiled, 0);
+    assert.equal(updatedPart.include_in_preview, 1);
+    assert.equal(updatedPart.token_estimate, 96);
+    assert.equal(updatedPart.is_active, 0);
+
+    const deletedPartCount = await deleteContextBundlePartById(partId);
+    assert.equal(deletedPartCount, 1);
+    partId = null;
+    const missingPart = await getContextBundlePartById(createdPart.id);
+    assert.equal(missingPart, undefined);
+
+    const cascadePart = await createContextBundlePart({
+      bundleId,
+      partType: "reference",
+      title: "Cascade Part",
+      content: "Should be removed with parent bundle.",
+      position: 4
+    });
+    cascadePartId = cascadePart.id;
+
+    const deletedBundleCount = await deleteContextBundleById(bundleId);
+    assert.equal(deletedBundleCount, 1);
+    bundleId = null;
+    const missingBundle = await getContextBundleById(createdBundle.id);
+    assert.equal(missingBundle, null);
+    const missingCascadePart = await getContextBundlePartById(cascadePart.id);
+    assert.equal(missingCascadePart, undefined);
+    cascadePartId = null;
+  } finally {
+    if (partId) {
+      await deleteContextBundlePartById(partId);
+    }
+    if (cascadePartId) {
+      await deleteContextBundlePartById(cascadePartId);
+    }
+    if (bundleId) {
+      await cleanupContextBundle(bundleId);
+    }
   }
 });
