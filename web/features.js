@@ -12,8 +12,6 @@ const clearCompleteSearchButton = document.getElementById("clearCompleteSearchBu
 const incompleteListContainer = document.getElementById("incompleteListContainer");
 const completeListContainer = document.getElementById("completeListContainer");
 const scopeHint = document.getElementById("scopeHint");
-const automationTimer = document.getElementById("automationTimer");
-const automationStatusBox = document.getElementById("automationStatusBox");
 const EDITOR_STATE_KEY = "mini-codex-editor-state";
 
 let allFeatures = [];
@@ -27,9 +25,13 @@ let globalAutomationLock = null;
 let activeStoryAutomation = null;
 let activeAutomationStream = null;
 let automationTimerInterval = null;
+let activeAutomationStatusMessage = "Automation status will appear here.";
+let activeStoryAutomationTimerNode = null;
+let activeStoryAutomationStatusNode = null;
 let epicDraftId = 0;
 let storyDraftId = 0;
 const epicDrafts = [];
+const stopMergeIfIncompleteByStoryId = new Map();
 
 function isStoryComplete(story) {
   return Boolean(story?.is_complete);
@@ -125,15 +127,38 @@ function renderScopeHint() {
 }
 
 function renderAutomationTimer() {
+  if (!activeStoryAutomationTimerNode) {
+    return;
+  }
+
   if (!activeStoryAutomation?.startedAt) {
-    automationTimer.textContent = "";
-    automationTimer.classList.add("hidden");
+    activeStoryAutomationTimerNode.textContent = "";
+    activeStoryAutomationTimerNode.classList.add("hidden");
     return;
   }
 
   const elapsed = Date.now() - activeStoryAutomation.startedAt;
-  automationTimer.textContent = `Automation running for ${formatElapsed(elapsed)}`;
-  automationTimer.classList.remove("hidden");
+  activeStoryAutomationTimerNode.textContent = `Automation running for ${formatElapsed(elapsed)}`;
+  activeStoryAutomationTimerNode.classList.remove("hidden");
+}
+
+function renderActiveAutomationStatus() {
+  if (!activeStoryAutomationStatusNode) {
+    return;
+  }
+
+  activeStoryAutomationStatusNode.textContent = activeAutomationStatusMessage;
+}
+
+function setActiveAutomationStatusMessage(message) {
+  const normalized = String(message || "").trim();
+  activeAutomationStatusMessage = normalized || "Automation status will appear here.";
+  renderActiveAutomationStatus();
+}
+
+function resetActiveStoryAutomationAnchors() {
+  activeStoryAutomationTimerNode = null;
+  activeStoryAutomationStatusNode = null;
 }
 
 function startAutomationTimer() {
@@ -149,7 +174,6 @@ function stopAutomationTimer() {
     clearInterval(automationTimerInterval);
     automationTimerInterval = null;
   }
-  renderAutomationTimer();
 }
 
 function createAutomationStreamId() {
@@ -167,17 +191,9 @@ function closeAutomationStream() {
   activeAutomationStream = null;
 }
 
-function openAutomationStatusBox() {
-  automationStatusBox.classList.remove("hidden");
-}
-
-function closeAutomationStatusBox() {
-  automationStatusBox.classList.add("hidden");
-}
-
 function startAutomationStream(streamId) {
   closeAutomationStream();
-  openAutomationStatusBox();
+  setActiveAutomationStatusMessage("Connected to live run stream.");
 
   const eventSource = new EventSource(`/api/run-test/stream/${encodeURIComponent(streamId)}`);
   activeAutomationStream = { streamId, eventSource };
@@ -190,7 +206,7 @@ function startAutomationStream(streamId) {
     try {
       const payload = JSON.parse(event.data || "{}");
       if (payload?.message) {
-        automationStatusBox.textContent = payload.message;
+        setActiveAutomationStatusMessage(payload.message);
       }
     } catch (error) {
       console.warn("Failed to parse automation stream event", error);
@@ -202,7 +218,7 @@ function startAutomationStream(streamId) {
       return;
     }
     if (activeStoryAutomation) {
-      automationStatusBox.textContent = "Live status disconnected; waiting for final automation result...";
+      setActiveAutomationStatusMessage("Live status disconnected; waiting for final automation result...");
     }
   };
 }
@@ -315,6 +331,19 @@ function createStoryAutomationUi(content, story) {
   }
 
   const isGlobalRunActive = isAnyAutomationInFlight();
+  const storyStopMergeCheckbox = document.createElement("input");
+  storyStopMergeCheckbox.type = "checkbox";
+  storyStopMergeCheckbox.checked = Boolean(stopMergeIfIncompleteByStoryId.get(story.id));
+  storyStopMergeCheckbox.addEventListener("change", () => {
+    stopMergeIfIncompleteByStoryId.set(story.id, storyStopMergeCheckbox.checked);
+  });
+
+  const storyStopMergeLabel = document.createElement("label");
+  storyStopMergeLabel.className = "story-automation-checkbox";
+  storyStopMergeLabel.appendChild(storyStopMergeCheckbox);
+  storyStopMergeLabel.appendChild(document.createTextNode("Stop Merge if Story Implementation is Incomplete"));
+  content.appendChild(storyStopMergeLabel);
+
   const automationButton = document.createElement("button");
   automationButton.type = "button";
   automationButton.className = "secondary-button";
@@ -345,6 +374,7 @@ function createStoryAutomationUi(content, story) {
       startedAt: Date.now(),
       streamId
     };
+    setActiveAutomationStatusMessage("Automation status will appear here.");
     startAutomationTimer();
     startAutomationStream(streamId);
     renderFeatureLists();
@@ -354,7 +384,12 @@ function createStoryAutomationUi(content, story) {
       const response = await fetch(`/api/stories/${story.id}/complete-with-automation`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ projectName, baseBranch, streamId })
+        body: JSON.stringify({
+          projectName,
+          baseBranch,
+          streamId,
+          stopMergeIfStoryImplementationIncomplete: storyStopMergeCheckbox.checked
+        })
       });
       const result = await response.json();
 
@@ -364,7 +399,13 @@ function createStoryAutomationUi(content, story) {
 
       allFeatures = Array.isArray(result.features) ? result.features : allFeatures;
       renderFeatureLists();
-      createStatusBox.textContent = `Automation finished for story #${story.id}. Linked run #${result.runId}.`;
+      if (result.autoMerge?.status === "merged") {
+        createStatusBox.textContent = `Automation finished for story #${story.id}. Linked run #${result.runId}. Changes merged to '${result.baseBranch}'.`;
+      } else if (result.autoMerge?.status === "skipped") {
+        createStatusBox.textContent = `Automation finished for story #${story.id}. Linked run #${result.runId}. Auto-merge skipped: ${result.autoMerge.reason}.`;
+      } else {
+        createStatusBox.textContent = `Automation finished for story #${story.id}. Linked run #${result.runId}.`;
+      }
       await loadAutomationLock();
     } catch (error) {
       createStatusBox.textContent = `Automation failed: ${error.message}`;
@@ -374,11 +415,27 @@ function createStoryAutomationUi(content, story) {
       activeStoryAutomation = null;
       closeAutomationStream();
       stopAutomationTimer();
+      setActiveAutomationStatusMessage("Automation status will appear here.");
       renderFeatureLists();
     }
   });
 
   content.appendChild(automationButton);
+
+  if (activeStoryAutomation?.storyId === story.id) {
+    const timerNode = document.createElement("p");
+    timerNode.className = "run-timer";
+    content.appendChild(timerNode);
+
+    const statusNode = document.createElement("div");
+    statusNode.className = "story-automation-status";
+    content.appendChild(statusNode);
+
+    activeStoryAutomationTimerNode = timerNode;
+    activeStoryAutomationStatusNode = statusNode;
+    renderAutomationTimer();
+    renderActiveAutomationStatus();
+  }
 }
 
 function renderStoryCard(story, options = {}) {
@@ -465,6 +522,7 @@ function renderSection(container, features, options = {}) {
 }
 
 function renderFeatureLists() {
+  resetActiveStoryAutomationAnchors();
   const incompleteQuery = incompleteSearchInput.value.trim();
   const completeQuery = completeSearchInput.value.trim();
 
@@ -776,7 +834,6 @@ setInterval(() => {
     automationScope = readScopeFromUrlOrState();
     syncScopeIntoEditorState(automationScope);
     renderScopeHint();
-    closeAutomationStatusBox();
     await reloadAllData();
     await loadAutomationLock();
     renderDrafts();

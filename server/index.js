@@ -377,6 +377,7 @@ app.post("/api/stories/:storyId/complete-with-automation", async (req, res) => {
   const projectName = String(req.body?.projectName || "").trim();
   const baseBranch = String(req.body?.baseBranch || "").trim();
   const streamId = String(req.body?.streamId || "").trim() || null;
+  const stopMergeIfStoryImplementationIncomplete = Boolean(req.body?.stopMergeIfStoryImplementationIncomplete);
   const executionMode = "write";
 
   if (!Number.isInteger(storyId) || storyId <= 0) {
@@ -429,6 +430,54 @@ app.post("/api/stories/:storyId/complete-with-automation", async (req, res) => {
     });
 
     await attachRunToStory(storyId, runId);
+    const runCompletionStatus = normalizeCompletionStatus(responsePayload.completion_status);
+    const shouldSkipAutoMerge = stopMergeIfStoryImplementationIncomplete && runCompletionStatus !== "complete";
+    let autoMerge = {
+      status: "not_attempted",
+      reason: "No merge outcome available."
+    };
+
+    if (shouldSkipAutoMerge) {
+      autoMerge = {
+        status: "skipped",
+        reason: `Run completion status was '${runCompletionStatus}'.`
+      };
+      publishRunEvent(streamId, {
+        type: "merge.skipped",
+        message: `Auto-merge skipped for story #${storyId}: ${autoMerge.reason}`
+      });
+    } else {
+      publishRunEvent(streamId, {
+        type: "merge.started",
+        message: `Auto-merging run #${runId} into '${baseBranch}' and pushing to origin...`
+      });
+
+      try {
+        const mergeResult = await mergeBranch(
+          getRepoPath(projectName),
+          responsePayload.branchName,
+          baseBranch,
+          responsePayload.changeTitle || "Codex changes",
+          responsePayload.changeDescription || ""
+        );
+        await updateRunMerge(runId, mergeResult);
+        autoMerge = {
+          status: "merged",
+          reason: `Merged '${responsePayload.branchName}' into '${baseBranch}' and pushed to origin.`
+        };
+        publishRunEvent(streamId, {
+          type: "merge.completed",
+          message: autoMerge.reason
+        });
+      } catch (mergeError) {
+        publishRunEvent(streamId, {
+          type: "merge.failed",
+          message: `Auto-merge failed: ${getErrorMessage(mergeError)}`
+        });
+        throw mergeError;
+      }
+    }
+
     const updatedFeatures = await getFeaturesTree({ projectName, baseBranch });
     publishRunEvent(streamId, { type: "automation.completed", message: `Story automation completed for #${storyId}.` });
 
@@ -437,6 +486,7 @@ app.post("/api/stories/:storyId/complete-with-automation", async (req, res) => {
       runId,
       prompt,
       run: responsePayload,
+      autoMerge,
       features: updatedFeatures,
       projectName,
       baseBranch
