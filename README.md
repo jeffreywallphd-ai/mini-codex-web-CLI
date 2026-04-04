@@ -155,6 +155,7 @@ Context bundles are persisted with a parent-child data model in SQLite:
   - `DELETE /api/context-bundles/:bundleId`
   - `POST /api/context-bundles/:bundleId/duplicate`
   - `GET /api/context-bundles/:bundleId/parts`
+  - `GET /api/context-bundles/:bundleId/parts/:partId`
   - `POST /api/context-bundles/:bundleId/parts`
   - `PATCH /api/context-bundles/:bundleId/parts/:partId`
   - `DELETE /api/context-bundles/:bundleId/parts/:partId`

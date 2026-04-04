@@ -427,6 +427,13 @@ test("context bundles API supports part CRUD and deterministic order fields", as
     assert.equal(updatedPart.position, 2);
     assert.equal(updatedPart.include_in_compiled, 0);
 
+    const getPartResponse = await fetch(`${baseUrl}/api/context-bundles/${bundle.id}/parts/${createdPart.id}`);
+    assert.equal(getPartResponse.status, 200);
+    const loadedPart = await getPartResponse.json();
+    assert.equal(loadedPart.id, createdPart.id);
+    assert.equal(loadedPart.bundle_id, bundle.id);
+    assert.equal(loadedPart.title, "Goal Updated");
+
     const listPartsResponse = await fetch(`${baseUrl}/api/context-bundles/${bundle.id}/parts`);
     assert.equal(listPartsResponse.status, 200);
     const parts = await listPartsResponse.json();
@@ -487,6 +494,9 @@ test("context bundles API rejects cross-bundle part mutation", async () => {
       body: JSON.stringify({ title: "Should fail" })
     });
     assert.equal(wrongUpdate.status, 404);
+
+    const wrongGet = await fetch(`${baseUrl}/api/context-bundles/${bundleB.id}/parts/${part.id}`);
+    assert.equal(wrongGet.status, 404);
 
     const wrongDelete = await fetch(`${baseUrl}/api/context-bundles/${bundleB.id}/parts/${part.id}`, {
       method: "DELETE"
