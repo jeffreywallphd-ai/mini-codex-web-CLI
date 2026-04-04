@@ -35,6 +35,7 @@ The app is designed for personal LAN use, not for public internet exposure or mu
 - Automated run-origin linkage persisted on each run (`automation_origin_type`, `automation_origin_id`, `automation_run_id`) for feature/epic/story traceability
 - Context bundle schema + model persistence with ordered multi-part composition (`context_bundles`, `context_bundle_parts`) and reusable metadata (`intended_use`, `tags`, `project_name`, `summary`, `updated_at`)
 - Run and automation API payloads include selected context bundle linkage (`context_bundle_id`) and resolved title metadata (`context_bundle_title` / `contextBundleTitle`) for execution traceability
+- Index page run form includes an optional single-bundle selector with concise metadata hints (title/intended use/summary) so manual runs can include one bundle or none
 - Feature card automation control in **Not Yet Implemented** for launching feature-wide automation (`Complete with Automation`)
 - Feature/epic/story automation summaries include concise stop reasons for early stops (`execution_failed`, `story_incomplete`, `manual_stop`) when backend state provides one
 - SQLite storage with no external database
@@ -110,10 +111,11 @@ http://192.168.x.x:3000
 2. Optionally click **Git Pull Selected Repo** to fetch and integrate the latest remote changes on the repository's current branch.
 3. Select Read Mode for a standard Codex SDK turn, or Write Mode to run with `workspace-write` sandboxing plus `on-failure` approvals through the SDK.
 4. Enter a prompt.
-5. Click **Run**.
-6. The server checks out local `main`, creates a new `codex-xxxxxxxxxx` branch, then runs Codex in the selected mode.
-7. Open the run from **Recent Runs** to review output, git status, and merge controls.
-8. Click **Merge Changes** on the run details page when you want to merge that branch into `main`.
+5. Optionally select one context bundle (or leave **No context bundle**) in the run form.
+6. Click **Run**.
+7. The server checks out local `main`, creates a new `codex-xxxxxxxxxx` branch, then runs Codex in the selected mode.
+8. Open the run from **Recent Runs** to review output, git status, and merge controls.
+9. Click **Merge Changes** on the run details page when you want to merge that branch into `main`.
 
 ## Git Behavior
 
@@ -160,6 +162,7 @@ Context bundles are persisted with a parent-child data model in SQLite:
 - Bundle compilation now includes simple context-quality advisory warnings (`qualityWarnings`, `qualityWarningSummary`) for common issues such as missing high-value sections, low-signal parts, duplicate/near-duplicate content, potential contradictory directives, and oversized bundle estimates; warnings are previewed in the authoring UI and are non-blocking unless data is clearly invalid.
 - Optional compile limits (`maxCompiledChars` or token-equivalent options) apply deterministic prefix-preserving truncation: higher-priority compilation sections are preserved first, then earlier ordered parts, with explainable truncation metadata (`truncation.preservedPartIds`, `truncation.partiallyTruncatedPartIds`, `truncation.omittedPartIds`).
 - Run preparation can now accept an optional `contextBundleId`; when provided, the selected bundle is compiled during run creation using the same `compileContextBundle(...)` path used by preview.
+- The index page manual run form now includes a lightweight single-select context bundle control (`No context bundle` or exactly one saved bundle) that lists bundle title plus concise metadata hints (intended use and summary when available).
 - Run and automation records persist nullable `context_bundle_id` linkage so bundle-backed and non-bundle executions remain backward compatible in one explicit model.
 - Run and automation APIs surface both bundle id and bundle title metadata (`context_bundle_id` + `context_bundle_title`, and camelCase variants in automation route payloads) so historical runs can be traced to bundle context selection.
 - Prompt assembly uses a stable rule: compiled bundle context is injected **before** the task prompt using `bundle_context_before_task_prompt_v1` in `server/runPromptContext.js`.
