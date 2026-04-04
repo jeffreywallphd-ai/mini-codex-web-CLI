@@ -24,6 +24,27 @@ function parsePositiveId(value) {
   return parsed;
 }
 
+async function getValidatedPartForBundle({
+  bundleId,
+  partId,
+  getContextBundlePartById
+}) {
+  const existingPart = await getContextBundlePartById(partId);
+  if (!existingPart) {
+    return {
+      error: { status: 404, message: "Context bundle part not found." }
+    };
+  }
+
+  if (existingPart.bundle_id !== bundleId) {
+    return {
+      error: { status: 404, message: "Context bundle part not found for bundle." }
+    };
+  }
+
+  return { part: existingPart };
+}
+
 function createContextBundlesRouter(deps = {}) {
   const {
     createContextBundle,
@@ -147,6 +168,32 @@ function createContextBundlesRouter(deps = {}) {
     }
   });
 
+  router.get("/:bundleId/parts/:partId", async (req, res) => {
+    const bundleId = parsePositiveId(req.params?.bundleId);
+    const partId = parsePositiveId(req.params?.partId);
+    if (!bundleId) {
+      return res.status(400).json({ error: "Invalid context bundle id." });
+    }
+    if (!partId) {
+      return res.status(400).json({ error: "Invalid context bundle part id." });
+    }
+
+    try {
+      const validated = await getValidatedPartForBundle({
+        bundleId,
+        partId,
+        getContextBundlePartById
+      });
+      if (validated.error) {
+        return res.status(validated.error.status).json({ error: validated.error.message });
+      }
+
+      return res.json(validated.part);
+    } catch (error) {
+      return res.status(500).json({ error: error?.message || "Failed to load context bundle part." });
+    }
+  });
+
   router.patch("/:bundleId/parts/:partId", async (req, res) => {
     const bundleId = parsePositiveId(req.params?.bundleId);
     const partId = parsePositiveId(req.params?.partId);
@@ -158,12 +205,13 @@ function createContextBundlesRouter(deps = {}) {
     }
 
     try {
-      const existingPart = await getContextBundlePartById(partId);
-      if (!existingPart) {
-        return res.status(404).json({ error: "Context bundle part not found." });
-      }
-      if (existingPart.bundle_id !== bundleId) {
-        return res.status(404).json({ error: "Context bundle part not found for bundle." });
+      const validated = await getValidatedPartForBundle({
+        bundleId,
+        partId,
+        getContextBundlePartById
+      });
+      if (validated.error) {
+        return res.status(validated.error.status).json({ error: validated.error.message });
       }
 
       const updatedPart = await updateContextBundlePart(partId, req.body || {});
@@ -187,12 +235,13 @@ function createContextBundlesRouter(deps = {}) {
     }
 
     try {
-      const existingPart = await getContextBundlePartById(partId);
-      if (!existingPart) {
-        return res.status(404).json({ error: "Context bundle part not found." });
-      }
-      if (existingPart.bundle_id !== bundleId) {
-        return res.status(404).json({ error: "Context bundle part not found for bundle." });
+      const validated = await getValidatedPartForBundle({
+        bundleId,
+        partId,
+        getContextBundlePartById
+      });
+      if (validated.error) {
+        return res.status(validated.error.status).json({ error: validated.error.message });
       }
 
       const deletedCount = await deleteContextBundlePartById(partId);
