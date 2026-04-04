@@ -9,7 +9,29 @@ const dbPath = path.resolve(dataDir, "app.db");
 const db = new sqlite3.Database(dbPath);
 db.run("PRAGMA foreign_keys = ON");
 
+<<<<<<< HEAD
 const LATEST_SCHEMA_VERSION = 5;
+=======
+const RUN_COLUMNS = {
+  archived: "INTEGER NOT NULL DEFAULT 0",
+  execution_mode: "TEXT",
+  branch_name: "TEXT",
+  base_branch: "TEXT",
+  git_status: "TEXT",
+  git_status_files: "TEXT",
+  git_diff_map: "TEXT",
+  change_title: "TEXT",
+  change_description: "TEXT",
+  prompt_with_instructions: "TEXT",
+  executed_command: "TEXT",
+  spawn_command: "TEXT",
+  merge_code: "INTEGER",
+  merge_stdout: "TEXT",
+  merge_stderr: "TEXT",
+  merge_git_status: "TEXT",
+  merged_at: "DATETIME"
+};
+>>>>>>> main
 
 function run(sql, params = []) {
   return new Promise((resolve, reject) => {
@@ -333,14 +355,43 @@ function saveRun(run) {
   });
 }
 
-function getRuns() {
+function getRuns({ search = "", status = "active" } = {}) {
   return new Promise((resolve, reject) => {
+<<<<<<< HEAD
     dbReady
       .then(() => {
         db.all(
       `SELECT id, project_name, prompt, code, created_at, execution_mode, branch_name, merged_at, change_title, completion_status, completion_work, run_start_time, run_end_time
        FROM runs ORDER BY id DESC LIMIT 50`,
       [],
+=======
+    const normalizedStatus = String(status || "active").toLowerCase();
+    const whereClauses = [];
+    const params = [];
+
+    if (normalizedStatus === "active") {
+      whereClauses.push("COALESCE(archived, 0) = 0");
+    } else if (normalizedStatus === "archived") {
+      whereClauses.push("COALESCE(archived, 0) = 1");
+    }
+
+    const normalizedSearch = String(search || "").trim();
+    if (normalizedSearch) {
+      whereClauses.push("(project_name LIKE ? OR prompt LIKE ? OR branch_name LIKE ?)");
+      const searchTerm = `%${normalizedSearch}%`;
+      params.push(searchTerm, searchTerm, searchTerm);
+    }
+
+    const whereSql = whereClauses.length ? `WHERE ${whereClauses.join(" AND ")}` : "";
+
+    db.all(
+      `SELECT id, project_name, prompt, code, created_at, execution_mode, branch_name, merged_at, change_title, COALESCE(archived, 0) AS archived
+       FROM runs
+       ${whereSql}
+       ORDER BY id DESC
+       LIMIT 50`,
+      params,
+>>>>>>> main
       (err, rows) => (err ? reject(err) : resolve(rows))
         );
       })
@@ -389,6 +440,7 @@ function updateRunMerge(id, mergeResult) {
   });
 }
 
+<<<<<<< HEAD
 async function createFeatureTree(featureDraft) {
   await dbReady;
 
@@ -603,6 +655,32 @@ async function attachRunToStory(storyId, runId) {
     `,
     [isComplete, runRecord.id, runRecord.id, isComplete, storyId]
   );
+=======
+function setRunArchived(id, archived) {
+  return new Promise((resolve, reject) => {
+    db.run(
+      `UPDATE runs SET archived = ? WHERE id = ?`,
+      [archived ? 1 : 0, id],
+      function onUpdate(err) {
+        if (err) return reject(err);
+        resolve(this.changes);
+      }
+    );
+  });
+}
+
+function deleteRunById(id) {
+  return new Promise((resolve, reject) => {
+    db.run(
+      `DELETE FROM runs WHERE id = ?`,
+      [id],
+      function onDelete(err) {
+        if (err) return reject(err);
+        resolve(this.changes);
+      }
+    );
+  });
+>>>>>>> main
 }
 
 module.exports = {
@@ -610,6 +688,7 @@ module.exports = {
   getRuns,
   getRunById,
   updateRunMerge,
+<<<<<<< HEAD
   createFeatureTree,
   getFeaturesTree,
   getStoryAutomationContext,
@@ -617,4 +696,8 @@ module.exports = {
   syncStoryCompletionFromRun,
   getCompletionEligibleRuns,
   dbReady
+=======
+  setRunArchived,
+  deleteRunById
+>>>>>>> main
 };

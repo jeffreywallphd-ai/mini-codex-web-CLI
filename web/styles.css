@@ -202,6 +202,36 @@ li button:hover {
   background: #f4f5f8;
 }
 
+.run-card {
+  background: var(--panel-alt);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px;
+}
+
+.run-card__open-button {
+  margin-bottom: 8px;
+}
+
+.run-card__actions {
+  display: flex;
+  gap: 8px;
+}
+
+.run-card__actions button {
+  margin-bottom: 0;
+  text-align: center;
+  white-space: nowrap;
+}
+
+.danger-button {
+  background: #c73f3f;
+}
+
+.danger-button:hover {
+  background: #b73636;
+}
+
 details {
   margin: 12px 0;
   padding: 10px;

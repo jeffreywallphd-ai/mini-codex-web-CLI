@@ -1,4 +1,6 @@
 const projectSelect = document.getElementById("projectSelect");
+const baseBranchSelect = document.getElementById("baseBranchSelect");
+const branchHint = document.getElementById("branchHint");
 const pullButton = document.getElementById("pullButton");
 const executionModeSelect = document.getElementById("executionModeSelect");
 const promptInput = document.getElementById("promptInput");
@@ -10,6 +12,7 @@ const runningProjectHint = document.getElementById("runningProjectHint");
 const runsList = document.getElementById("runsList");
 const statusBox = document.getElementById("statusBox");
 const runSearchInput = document.getElementById("runSearchInput");
+const runStatusFilterSelect = document.getElementById("runStatusFilterSelect");
 const creditsBox = document.getElementById("creditsBox");
 const errorCard = document.getElementById("errorCard");
 const errorCardMessage = document.getElementById("errorCardMessage");
@@ -22,6 +25,8 @@ let isPullRequestInFlight = false;
 let activeRunStream = null;
 let activeRunStartedAt = null;
 let runTimerInterval = null;
+let lastBranchLoadRequestId = 0;
+let loadRunsRequestId = 0;
 
 function escapeHtml(text) {
   return String(text ?? "")
@@ -170,6 +175,7 @@ function startRunStream(streamId) {
 function getEditorState() {
   return {
     projectName: projectSelect.value || "",
+    baseBranch: baseBranchSelect.value || "",
     executionMode: executionModeSelect.value || "read",
     prompt: promptInput.value
   };
@@ -179,6 +185,11 @@ function saveEditorState() {
   localStorage.setItem(EDITOR_STATE_KEY, JSON.stringify(getEditorState()));
 }
 
+function clearBranchOptions() {
+  baseBranchSelect.innerHTML = "";
+  baseBranchSelect.disabled = true;
+}
+
 function clearEditorState() {
   localStorage.removeItem(EDITOR_STATE_KEY);
   promptInput.value = "";
@@ -186,12 +197,13 @@ function clearEditorState() {
   if (projectSelect.options.length > 0) {
     projectSelect.selectedIndex = 0;
   }
-  updateProjectActionState();
+  clearBranchOptions();
+  branchHint.textContent = "";
 }
 
 function restoreEditorState(projects) {
   const rawState = localStorage.getItem(EDITOR_STATE_KEY);
-  if (!rawState) return;
+  if (!rawState) return null;
 
   try {
     const state = JSON.parse(rawState);
@@ -206,8 +218,11 @@ function restoreEditorState(projects) {
     if (state.projectName && projects.some((project) => project.name === state.projectName)) {
       projectSelect.value = state.projectName;
     }
+
+    return state;
   } catch (error) {
     console.warn("Unable to restore editor state", error);
+    return null;
   }
 }
 
@@ -253,16 +268,34 @@ function buildErrorMessage(context, result, fallback) {
   return `${context}: ${fallback}`;
 }
 
+function pickDefaultBranch(branches, currentBranch, preferredBranch) {
+  if (preferredBranch && branches.includes(preferredBranch)) {
+    return preferredBranch;
+  }
+
+  if (currentBranch && branches.includes(currentBranch)) {
+    return currentBranch;
+  }
+
+  if (branches.includes("main")) {
+    return "main";
+  }
+
+  return branches[0] || "";
+}
+
 function updateProjectActionState() {
   const projectName = projectSelect.value;
+  const branchName = baseBranchSelect.value;
   const isProjectRunning = projectName && runningProjects.has(projectName);
   const isRunActive = isRunningRequestInFlight || isProjectRunning;
+  const hasValidBranch = Boolean(projectName && branchName && !baseBranchSelect.disabled);
 
   runningProjectHint.textContent = isProjectRunning
     ? `"${projectName}" is currently running. Wait for it to finish.`
     : "";
 
-  runButton.disabled = !projectName || isRunActive;
+  runButton.disabled = !projectName || !hasValidBranch || isRunActive;
   runButton.textContent = isRunActive ? "Running..." : "Run";
   runButton.classList.toggle("running-button", isRunActive);
 
@@ -279,6 +312,71 @@ function updateProjectActionState() {
 
   if (!isPullRequestInFlight) {
     pullButton.disabled = !projectName || isProjectRunning;
+  }
+}
+
+async function loadBranchesForSelectedProject(preferredBranch = "") {
+  const projectName = projectSelect.value;
+  const requestId = ++lastBranchLoadRequestId;
+
+  if (!projectName) {
+    clearBranchOptions();
+    branchHint.textContent = "Select a project to choose a base branch.";
+    updateProjectActionState();
+    return;
+  }
+
+  branchHint.textContent = "Loading branches...";
+  clearBranchOptions();
+  updateProjectActionState();
+
+  try {
+    const response = await fetch(`/api/projects/${encodeURIComponent(projectName)}/branches`);
+    const result = await parseJsonResponse(response);
+
+    if (requestId !== lastBranchLoadRequestId) {
+      return;
+    }
+
+    if (!response.ok) {
+      throw new Error(buildErrorMessage("Could not load branches", result, "Request failed"));
+    }
+
+    const branches = (result.branches || [])
+      .map((entry) => entry?.name)
+      .filter((name) => typeof name === "string" && name.trim())
+      .map((name) => name.trim());
+
+    if (!branches.length) {
+      throw new Error(`No local branches found for ${projectName}.`);
+    }
+
+    baseBranchSelect.innerHTML = "";
+    for (const branchName of branches) {
+      const option = document.createElement("option");
+      option.value = branchName;
+      option.textContent = branchName;
+      baseBranchSelect.appendChild(option);
+    }
+
+    const selectedBranch = pickDefaultBranch(branches, result.currentBranch || "", preferredBranch);
+    baseBranchSelect.value = selectedBranch;
+    baseBranchSelect.disabled = false;
+    branchHint.textContent = "";
+  } catch (error) {
+    if (requestId !== lastBranchLoadRequestId) {
+      return;
+    }
+
+    clearBranchOptions();
+    branchHint.textContent = `Could not load branches for ${projectName}.`;
+    statusBox.textContent = `Branch load failed: ${error.message}`;
+    showErrorCard(`Branch load failed: ${error.message}`);
+  } finally {
+    if (requestId === lastBranchLoadRequestId) {
+      updateProjectActionState();
+      saveEditorState();
+    }
   }
 }
 
@@ -354,13 +452,17 @@ function renderRunsList(runs) {
 
   for (const run of runs) {
     const li = document.createElement("li");
-    const button = document.createElement("button");
+    li.className = "run-card";
+
+    const openButton = document.createElement("button");
+    openButton.className = "run-card__open-button";
     const promptPreview = `${(run.prompt || "").replace(/\s+/g, " ").slice(0, 120)}${(run.prompt || "").length > 120 ? "..." : ""}`;
     const mergeBadgeHtml = run.merged_at
       ? '<span class="merge-badge merge-badge--merged">merged</span>'
       : '<span class="merge-badge merge-badge--not-merged">not merged</span>';
     const executionMode = run.execution_mode === "write" ? "Write Mode" : "Read Mode";
     const title = run.change_title ? `\nTitle: ${run.change_title}` : "";
+<<<<<<< HEAD
     const completionStatus = normalizeCompletionStatus(run.completion_status);
     const duration = formatRunDuration(run.duration_ms);
 
@@ -368,34 +470,98 @@ function renderRunsList(runs) {
     button.innerHTML = `
       <div>#${escapeHtml(run.id)} | ${escapeHtml(run.project_name)} | ${escapeHtml(executionMode)} | ${escapeHtml(run.branch_name || "(no branch)")} | ${mergeBadgeHtml}</div>
       <div>Completion: ${escapeHtml(completionStatus)} | Duration: ${escapeHtml(duration)}</div>
+=======
+    openButton.classList.toggle("run-item-unmerged", !run.merged_at);
+    openButton.innerHTML = `
+      <div>#${escapeHtml(run.id)} - ${escapeHtml(run.project_name)} - ${escapeHtml(executionMode)} - ${escapeHtml(run.branch_name || "(no branch)")} - ${mergeBadgeHtml}</div>
+>>>>>>> main
       <div>${escapeHtml(title ? title.trim() : "")}</div>
       <div>${escapeHtml(promptPreview || "(no prompt)")}</div>
     `;
-    button.onclick = () => {
+    openButton.onclick = () => {
       saveEditorState();
       window.location.href = `/run-details.html?id=${run.id}`;
     };
-    li.appendChild(button);
+
+    const actions = document.createElement("div");
+    actions.className = "run-card__actions";
+
+    const archiveButton = document.createElement("button");
+    archiveButton.type = "button";
+    archiveButton.className = "secondary-button";
+    archiveButton.textContent = run.archived ? "Unarchive" : "Archive";
+    archiveButton.onclick = async () => {
+      const endpoint = run.archived ? "unarchive" : "archive";
+      archiveButton.disabled = true;
+      deleteButton.disabled = true;
+      hideErrorCard();
+
+      try {
+        const response = await fetch(`/api/runs/${encodeURIComponent(run.id)}/${endpoint}`, {
+          method: "POST"
+        });
+        const result = await parseJsonResponse(response);
+
+        if (!response.ok) {
+          throw new Error(buildErrorMessage(`Could not ${endpoint} run`, result, "Request failed"));
+        }
+
+        statusBox.textContent = `Run #${run.id} ${run.archived ? "unarchived" : "archived"}.`;
+        await loadRuns();
+      } catch (error) {
+        const message = `${run.archived ? "Unarchive" : "Archive"} failed: ${error.message}`;
+        statusBox.textContent = message;
+        showErrorCard(message);
+      } finally {
+        archiveButton.disabled = false;
+        deleteButton.disabled = false;
+      }
+    };
+
+    const deleteButton = document.createElement("button");
+    deleteButton.type = "button";
+    deleteButton.className = "danger-button";
+    deleteButton.textContent = "Delete";
+    deleteButton.onclick = async () => {
+      const confirmation = window.prompt(`Type "Delete" to delete run #${run.id}.`);
+      if (confirmation !== "Delete") {
+        statusBox.textContent = `Delete canceled for run #${run.id}.`;
+        return;
+      }
+
+      archiveButton.disabled = true;
+      deleteButton.disabled = true;
+      hideErrorCard();
+
+      try {
+        const response = await fetch(`/api/runs/${encodeURIComponent(run.id)}`, {
+          method: "DELETE"
+        });
+        const result = await parseJsonResponse(response);
+
+        if (!response.ok) {
+          throw new Error(buildErrorMessage("Could not delete run", result, "Request failed"));
+        }
+
+        statusBox.textContent = `Run #${run.id} deleted.`;
+        await loadRuns();
+      } catch (error) {
+        const message = `Delete failed: ${error.message}`;
+        statusBox.textContent = message;
+        showErrorCard(message);
+      } finally {
+        archiveButton.disabled = false;
+        deleteButton.disabled = false;
+      }
+    };
+
+    actions.appendChild(archiveButton);
+    actions.appendChild(deleteButton);
+
+    li.appendChild(openButton);
+    li.appendChild(actions);
     runsList.appendChild(li);
   }
-}
-
-function filterRuns() {
-  const query = runSearchInput.value.trim().toLowerCase();
-
-  if (!query) {
-    renderRunsList(allRuns);
-    return;
-  }
-
-  const filtered = allRuns.filter((run) => {
-    const project = (run.project_name || "").toLowerCase();
-    const prompt = (run.prompt || "").toLowerCase();
-    const branch = (run.branch_name || "").toLowerCase();
-    return project.includes(query) || prompt.includes(query) || branch.includes(query);
-  });
-
-  renderRunsList(filtered);
 }
 
 async function loadProjects() {
@@ -414,20 +580,35 @@ async function loadProjects() {
     projectSelect.appendChild(option);
   }
 
-  restoreEditorState(projects);
+  const restoredState = restoreEditorState(projects);
+  await loadBranchesForSelectedProject(restoredState?.baseBranch || "");
   updateProjectActionState();
 }
 
 async function loadRuns() {
-  const response = await fetch("/api/runs");
+  const requestId = ++loadRunsRequestId;
+  const search = runSearchInput.value.trim();
+  const status = runStatusFilterSelect.value || "active";
+  const query = new URLSearchParams();
+
+  if (search) {
+    query.set("search", search);
+  }
+  query.set("status", status);
+
+  const response = await fetch(`/api/runs?${query.toString()}`);
   const runs = await parseJsonResponse(response);
+
+  if (requestId !== loadRunsRequestId) {
+    return;
+  }
 
   if (!response.ok) {
     throw new Error(buildErrorMessage("Could not load recent runs", runs, "Request failed"));
   }
 
   allRuns = runs;
-  filterRuns();
+  renderRunsList(allRuns);
 }
 
 async function pullSelectedRepository() {
@@ -488,10 +669,11 @@ async function pastePromptFromClipboard() {
 
 runButton.addEventListener("click", async () => {
   const projectName = projectSelect.value;
+  const baseBranch = baseBranchSelect.value;
   const prompt = promptInput.value.trim();
   const executionMode = executionModeSelect.value;
 
-  if (!projectName || !prompt || runButton.disabled) return;
+  if (!projectName || !baseBranch || !prompt || runButton.disabled) return;
 
   hideErrorCard();
   saveEditorState();
@@ -509,7 +691,7 @@ runButton.addEventListener("click", async () => {
       headers: {
         "Content-Type": "application/json"
       },
-      body: JSON.stringify({ projectName, prompt, executionMode, streamId })
+      body: JSON.stringify({ projectName, baseBranch, prompt, executionMode, streamId })
     });
 
     const result = await parseJsonResponse(response);
@@ -543,17 +725,37 @@ pullButton.addEventListener("click", pullSelectedRepository);
 pasteClipboardButton.addEventListener("click", pastePromptFromClipboard);
 clearStateButton.addEventListener("click", async () => {
   clearEditorState();
+  await loadBranchesForSelectedProject();
   await refreshRunningProjects();
   statusBox.textContent = "Saved form state cleared and running-project cache refreshed.";
 });
 
-[projectSelect, executionModeSelect, promptInput].forEach((element) => {
+[projectSelect, baseBranchSelect, executionModeSelect, promptInput].forEach((element) => {
   element.addEventListener("change", saveEditorState);
   element.addEventListener("input", saveEditorState);
 });
 
-projectSelect.addEventListener("change", updateProjectActionState);
-runSearchInput.addEventListener("input", filterRuns);
+projectSelect.addEventListener("change", async () => {
+  hideErrorCard();
+  await loadBranchesForSelectedProject();
+  updateProjectActionState();
+});
+
+baseBranchSelect.addEventListener("change", updateProjectActionState);
+runSearchInput.addEventListener("input", () => {
+  loadRuns().catch((error) => {
+    const message = `Run search failed: ${error.message}`;
+    statusBox.textContent = message;
+    showErrorCard(message);
+  });
+});
+runStatusFilterSelect.addEventListener("change", () => {
+  loadRuns().catch((error) => {
+    const message = `Run filter failed: ${error.message}`;
+    statusBox.textContent = message;
+    showErrorCard(message);
+  });
+});
 
 (async () => {
   try {

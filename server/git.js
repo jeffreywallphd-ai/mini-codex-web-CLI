@@ -203,6 +203,28 @@ async function assertLocalBranchExists(repoPath, branchName) {
   }
 }
 
+async function listLocalBranches(repoPath) {
+  const branchesResult = await runGit(repoPath, ["for-each-ref", "refs/heads", "--format=%(refname:short)"]);
+
+  if (branchesResult.code !== 0) {
+    throw new Error(`Failed to list local branches.\n${branchesResult.stderr || branchesResult.stdout}`.trim());
+  }
+
+  const currentBranchResult = await runGit(repoPath, ["branch", "--show-current"]);
+
+  if (currentBranchResult.code !== 0) {
+    throw new Error(`Failed to detect current branch.\n${currentBranchResult.stderr || currentBranchResult.stdout}`.trim());
+  }
+
+  return {
+    branches: branchesResult.stdout
+      .split(/\r?\n/)
+      .map((name) => name.trim())
+      .filter(Boolean),
+    currentBranch: currentBranchResult.stdout.trim() || null
+  };
+}
+
 async function checkoutBranch(repoPath, branchName) {
   const result = await runGit(repoPath, ["checkout", branchName]);
 
@@ -336,6 +358,7 @@ module.exports = {
   formatCommand,
   getGitStatus,
   getGitSnapshot,
+  listLocalBranches,
   mergeBranch,
   parseStatusEntries,
   pullRepository,
