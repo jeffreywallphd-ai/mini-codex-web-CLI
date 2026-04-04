@@ -461,27 +461,17 @@ function renderRunsList(runs) {
       ? '<span class="merge-badge merge-badge--merged">merged</span>'
       : '<span class="merge-badge merge-badge--not-merged">not merged</span>';
     const executionMode = run.execution_mode === "write" ? "Write Mode" : "Read Mode";
-    const title = run.change_title ? `\nTitle: ${run.change_title}` : "";
+    const title = run.change_title ? run.change_title.trim() : "";
+    const branchName = run.branch_name || run.branchName || "(no branch)";
 
     const completionStatus = normalizeCompletionStatus(run.completion_status);
     const duration = formatRunDuration(run.duration_ms);
 
     openButton.classList.toggle("run-item-unmerged", !run.merged_at);
     openButton.innerHTML = `
-      <div>#${escapeHtml(run.id)} | ${escapeHtml(run.project_name)} | ${escapeHtml(executionMode)} | ${escapeHtml(run.branch_name || "(no branch)")} | ${mergeBadgeHtml}</div>
+      <div>#${escapeHtml(run.id)} | ${escapeHtml(run.project_name)} | ${escapeHtml(executionMode)} | ${escapeHtml(branchName)} | ${mergeBadgeHtml}</div>
       <div>Completion: ${escapeHtml(completionStatus)} | Duration: ${escapeHtml(duration)}</div>
-
-    const completionStatus = normalizeCompletionStatus(run.completion_status);
-    const duration = formatRunDuration(run.duration_ms);
-
-    button.classList.toggle("run-item-unmerged", !run.merged_at);
-    button.innerHTML = `
-      <div>#${escapeHtml(run.id)} | ${escapeHtml(run.project_name)} | ${escapeHtml(executionMode)} | ${escapeHtml(run.branch_name || "(no branch)")} | ${mergeBadgeHtml}</div>
-      <div>Completion: ${escapeHtml(completionStatus)} | Duration: ${escapeHtml(duration)}</div>
-    openButton.classList.toggle("run-item-unmerged", !run.merged_at);
-    openButton.innerHTML = `
-      <div>#${escapeHtml(run.id)} - ${escapeHtml(run.project_name)} - ${escapeHtml(executionMode)} - ${escapeHtml(run.branch_name || "(no branch)")} - ${mergeBadgeHtml}</div>
-      <div>${escapeHtml(title ? title.trim() : "")}</div>
+      <div>${escapeHtml(title || "(no title)")}</div>
       <div>${escapeHtml(promptPreview || "(no prompt)")}</div>
     `;
     openButton.onclick = () => {
