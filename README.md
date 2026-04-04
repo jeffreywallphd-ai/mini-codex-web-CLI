@@ -27,6 +27,7 @@ The app is designed for personal LAN use, not for public internet exposure or mu
 - Basic usage tracking when the SDK returns usage data
 - Automation queue generation utilities for deterministic `feature -> epic -> story` ordering
 - Automation metadata persistence for orchestration state (`automation_type`, `target_id`, `stop_on_incomplete`, `stop_flag`, `current_position`, `automation_status`)
+- Sequential automation runner for server-driven queue execution (`server/automationRunner.js`)
 - SQLite storage with no external database
 - Mobile-friendly, lightweight UI intended for LAN access
 
@@ -162,6 +163,23 @@ Shared automation planning rules are defined in `server/automationQueue.js`.
   - `stop_flag`
   - `current_position`
   - `automation_status` (`pending`, `running`, `completed`, `failed`, or `stopped`)
+
+## Automation Execution Runner
+
+`server/automationRunner.js` provides a lightweight sequential queue runner that
+is compatible with the existing story run lifecycle.
+
+- `runSequentialStoryQueue({ stories, executeStory, stopOnIncompleteStory, onProgress })`
+  executes queued stories strictly one at a time.
+- The next story does not start until the current `executeStory` call resolves
+  (terminal completion for that run).
+- The runner stops when:
+  - all queued stories complete (`all_work_complete`)
+  - execution throws (`execution_failed`)
+  - `stopOnIncompleteStory` is enabled and a story completion status is not
+    `complete` (`story_incomplete`)
+- `onProgress` is invoked after each story to support persistence of queue
+  progress (for example, updating `automation_runs.current_position`).
 
 ## Security
 
