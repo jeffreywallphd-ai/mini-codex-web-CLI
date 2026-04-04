@@ -44,6 +44,10 @@ const PART_TYPE_TO_COMPILATION_SECTION = (() => {
 })();
 
 const DEFAULT_COMPILATION_SECTION_KEY = "background_context";
+const DEFAULT_APPROX_CHARS_PER_TOKEN = 4;
+const DEFAULT_WARNING_THRESHOLD_CHARS = 12000;
+const TRUNCATION_NOTICE = "[...truncated by context bundle compiler due to size limit]";
+const TRUNCATION_STRATEGY = "prefix-preserving by compilation section priority and deterministic part order";
 
 function normalizeTruthyFlag(value, defaultValue = true) {
   if (value === null || value === undefined) {
@@ -62,6 +66,48 @@ function normalizeText(value) {
 function normalizeNumber(value, fallback = Number.MAX_SAFE_INTEGER) {
   const numeric = Number(value);
   return Number.isFinite(numeric) ? numeric : fallback;
+}
+
+function normalizePositiveInteger(value, fallback = null) {
+  if (value === null || value === undefined || value === "") {
+    return fallback;
+  }
+
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric) || numeric <= 0) {
+    return fallback;
+  }
+
+  return Math.floor(numeric);
+}
+
+function estimateTokenCount(characterCount, approxCharsPerToken = DEFAULT_APPROX_CHARS_PER_TOKEN) {
+  const normalizedChars = Math.max(0, Number(characterCount) || 0);
+  return Math.ceil(normalizedChars / approxCharsPerToken);
+}
+
+function resolveSizingOptions(options = {}) {
+  const approxCharsPerToken = normalizePositiveInteger(
+    options?.approxCharsPerToken,
+    DEFAULT_APPROX_CHARS_PER_TOKEN
+  );
+  const warningThresholdChars = normalizePositiveInteger(
+    options?.warningThresholdChars,
+    DEFAULT_WARNING_THRESHOLD_CHARS
+  );
+  const warningThresholdTokens = normalizePositiveInteger(options?.warningThresholdTokens, null);
+  const maxCompiledChars = normalizePositiveInteger(options?.maxCompiledChars, null);
+  const maxCompiledTokens = normalizePositiveInteger(options?.maxCompiledTokens, null);
+
+  return {
+    approxCharsPerToken,
+    warningThresholdChars: warningThresholdTokens
+      ? warningThresholdTokens * approxCharsPerToken
+      : warningThresholdChars,
+    maxCompiledChars: maxCompiledTokens
+      ? maxCompiledTokens * approxCharsPerToken
+      : maxCompiledChars
+  };
 }
 
 function getDeterministicOrderedParts(parts) {
@@ -171,20 +217,99 @@ function buildCompilationGroups(sections) {
 }
 
 function buildCompiledText(compilationGroups) {
-  return compilationGroups
-    .map((group) => [
-      `## ${group.sectionLabel}`,
-      "",
-      ...group.sections.map((section) => [
-        `### ${section.sectionLabel}`,
-        section.content
-      ].join("\n")).flat()
-    ].join("\n"))
-    .join("\n\n")
-    .trim();
+  const entries = [];
+
+  for (const group of compilationGroups) {
+    const groupHeader = `## ${group.sectionLabel}\n\n`;
+    group.sections.forEach((section, sectionIndex) => {
+      entries.push({
+        partId: section.partId,
+        sectionLabel: section.sectionLabel,
+        sectionKey: group.sectionKey,
+        text: `${entries.length === 0 ? "" : "\n\n"}${sectionIndex === 0 ? groupHeader : ""}### ${section.sectionLabel}\n${section.content}`
+      });
+    });
+  }
+
+  return {
+    compiledText: entries.map((entry) => entry.text).join("").trim(),
+    entries
+  };
 }
 
-function compileContextBundle(bundle = {}) {
+function applySizeLimit(compiledText, maxCompiledChars) {
+  if (!Number.isFinite(maxCompiledChars) || maxCompiledChars <= 0 || compiledText.length <= maxCompiledChars) {
+    return {
+      compiledText,
+      isTruncated: false,
+      preservedSourceChars: compiledText.length,
+      truncationNoticeUsed: false
+    };
+  }
+
+  const noticeWithSpacing = `\n\n${TRUNCATION_NOTICE}`;
+  if (maxCompiledChars <= noticeWithSpacing.length) {
+    return {
+      compiledText: compiledText.slice(0, maxCompiledChars).trimEnd(),
+      isTruncated: true,
+      preservedSourceChars: maxCompiledChars,
+      truncationNoticeUsed: false
+    };
+  }
+
+  const preservedSourceChars = maxCompiledChars - noticeWithSpacing.length;
+  const prefix = compiledText.slice(0, preservedSourceChars).trimEnd();
+  return {
+    compiledText: `${prefix}${noticeWithSpacing}`,
+    isTruncated: true,
+    preservedSourceChars,
+    truncationNoticeUsed: true
+  };
+}
+
+function summarizeTruncation(entries, preservedSourceChars) {
+  const preservedPartIds = [];
+  const partiallyTruncatedPartIds = [];
+  const omittedPartIds = [];
+  const omittedSectionLabels = [];
+  const partiallyTruncatedSectionLabels = [];
+  let cursor = 0;
+
+  for (const entry of entries) {
+    const start = cursor;
+    const end = start + entry.text.length;
+    const partId = Number(entry.partId);
+
+    if (preservedSourceChars >= end) {
+      if (Number.isFinite(partId) && !preservedPartIds.includes(partId)) {
+        preservedPartIds.push(partId);
+      }
+    } else if (preservedSourceChars <= start) {
+      if (Number.isFinite(partId) && !omittedPartIds.includes(partId)) {
+        omittedPartIds.push(partId);
+      }
+      omittedSectionLabels.push(entry.sectionLabel);
+    } else {
+      if (Number.isFinite(partId) && !partiallyTruncatedPartIds.includes(partId)) {
+        partiallyTruncatedPartIds.push(partId);
+      }
+      partiallyTruncatedSectionLabels.push(entry.sectionLabel);
+    }
+
+    cursor = end;
+  }
+
+  return {
+    preservedPartIds,
+    partiallyTruncatedPartIds,
+    omittedPartIds,
+    omittedSectionLabels,
+    partiallyTruncatedSectionLabels
+  };
+}
+
+function compileContextBundle(bundle = {}, options = {}) {
+  const sizingOptions = resolveSizingOptions(options);
   const orderedParts = getDeterministicOrderedParts(bundle?.parts);
   const compiledParts = orderedParts.filter((part) => normalizeTruthyFlag(part?.include_in_compiled, true));
   const sections = compiledParts.map((part) => ({
@@ -196,9 +321,47 @@ function compileContextBundle(bundle = {}) {
     sectionLabel: buildSectionLabel(part),
     content: typeof part.content === "string" ? part.content : ""
   }));
+  const partSizeEstimates = sections.map((section) => ({
+    partId: section.partId,
+    sectionLabel: section.sectionLabel,
+    contentChars: section.content.length,
+    contentTokens: estimateTokenCount(section.content.length, sizingOptions.approxCharsPerToken),
+    compiledSectionChars: (`### ${section.sectionLabel}\n${section.content}`).length,
+    compiledSectionTokens: estimateTokenCount(
+      (`### ${section.sectionLabel}\n${section.content}`).length,
+      sizingOptions.approxCharsPerToken
+    )
+  }));
   const compilationGroups = buildCompilationGroups(sections);
+  const compiledOutput = buildCompiledText(compilationGroups);
+  const fullCompiledText = compiledOutput.compiledText;
+  const sizeLimitedOutput = applySizeLimit(fullCompiledText, sizingOptions.maxCompiledChars);
+  const truncationSummary = summarizeTruncation(
+    compiledOutput.entries,
+    sizeLimitedOutput.preservedSourceChars
+  );
+  const compiledText = sizeLimitedOutput.compiledText;
+  const estimatedCompiledChars = fullCompiledText.length;
+  const estimatedCompiledTokens = estimateTokenCount(
+    estimatedCompiledChars,
+    sizingOptions.approxCharsPerToken
+  );
+  const finalCompiledChars = compiledText.length;
+  const finalCompiledTokens = estimateTokenCount(finalCompiledChars, sizingOptions.approxCharsPerToken);
+  const isOverWarningThreshold = estimatedCompiledChars > sizingOptions.warningThresholdChars;
+  const compilerNotes = [];
 
-  const compiledText = buildCompiledText(compilationGroups);
+  if (isOverWarningThreshold) {
+    compilerNotes.push(
+      `Compiled context estimate (${estimatedCompiledChars} chars, ~${estimatedCompiledTokens} tokens) exceeds warning threshold (${sizingOptions.warningThresholdChars} chars).`
+    );
+  }
+
+  if (sizeLimitedOutput.isTruncated) {
+    compilerNotes.push(
+      `Compiled context was truncated at ${sizingOptions.maxCompiledChars} chars using strategy "${TRUNCATION_STRATEGY}".`
+    );
+  }
 
   return {
     format: "context_bundle_compiled_preview_v1",
@@ -210,7 +373,38 @@ function compileContextBundle(bundle = {}) {
     compilationGroups,
     sections,
     compiledText,
-    compiledString: compiledText
+    compiledString: compiledText,
+    sizeEstimate: {
+      approxCharsPerToken: sizingOptions.approxCharsPerToken,
+      warningThresholdChars: sizingOptions.warningThresholdChars,
+      warningThresholdTokens: estimateTokenCount(
+        sizingOptions.warningThresholdChars,
+        sizingOptions.approxCharsPerToken
+      ),
+      maxCompiledChars: sizingOptions.maxCompiledChars,
+      maxCompiledTokens: Number.isFinite(sizingOptions.maxCompiledChars)
+        ? estimateTokenCount(sizingOptions.maxCompiledChars, sizingOptions.approxCharsPerToken)
+        : null,
+      estimatedCompiledChars,
+      estimatedCompiledTokens,
+      finalCompiledChars,
+      finalCompiledTokens,
+      isOverWarningThreshold,
+      isTruncated: sizeLimitedOutput.isTruncated
+    },
+    partSizeEstimates,
+    truncation: {
+      applied: sizeLimitedOutput.isTruncated,
+      strategy: sizeLimitedOutput.isTruncated ? TRUNCATION_STRATEGY : null,
+      preservedSourceChars: sizeLimitedOutput.preservedSourceChars,
+      truncationNoticeUsed: sizeLimitedOutput.truncationNoticeUsed,
+      preservedPartIds: truncationSummary.preservedPartIds,
+      partiallyTruncatedPartIds: truncationSummary.partiallyTruncatedPartIds,
+      omittedPartIds: truncationSummary.omittedPartIds,
+      partiallyTruncatedSectionLabels: truncationSummary.partiallyTruncatedSectionLabels,
+      omittedSectionLabels: truncationSummary.omittedSectionLabels
+    },
+    compilerNotes
   };
 }
 

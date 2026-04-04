@@ -242,3 +242,77 @@ test("compileContextBundle layers constraints, instructions, and reference conte
     /## Implementation Constraints[\s\S]*### Implementation Constraints: Guardrails[\s\S]*## Documentation Standards[\s\S]*### Documentation Standards: Docs[\s\S]*## Background Context[\s\S]*### Feature Background: Story[\s\S]*## Glossary[\s\S]*### Domain Glossary: Terms/
   );
 });
+
+test("compileContextBundle provides lightweight size estimates and warning notes", () => {
+  const compiled = compileContextBundle({
+    id: 41,
+    parts: [
+      {
+        id: 401,
+        part_type: "feature_background",
+        part_type_label: "Feature Background",
+        title: "Large Context",
+        content: "A".repeat(300),
+        position: 1,
+        include_in_compiled: 1
+      }
+    ]
+  }, {
+    warningThresholdChars: 100
+  });
+
+  assert.equal(compiled.sizeEstimate.warningThresholdChars, 100);
+  assert.equal(compiled.sizeEstimate.isOverWarningThreshold, true);
+  assert.equal(compiled.sizeEstimate.isTruncated, false);
+  assert.equal(compiled.partSizeEstimates.length, 1);
+  assert.equal(compiled.partSizeEstimates[0].partId, 401);
+  assert.ok(compiled.partSizeEstimates[0].contentTokens > 0);
+  assert.equal(compiled.compilerNotes.length, 1);
+  assert.match(compiled.compilerNotes[0], /exceeds warning threshold/i);
+});
+
+test("compileContextBundle truncates deterministically and preserves highest-priority prefix first", () => {
+  const compiled = compileContextBundle({
+    id: 42,
+    parts: [
+      {
+        id: 501,
+        part_type: "implementation_constraints",
+        part_type_label: "Implementation Constraints",
+        title: "Primary Guardrails",
+        content: "A".repeat(120),
+        position: 1,
+        include_in_compiled: 1
+      },
+      {
+        id: 502,
+        part_type: "feature_background",
+        part_type_label: "Feature Background",
+        title: "Secondary Context",
+        content: "B".repeat(120),
+        position: 2,
+        include_in_compiled: 1
+      },
+      {
+        id: 503,
+        part_type: "user_notes",
+        part_type_label: "User Notes",
+        title: "Tail Context",
+        content: "C".repeat(120),
+        position: 3,
+        include_in_compiled: 1
+      }
+    ]
+  }, {
+    maxCompiledChars: 260
+  });
+
+  assert.equal(compiled.truncation.applied, true);
+  assert.equal(compiled.sizeEstimate.isTruncated, true);
+  assert.match(compiled.compiledText, /\[\.\.\.truncated by context bundle compiler due to size limit\]$/);
+  assert.equal(compiled.truncation.strategy, "prefix-preserving by compilation section priority and deterministic part order");
+  assert.deepEqual(compiled.truncation.preservedPartIds, [501]);
+  assert.deepEqual(compiled.truncation.omittedPartIds, [503]);
+  assert.deepEqual(compiled.truncation.partiallyTruncatedPartIds, [502]);
+  assert.match(compiled.compilerNotes.join("\n"), /was truncated/i);
+});
