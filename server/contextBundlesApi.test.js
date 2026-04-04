@@ -71,6 +71,15 @@ function createHarness() {
       if (!found) return null;
       const next = {
         ...found,
+        ...(Object.prototype.hasOwnProperty.call(updates, "title")
+          ? { title: String(updates.title || "").trim() }
+          : {}),
+        ...(Object.prototype.hasOwnProperty.call(updates, "description")
+          ? { description: typeof updates.description === "string" ? updates.description : "" }
+          : {}),
+        ...(Object.prototype.hasOwnProperty.call(updates, "status")
+          ? { status: String(updates.status || "").trim().toLowerCase() || "draft" }
+          : {}),
         ...(Object.prototype.hasOwnProperty.call(updates, "intendedUse")
           ? { intended_use: updates.intendedUse }
           : {}),
@@ -207,6 +216,43 @@ test("context bundles API supports metadata-only updates and optional null clear
     const cleared = await clearResponse.json();
     assert.deepEqual(cleared.tags, []);
     assert.equal(cleared.summary, null);
+  });
+});
+
+test("context bundles API supports editing bundle title and description", async () => {
+  const harness = createHarness();
+
+  await withServer(harness, async (baseUrl) => {
+    const createResponse = await fetch(`${baseUrl}/api/context-bundles`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        title: "Original Bundle Title",
+        description: "Original bundle description",
+        status: "draft"
+      })
+    });
+    assert.equal(createResponse.status, 201);
+    const created = await createResponse.json();
+
+    const updateResponse = await fetch(`${baseUrl}/api/context-bundles/${created.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        title: "Updated Bundle Title",
+        description: "Updated bundle description"
+      })
+    });
+    assert.equal(updateResponse.status, 200);
+    const updated = await updateResponse.json();
+    assert.equal(updated.title, "Updated Bundle Title");
+    assert.equal(updated.description, "Updated bundle description");
+
+    const getResponse = await fetch(`${baseUrl}/api/context-bundles/${created.id}?includeParts=false`);
+    assert.equal(getResponse.status, 200);
+    const loaded = await getResponse.json();
+    assert.equal(loaded.title, "Updated Bundle Title");
+    assert.equal(loaded.description, "Updated bundle description");
   });
 });
 
