@@ -266,6 +266,7 @@ Feature Management UI integration:
 
 - incomplete feature cards surface a **Complete with Automation** button
 - the feature button starts automation via `POST /api/automation/start/feature/:featureId`
+- feature cards include a `Stop Run For Incomplete Stories` checkbox that controls `stopOnIncompleteStory` in the start request (defaults to unchecked)
 - the button is hidden for completed features and replaced with a lightweight hint when no incomplete stories are available in the feature
 
 Automation status response (`200 OK`) includes polling-friendly state:
