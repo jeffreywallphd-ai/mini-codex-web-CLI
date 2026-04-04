@@ -25,6 +25,7 @@ The app is designed for personal LAN use, not for public internet exposure or mu
 - Git status display and one-tap merge action from the run details page
 - Recent run history with search
 - Basic usage tracking when the SDK returns usage data
+- Automation queue generation utilities for deterministic `feature -> epic -> story` ordering
 - SQLite storage with no external database
 - Mobile-friendly, lightweight UI intended for LAN access
 
@@ -112,6 +113,20 @@ http://192.168.x.x:3000
 - The run details page shows the stored `git status --short --branch` output.
 - Merge runs are performed by the server with Git and recorded in SQLite.
 - If a merge succeeds, the merge button is disabled for that run.
+
+## Automation Queue Planning
+
+Story queue planning utilities are available in `server/automationQueue.js` for the
+automation domain.
+
+- `generateStoryExecutionQueues(features)` transforms a feature/epic/story hierarchy
+  into ordered epic-level story queues.
+- Ordering is deterministic and stable:
+  - features sort by `order` ascending, then original input position
+  - epics sort by `order` ascending, then original input position
+  - stories sort by `order` ascending, then original input position
+- `flattenStoryExecutionQueues(queues)` returns one flat execution list with
+  `positionInQueue` for strict run sequencing.
 
 ## Security
 
