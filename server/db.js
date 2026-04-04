@@ -9,7 +9,7 @@ const dbPath = path.resolve(dataDir, "app.db");
 const db = new sqlite3.Database(dbPath);
 db.run("PRAGMA foreign_keys = ON");
 
-const LATEST_SCHEMA_VERSION = 5;
+const LATEST_SCHEMA_VERSION = 6;
 
 function run(sql, params = []) {
   return new Promise((resolve, reject) => {
@@ -70,8 +70,11 @@ async function detectVersionFromSchema() {
     && await tableExists("epics")
     && await tableExists("stories");
   if (hasFeatureTables) {
+    const hasArchived = await columnExists("runs", "archived");
     const hasStoryRunId = await columnExists("stories", "run_id");
-    return hasStoryRunId ? 5 : 4;
+    if (hasStoryRunId && hasArchived) return 6;
+    if (hasStoryRunId) return 5;
+    return 4;
   }
 
   const hasCompletion = await columnExists("runs", "completion_status");
@@ -222,6 +225,10 @@ async function migrateToV5() {
   await run(`CREATE INDEX IF NOT EXISTS idx_stories_run_id ON stories(run_id)`);
 }
 
+async function migrateToV6() {
+  await ensureColumn("runs", "archived", "INTEGER NOT NULL DEFAULT 0");
+}
+
 async function runMigrations() {
   let version = await getSchemaVersion();
 
@@ -254,6 +261,12 @@ async function runMigrations() {
   if (version < 5) {
     await migrateToV5();
     version = 5;
+    await setSchemaVersion(version);
+  }
+
+  if (version < 6) {
+    await migrateToV6();
+    version = 6;
     await setSchemaVersion(version);
   }
 
@@ -333,15 +346,51 @@ function saveRun(run) {
   });
 }
 
-function getRuns() {
+function getRuns({ search = "", status = "active" } = {}) {
   return new Promise((resolve, reject) => {
     dbReady
       .then(() => {
+        const normalizedStatus = String(status || "active").toLowerCase();
+        const whereClauses = [];
+        const params = [];
+
+        if (normalizedStatus === "active") {
+          whereClauses.push("COALESCE(archived, 0) = 0");
+        } else if (normalizedStatus === "archived") {
+          whereClauses.push("COALESCE(archived, 0) = 1");
+        }
+
+        const normalizedSearch = String(search || "").trim();
+        if (normalizedSearch) {
+          whereClauses.push("(project_name LIKE ? OR prompt LIKE ? OR branch_name LIKE ?)");
+          const searchTerm = `%${normalizedSearch}%`;
+          params.push(searchTerm, searchTerm, searchTerm);
+        }
+
+        const whereSql = whereClauses.length ? `WHERE ${whereClauses.join(" AND ")}` : "";
+
         db.all(
-      `SELECT id, project_name, prompt, code, created_at, execution_mode, branch_name, merged_at, change_title, completion_status, completion_work, run_start_time, run_end_time
-       FROM runs ORDER BY id DESC LIMIT 50`,
-      [],
-      (err, rows) => (err ? reject(err) : resolve(rows))
+          `SELECT
+             id,
+             project_name,
+             prompt,
+             code,
+             created_at,
+             execution_mode,
+             branch_name,
+             merged_at,
+             change_title,
+             completion_status,
+             completion_work,
+             run_start_time,
+             run_end_time,
+             COALESCE(archived, 0) AS archived
+           FROM runs
+           ${whereSql}
+           ORDER BY id DESC
+           LIMIT 50`,
+          params,
+          (err, rows) => (err ? reject(err) : resolve(rows))
         );
       })
       .catch(reject);
@@ -605,6 +654,40 @@ async function attachRunToStory(storyId, runId) {
   );
 }
 
+function setRunArchived(id, archived) {
+  return new Promise((resolve, reject) => {
+    dbReady
+      .then(() => {
+        db.run(
+          `UPDATE runs SET archived = ? WHERE id = ?`,
+          [archived ? 1 : 0, id],
+          function onUpdate(err) {
+            if (err) return reject(err);
+            resolve(this.changes);
+          }
+        );
+      })
+      .catch(reject);
+  });
+}
+
+function deleteRunById(id) {
+  return new Promise((resolve, reject) => {
+    dbReady
+      .then(() => {
+        db.run(
+          `DELETE FROM runs WHERE id = ?`,
+          [id],
+          function onDelete(err) {
+            if (err) return reject(err);
+            resolve(this.changes);
+          }
+        );
+      })
+      .catch(reject);
+  });
+}
+
 module.exports = {
   saveRun,
   getRuns,
@@ -616,5 +699,7 @@ module.exports = {
   attachRunToStory,
   syncStoryCompletionFromRun,
   getCompletionEligibleRuns,
+  setRunArchived,
+  deleteRunById,
   dbReady
 };

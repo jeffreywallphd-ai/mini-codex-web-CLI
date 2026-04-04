@@ -17,10 +17,12 @@ const {
   attachRunToStory,
   syncStoryCompletionFromRun,
   getCompletionEligibleRuns,
+  setRunArchived,
+  deleteRunById,
   dbReady
 } = require("./db");
 const { buildStoryAutomationPrompt } = require("./storyAutomationPrompt");
-const { createCodexBranch, getGitSnapshot, mergeBranch, pullRepository } = require("./git");
+const { createCodexBranch, getGitSnapshot, listLocalBranches, mergeBranch, pullRepository } = require("./git");
 
 const app = express();
 app.use(cors());
@@ -132,13 +134,14 @@ async function executeRunFlow({
   projectName,
   prompt,
   executionMode = "read",
+  baseBranch = "main",
   streamId = null
 }) {
   const repoPath = getRepoPath(projectName);
   const runStartTime = Date.now();
 
   publishRunEvent(streamId, { type: "branch.creating", message: "Creating branch from base..." });
-  const branchInfo = await createCodexBranch(repoPath);
+  const branchInfo = await createCodexBranch(repoPath, baseBranch);
   publishRunEvent(streamId, { type: "branch.created", message: `Branch created: ${branchInfo.branchName || "unknown"}.` });
 
   const result = await runCodexWithUsage(repoPath, prompt, executionMode, (event) => {
@@ -239,6 +242,26 @@ app.post("/api/projects/:projectName/pull", async (req, res) => {
   }
 });
 
+app.get("/api/projects/:projectName/branches", async (req, res) => {
+  const { projectName } = req.params;
+
+  if (!isValidProject(projectName)) {
+    return res.status(400).json({ error: "Invalid project" });
+  }
+
+  try {
+    const branchResult = await listLocalBranches(getRepoPath(projectName));
+    res.json({
+      projectName,
+      branches: branchResult.branches.map((name) => ({ name })),
+      currentBranch: branchResult.currentBranch
+    });
+  } catch (err) {
+    console.error("project branch list failed:", err);
+    res.status(500).json({ error: getErrorMessage(err) });
+  }
+});
+
 app.get("/api/run-test/stream/:streamId", (req, res) => {
   const { streamId } = req.params;
 
@@ -267,6 +290,7 @@ app.get("/api/run-test/stream/:streamId", (req, res) => {
 app.post("/api/run-test", async (req, res) => {
   const {
     projectName,
+    baseBranch = "main",
     prompt,
     executionMode = "read",
     streamId = null
@@ -284,13 +308,23 @@ app.post("/api/run-test", async (req, res) => {
     return res.status(400).json({ error: "Project already running" });
   }
 
+  const repoPath = getRepoPath(projectName);
+  const selectedBaseBranch = typeof baseBranch === "string" && baseBranch.trim()
+    ? baseBranch.trim()
+    : "main";
   runningProjects.add(projectName);
 
   try {
+    const branchResult = await listLocalBranches(repoPath);
+    if (!branchResult.branches.includes(selectedBaseBranch)) {
+      return res.status(400).json({ error: `Invalid base branch '${selectedBaseBranch}' for project '${projectName}'.` });
+    }
+
     const { responsePayload } = await executeRunFlow({
       projectName,
       prompt,
       executionMode,
+      baseBranch: selectedBaseBranch,
       streamId
     });
 
@@ -355,7 +389,14 @@ app.post("/api/stories/:storyId/complete-with-automation", async (req, res) => {
 });
 
 app.get("/api/runs", async (req, res) => {
-  const runs = await getRuns();
+  const { search = "", status = "active" } = req.query;
+  const normalizedStatus = String(status || "active").toLowerCase();
+
+  if (!["active", "archived", "all"].includes(normalizedStatus)) {
+    return res.status(400).json({ error: "Invalid status filter" });
+  }
+
+  const runs = await getRuns({ search, status: normalizedStatus });
   res.json(runs.map((run) => hydrateRun(run)));
 });
 
@@ -497,6 +538,44 @@ app.post("/api/runs/:id/merge", async (req, res) => {
     console.error("merge failed:", err);
     res.status(500).json({ error: getErrorMessage(err) });
   }
+});
+
+app.post("/api/runs/:id/archive", async (req, res) => {
+  const run = await getRunById(req.params.id);
+  if (!run) return res.status(404).json({ error: "Run not found" });
+
+  const changes = await setRunArchived(run.id, true);
+  if (changes < 1) {
+    return res.status(500).json({ error: "Archive update failed" });
+  }
+
+  const updatedRun = hydrateRun(await getRunById(run.id));
+  return res.json(updatedRun);
+});
+
+app.post("/api/runs/:id/unarchive", async (req, res) => {
+  const run = await getRunById(req.params.id);
+  if (!run) return res.status(404).json({ error: "Run not found" });
+
+  const changes = await setRunArchived(run.id, false);
+  if (changes < 1) {
+    return res.status(500).json({ error: "Unarchive update failed" });
+  }
+
+  const updatedRun = hydrateRun(await getRunById(run.id));
+  return res.json(updatedRun);
+});
+
+app.delete("/api/runs/:id", async (req, res) => {
+  const run = await getRunById(req.params.id);
+  if (!run) return res.status(404).json({ error: "Run not found" });
+
+  const changes = await deleteRunById(run.id);
+  if (changes < 1) {
+    return res.status(500).json({ error: "Delete failed" });
+  }
+
+  return res.json({ deleted: true, id: Number(req.params.id) });
 });
 
 dbReady
