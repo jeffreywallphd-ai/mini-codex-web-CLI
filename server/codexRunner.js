@@ -10,6 +10,22 @@ const CHANGESET_MARKER_START = "<<<CODEX_CHANGESET_START>>>";
 const CHANGESET_MARKER_END = "<<<CODEX_CHANGESET_END>>>";
 const PROMPT_SUFFIX = `
 If the project has a docs folder and a general-prompt-guidance.md file, please follow the guidance provided in general-prompt-guidance.md. 
+Before you finish, include this structured completion block:
+COMPLETION_STATUS: <complete|incomplete>
+COMPLETION_WORK: <none or remaining implementation work>
+
+Rules for COMPLETION_STATUS:
+1. Must be exactly "complete" or "incomplete".
+2. Evaluate only implementation completeness of requested functionality.
+3. Ignore environment issues and environment-caused test failures.
+4. Ignore future improvements and optional enhancements.
+5. Use "complete" when all requested functionality is implemented.
+6. Otherwise use "incomplete".
+
+Rules for COMPLETION_WORK:
+- If COMPLETION_STATUS is "complete", COMPLETION_WORK must be exactly "none".
+- If COMPLETION_STATUS is "incomplete", provide concise actionable remaining implementation work.
+
 Before you finish, append a machine-readable summary block to the very end of your response using exactly this format:
 ${CHANGESET_MARKER_START}
 TITLE: <short title, 80 chars or fewer>
@@ -97,6 +113,49 @@ function parseChangeSummary(text) {
     responseText,
     changeTitle: rawTitle.trim(),
     changeDescription: rawDescription.trim()
+  };
+}
+
+function sanitizeCompletionStatus(rawStatus) {
+  const normalized = String(rawStatus || "").trim().replace(/^["']|["']$/g, "").toLowerCase();
+  if (normalized === "complete" || normalized === "incomplete") {
+    return normalized;
+  }
+  return null;
+}
+
+function parseCompletionMetadata(text) {
+  const output = typeof text === "string" ? text : "";
+  const statusMatch = output.match(/COMPLETION_STATUS\s*:\s*["']?(complete|incomplete)["']?/i);
+  const status = sanitizeCompletionStatus(statusMatch?.[1] || "");
+
+  let completionWork = null;
+  const workBlockMatch = output.match(
+    /COMPLETION_WORK\s*:\s*([\s\S]*?)(?=\n(?:COMPLETION_STATUS|TITLE|DESCRIPTION)\s*:|\n<<<CODEX_CHANGESET_START>>>|$)/i
+  );
+
+  if (workBlockMatch) {
+    completionWork = workBlockMatch[1]
+      .trim()
+      .replace(/^["']|["']$/g, "")
+      .replace(/^[\-\*\u2022]\s*/, "");
+  }
+
+  if (status === "complete") {
+    completionWork = "none";
+  } else if (status === "incomplete" && !completionWork) {
+    completionWork = "unknown";
+  }
+
+  const cleanedResponse = output
+    .replace(/^\s*COMPLETION_STATUS\s*:\s*.*$/im, "")
+    .replace(/^\s*COMPLETION_WORK\s*:\s*[\s\S]*?(?=^\s*(?:COMPLETION_STATUS|TITLE|DESCRIPTION)\s*:|^\s*<<<CODEX_CHANGESET_START>>>|\s*$)/im, "")
+    .trim();
+
+  return {
+    responseText: cleanedResponse,
+    completionStatus: status,
+    completionWork
   };
 }
 
@@ -229,10 +288,11 @@ async function runCodexWithSdk(repoPath, prompt, executionMode = "read", onProgr
   }
 
   const summary = parseChangeSummary(finalResponse || "");
+  const completion = parseCompletionMetadata(summary.responseText);
 
   return {
     code: 0,
-    stdout: summary.responseText,
+    stdout: completion.responseText,
     stderr: "",
     executedCommand: null,
     spawnCommand: null,
@@ -243,6 +303,8 @@ async function runCodexWithSdk(repoPath, prompt, executionMode = "read", onProgr
     executionMode,
     changeTitle: summary.changeTitle,
     changeDescription: summary.changeDescription,
+    completionStatus: completion.completionStatus,
+    completionWork: completion.completionWork,
     promptWithInstructions: buildAugmentedPrompt(prompt)
   };
 }
@@ -259,6 +321,7 @@ module.exports = {
   formatUsageSummary,
   normalizePrompt,
   parseChangeSummary,
+  parseCompletionMetadata,
   mapThreadEventToProgressEvent,
   PROMPT_SUFFIX
 };

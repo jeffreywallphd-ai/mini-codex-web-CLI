@@ -8,6 +8,8 @@ const stderrDetail = document.getElementById("stderrDetail");
 const mergeDetail = document.getElementById("mergeDetail");
 const runDetail = document.getElementById("runDetail");
 const runSummary = document.getElementById("runSummary");
+const completionSummary = document.getElementById("completionSummary");
+const timingSummary = document.getElementById("timingSummary");
 const statusBox = document.getElementById("statusBox");
 const gitFilesList = document.getElementById("gitFilesList");
 const diffModal = document.getElementById("diffModal");
@@ -17,6 +19,45 @@ const closeDiffButton = document.getElementById("closeDiffButton");
 
 let activeRun = null;
 let isPullingRepo = false;
+
+function normalizeCompletionStatus(status) {
+  if (status === "complete" || status === "incomplete") {
+    return status;
+  }
+  return "unknown";
+}
+
+function formatDuration(durationMs) {
+  if (typeof durationMs !== "number" || durationMs < 0) {
+    return "unknown";
+  }
+
+  if (durationMs < 1000) {
+    return `${durationMs}ms`;
+  }
+
+  const totalSeconds = Math.round(durationMs / 100) / 10;
+  if (totalSeconds < 60) {
+    return `${totalSeconds.toFixed(1)}s`;
+  }
+
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = Math.round(totalSeconds % 60);
+  return `${minutes}m ${seconds}s`;
+}
+
+function formatTimestamp(timestampMs) {
+  if (typeof timestampMs !== "number") {
+    return "unknown";
+  }
+
+  const date = new Date(timestampMs);
+  if (Number.isNaN(date.getTime())) {
+    return "unknown";
+  }
+
+  return date.toLocaleString();
+}
 
 function getRunId() {
   const params = new URLSearchParams(window.location.search);
@@ -76,6 +117,15 @@ function renderRun(run) {
   const commandText = executedCommand || "Handled internally by @openai/codex-sdk.";
   const commitBody = escapeHtml(run.change_description || "(not captured)").replace(/\n/g, "<br>");
   const changeTitle = escapeHtml(run.change_title || "(not captured)");
+  const completionStatus = normalizeCompletionStatus(run.completion_status);
+  const completionWork = completionStatus === "complete"
+    ? "none"
+    : (run.completion_work || "unknown");
+  const durationMs = typeof run.duration_ms === "number"
+    ? run.duration_ms
+    : ((typeof run.run_start_time === "number" && typeof run.run_end_time === "number")
+      ? run.run_end_time - run.run_start_time
+      : null);
 
   runSummary.innerHTML = `
     <div><strong>Run ID</strong><span>${run.id}</span></div>
@@ -89,6 +139,16 @@ function renderRun(run) {
     <div><strong>Usage</strong><span>${usage}</span></div>
     <div><strong>Exit Code</strong><span>${run.code}</span></div>
     <div><strong>Created</strong><span>${run.created_at || ""}</span></div>
+  `;
+  completionSummary.innerHTML = `
+    <div><strong>Status</strong><span>${escapeHtml(completionStatus)}</span></div>
+    <div><strong>Remaining Work</strong><span>${escapeHtml(completionWork)}</span></div>
+  `;
+
+  timingSummary.innerHTML = `
+    <div><strong>Start Time</strong><span>${escapeHtml(formatTimestamp(run.run_start_time))}</span></div>
+    <div><strong>End Time</strong><span>${escapeHtml(formatTimestamp(run.run_end_time))}</span></div>
+    <div><strong>Duration</strong><span class="duration-highlight">${escapeHtml(formatDuration(durationMs))}</span></div>
   `;
 
   promptDetail.textContent = run.prompt || "(none)";

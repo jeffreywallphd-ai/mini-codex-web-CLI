@@ -42,6 +42,32 @@ function formatElapsed(ms) {
   return `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
 }
 
+function formatRunDuration(durationMs) {
+  if (typeof durationMs !== "number" || durationMs < 0) {
+    return "unknown";
+  }
+
+  if (durationMs < 1000) {
+    return `${durationMs}ms`;
+  }
+
+  const totalSeconds = Math.round(durationMs / 100) / 10;
+  if (totalSeconds < 60) {
+    return `${totalSeconds.toFixed(1)}s`;
+  }
+
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = Math.round(totalSeconds % 60);
+  return `${minutes}m ${seconds}s`;
+}
+
+function normalizeCompletionStatus(status) {
+  if (status === "complete" || status === "incomplete") {
+    return status;
+  }
+  return "unknown";
+}
+
 function renderRunTimer() {
   if (!activeRunStartedAt) {
     runTimer.textContent = "";
@@ -335,9 +361,13 @@ function renderRunsList(runs) {
       : '<span class="merge-badge merge-badge--not-merged">not merged</span>';
     const executionMode = run.execution_mode === "write" ? "Write Mode" : "Read Mode";
     const title = run.change_title ? `\nTitle: ${run.change_title}` : "";
+    const completionStatus = normalizeCompletionStatus(run.completion_status);
+    const duration = formatRunDuration(run.duration_ms);
+
     button.classList.toggle("run-item-unmerged", !run.merged_at);
     button.innerHTML = `
-      <div>#${escapeHtml(run.id)} · ${escapeHtml(run.project_name)} · ${escapeHtml(executionMode)} · ${escapeHtml(run.branch_name || "(no branch)")} · ${mergeBadgeHtml}</div>
+      <div>#${escapeHtml(run.id)} | ${escapeHtml(run.project_name)} | ${escapeHtml(executionMode)} | ${escapeHtml(run.branch_name || "(no branch)")} | ${mergeBadgeHtml}</div>
+      <div>Completion: ${escapeHtml(completionStatus)} | Duration: ${escapeHtml(duration)}</div>
       <div>${escapeHtml(title ? title.trim() : "")}</div>
       <div>${escapeHtml(promptPreview || "(no prompt)")}</div>
     `;
@@ -534,3 +564,4 @@ runSearchInput.addEventListener("input", filterRuns);
     showErrorCard(message);
   }
 })();
+
