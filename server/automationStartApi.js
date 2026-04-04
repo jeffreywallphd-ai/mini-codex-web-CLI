@@ -1055,6 +1055,15 @@ function createAutomationStartRouter(deps = {}) {
         });
       }
 
+      const resumableStatuses = new Set(["stopped", "failed"]);
+      if (!resumableStatuses.has(automationRun.automation_status)) {
+        return res.status(409).json({
+          error: `Automation run cannot be resumed from status '${automationRun.automation_status}'.`,
+          automationRun: toStatusApiAutomationRun(automationRun),
+          resumableStatuses: ["stopped", "failed"]
+        });
+      }
+
       if (!automationRun.project_name || !isValidProject(automationRun.project_name)) {
         return res.status(400).json({
           error: "Cannot resume automation because the persisted project is no longer available."
