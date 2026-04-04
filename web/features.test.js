@@ -33,6 +33,20 @@ test("epic automation button starts epic-scoped automation endpoint with epic id
   );
 });
 
+test("story automation button starts story-scoped automation endpoint and queues one story", () => {
+  const source = readFeaturesScript();
+
+  assert.match(
+    source,
+    /fetch\(`\/api\/automation\/start\/story\/\$\{encodeURIComponent\(String\(storyId\)\)\}`,\s*\{\s*method:\s*"POST"/m
+  );
+  assert.match(source, /body:\s*JSON\.stringify\(\{\s*projectName,\s*baseBranch\s*\}\)/m);
+  assert.match(source, /const totalStories = Number\(result\?\.queue\?\.totalStories\);/);
+  assert.match(source, /if \(totalStories !== 1\)/);
+  assert.doesNotMatch(source, /\/api\/stories\/\$\{story\.id\}\/complete-with-automation/);
+  assert.match(source, /"Complete with Automation"/);
+});
+
 test("feature card automation UI keeps existing card copy and eligibility affordance", () => {
   const source = readFeaturesScript();
 
@@ -64,4 +78,11 @@ test("feature card shows compact automation status summary with required states 
   assert.match(source, /className = "feature-automation-status-row"/);
   assert.match(source, /className = `automation-status-pill automation-status-pill--\$\{status\}`/);
   assert.match(source, /createFeatureAutomationStatusSummary\(content, feature\);/);
+});
+
+test("story card automation UI stays lightweight without story-level stop-on-incomplete toggle", () => {
+  const source = readFeaturesScript();
+
+  assert.match(source, /function createStoryAutomationUi\(content,\s*story\)/);
+  assert.doesNotMatch(source, /Stop Merge if Story Implementation is Incomplete/);
 });

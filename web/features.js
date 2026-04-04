@@ -28,16 +28,9 @@ let automationScope = {
   baseBranch: ""
 };
 let globalAutomationLock = null;
-let activeStoryAutomation = null;
-let activeAutomationStream = null;
-let automationTimerInterval = null;
-let activeAutomationStatusMessage = "Automation status will appear here.";
-let activeStoryAutomationTimerNode = null;
-let activeStoryAutomationStatusNode = null;
 let epicDraftId = 0;
 let storyDraftId = 0;
 const epicDrafts = [];
-const stopMergeIfIncompleteByStoryId = new Map();
 const stopRunForIncompleteStoriesByFeatureId = new Map();
 const stopRunForIncompleteStoriesByEpicId = new Map();
 
@@ -112,19 +105,6 @@ function getStoryRunStatusLabel(story) {
   return "Run status: not started";
 }
 
-function formatElapsed(ms) {
-  const totalSeconds = Math.max(0, Math.floor(ms / 1000));
-  const hours = Math.floor(totalSeconds / 3600);
-  const minutes = Math.floor((totalSeconds % 3600) / 60);
-  const seconds = totalSeconds % 60;
-
-  if (hours > 0) {
-    return `${hours}:${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
-  }
-
-  return `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
-}
-
 function renderScopeHint() {
   if (!automationScope.projectName || !automationScope.baseBranch) {
     scopeHint.textContent = "Project and base branch are required. Return to the editor page and select them first.";
@@ -132,103 +112,6 @@ function renderScopeHint() {
   }
 
   scopeHint.textContent = `Project: ${automationScope.projectName} | Base branch: ${automationScope.baseBranch}`;
-}
-
-function renderAutomationTimer() {
-  if (!activeStoryAutomationTimerNode) {
-    return;
-  }
-
-  if (!activeStoryAutomation?.startedAt) {
-    activeStoryAutomationTimerNode.textContent = "";
-    activeStoryAutomationTimerNode.classList.add("hidden");
-    return;
-  }
-
-  const elapsed = Date.now() - activeStoryAutomation.startedAt;
-  activeStoryAutomationTimerNode.textContent = `Automation running for ${formatElapsed(elapsed)}`;
-  activeStoryAutomationTimerNode.classList.remove("hidden");
-}
-
-function renderActiveAutomationStatus() {
-  if (!activeStoryAutomationStatusNode) {
-    return;
-  }
-
-  activeStoryAutomationStatusNode.textContent = activeAutomationStatusMessage;
-}
-
-function setActiveAutomationStatusMessage(message) {
-  const normalized = String(message || "").trim();
-  activeAutomationStatusMessage = normalized || "Automation status will appear here.";
-  renderActiveAutomationStatus();
-}
-
-function resetActiveStoryAutomationAnchors() {
-  activeStoryAutomationTimerNode = null;
-  activeStoryAutomationStatusNode = null;
-}
-
-function startAutomationTimer() {
-  renderAutomationTimer();
-  if (automationTimerInterval) {
-    clearInterval(automationTimerInterval);
-  }
-  automationTimerInterval = setInterval(renderAutomationTimer, 1000);
-}
-
-function stopAutomationTimer() {
-  if (automationTimerInterval) {
-    clearInterval(automationTimerInterval);
-    automationTimerInterval = null;
-  }
-}
-
-function createAutomationStreamId() {
-  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
-    return crypto.randomUUID();
-  }
-
-  return `feature-run-${Date.now()}-${Math.random().toString(16).slice(2)}`;
-}
-
-function closeAutomationStream() {
-  if (activeAutomationStream?.eventSource) {
-    activeAutomationStream.eventSource.close();
-  }
-  activeAutomationStream = null;
-}
-
-function startAutomationStream(streamId) {
-  closeAutomationStream();
-  setActiveAutomationStatusMessage("Connected to live run stream.");
-
-  const eventSource = new EventSource(`/api/run-test/stream/${encodeURIComponent(streamId)}`);
-  activeAutomationStream = { streamId, eventSource };
-
-  eventSource.onmessage = (event) => {
-    if (!activeAutomationStream || activeAutomationStream.streamId !== streamId) {
-      return;
-    }
-
-    try {
-      const payload = JSON.parse(event.data || "{}");
-      if (payload?.message) {
-        setActiveAutomationStatusMessage(payload.message);
-      }
-    } catch (error) {
-      console.warn("Failed to parse automation stream event", error);
-    }
-  };
-
-  eventSource.onerror = () => {
-    if (!activeAutomationStream || activeAutomationStream.streamId !== streamId) {
-      return;
-    }
-    if (activeStoryAutomation) {
-      setActiveAutomationStatusMessage("Live status disconnected; waiting for final automation result...");
-    }
-  };
 }
 
 function isAnyAutomationInFlight() {
@@ -345,75 +228,28 @@ function wireStaticCardToggle(toggleButton, contentNode, { defaultOpen = false }
   applyState();
 }
 
-async function executeStoryAutomation(story, options = {}) {
-  const stopMergeIfStoryImplementationIncomplete = Boolean(options.stopMergeIfStoryImplementationIncomplete);
-  const skipInFlightCheck = Boolean(options.skipInFlightCheck);
+async function startStoryAutomation(storyId) {
   const projectName = automationScope.projectName;
   const baseBranch = automationScope.baseBranch;
   if (!projectName || !baseBranch) {
     throw new Error("Select a project and branch on the editor page first, then retry automation.");
   }
-  if (!skipInFlightCheck && isAnyAutomationInFlight() && activeStoryAutomation?.storyId !== story.id) {
-    throw new Error("Automation is already running. Wait for completion before starting another story.");
+
+  const response = await fetch(`/api/automation/start/story/${encodeURIComponent(String(storyId))}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      projectName,
+      baseBranch
+    })
+  });
+  const result = await response.json();
+
+  if (!response.ok) {
+    throw new Error(result.error || "Unable to start story automation.");
   }
 
-  const streamId = createAutomationStreamId();
-  openCards.add(`feature:${story.feature_id}`);
-  openCards.add(`epic:${story.epic_id}`);
-  openCards.add(`story:${story.id}`);
-  storyAutomationInFlight.add(story.id);
-  activeStoryAutomation = {
-    storyId: story.id,
-    startedAt: Date.now(),
-    streamId
-  };
-  setActiveAutomationStatusMessage("Automation status will appear here.");
-  startAutomationTimer();
-  startAutomationStream(streamId);
-  renderFeatureLists();
-  createStatusBox.textContent = `Starting automation for story #${story.id} on project ${projectName} (${baseBranch})...`;
-
-  try {
-    const response = await fetch(`/api/stories/${story.id}/complete-with-automation`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        projectName,
-        baseBranch,
-        streamId,
-        stopMergeIfStoryImplementationIncomplete
-      })
-    });
-    const result = await response.json();
-
-    if (!response.ok) {
-      const error = new Error(result.error || "Unable to run story automation.");
-      error.errorType = result.errorType || "execution_failed";
-      throw error;
-    }
-
-    allFeatures = Array.isArray(result.features) ? result.features : allFeatures;
-    renderFeatureLists();
-    if (result.autoMerge?.status === "merged") {
-      createStatusBox.textContent = `Automation finished for story #${story.id}. Linked run #${result.runId}. Changes merged to '${result.baseBranch}'.`;
-    } else if (result.autoMerge?.status === "skipped") {
-      createStatusBox.textContent = `Automation finished for story #${story.id}. Linked run #${result.runId}. Auto-merge skipped: ${result.autoMerge.reason}.`;
-    } else {
-      createStatusBox.textContent = `Automation finished for story #${story.id}. Linked run #${result.runId}.`;
-    }
-    await loadAutomationLock();
-    return result;
-  } catch (error) {
-    await loadFeatures();
-    throw error;
-  } finally {
-    storyAutomationInFlight.delete(story.id);
-    activeStoryAutomation = null;
-    closeAutomationStream();
-    stopAutomationTimer();
-    setActiveAutomationStatusMessage("Automation status will appear here.");
-    renderFeatureLists();
-  }
+  return result;
 }
 
 function getIncompleteStoryCountForFeature(feature) {
@@ -769,54 +605,55 @@ function createStoryAutomationUi(content, story) {
     return;
   }
 
+  const isActiveStoryRun = Boolean(
+    globalAutomationLock?.isActive
+      && globalAutomationLock?.automationType === "story"
+      && Number(globalAutomationLock?.targetId) === Number(story?.id)
+  );
+  const isStoryStartInFlight = storyAutomationInFlight.has(story.id);
   const isGlobalRunActive = isAnyAutomationInFlight();
-  const storyStopMergeCheckbox = document.createElement("input");
-  storyStopMergeCheckbox.type = "checkbox";
-  storyStopMergeCheckbox.checked = Boolean(stopMergeIfIncompleteByStoryId.get(story.id));
-  storyStopMergeCheckbox.addEventListener("change", () => {
-    stopMergeIfIncompleteByStoryId.set(story.id, storyStopMergeCheckbox.checked);
-  });
-
-  const storyStopMergeLabel = document.createElement("label");
-  storyStopMergeLabel.className = "story-automation-checkbox";
-  storyStopMergeLabel.appendChild(storyStopMergeCheckbox);
-  storyStopMergeLabel.appendChild(document.createTextNode("Stop Merge if Story Implementation is Incomplete"));
-  content.appendChild(storyStopMergeLabel);
 
   const automationButton = document.createElement("button");
   automationButton.type = "button";
   automationButton.className = "secondary-button";
-  automationButton.textContent = storyAutomationInFlight.has(story.id)
+  automationButton.textContent = isStoryStartInFlight || isActiveStoryRun
     ? "Automation Running..."
     : "Complete with Automation";
-  automationButton.disabled = isGlobalRunActive;
+  automationButton.disabled = isGlobalRunActive && !isStoryStartInFlight;
 
   automationButton.addEventListener("click", async () => {
+    if (isAnyAutomationInFlight()) {
+      createStatusBox.textContent = "Automation is already running. Wait for completion before starting another run.";
+      return;
+    }
+
+    openCards.add(`feature:${story.feature_id}`);
+    openCards.add(`epic:${story.epic_id}`);
+    openCards.add(`story:${story.id}`);
+    storyAutomationInFlight.add(story.id);
+    renderFeatureLists();
+
     try {
-      await executeStoryAutomation(story, {
-        stopMergeIfStoryImplementationIncomplete: storyStopMergeCheckbox.checked
-      });
+      const result = await startStoryAutomation(story.id);
+      const runId = result?.automationRun?.id;
+      const totalStories = Number(result?.queue?.totalStories);
+      if (totalStories !== 1) {
+        throw new Error(`Story automation should queue exactly one story, but queued ${totalStories}.`);
+      }
+
+      createStatusBox.textContent = Number.isInteger(runId)
+        ? `Story automation started for story #${story.id} (run #${runId}, 1 story queued).`
+        : `Story automation started for story #${story.id} (1 story queued).`;
+      await loadAutomationLock();
     } catch (error) {
-      createStatusBox.textContent = `Automation failed: ${error.message}`;
+      createStatusBox.textContent = `Story automation failed to start: ${error.message}`;
+    } finally {
+      storyAutomationInFlight.delete(story.id);
+      renderFeatureLists();
     }
   });
 
   content.appendChild(automationButton);
-
-  if (activeStoryAutomation?.storyId === story.id) {
-    const timerNode = document.createElement("p");
-    timerNode.className = "run-timer";
-    content.appendChild(timerNode);
-
-    const statusNode = document.createElement("div");
-    statusNode.className = "story-automation-status";
-    content.appendChild(statusNode);
-
-    activeStoryAutomationTimerNode = timerNode;
-    activeStoryAutomationStatusNode = statusNode;
-    renderAutomationTimer();
-    renderActiveAutomationStatus();
-  }
 }
 
 function renderStoryCard(story, options = {}) {
@@ -911,7 +748,6 @@ function renderSection(container, features, options = {}) {
 }
 
 function renderFeatureLists() {
-  resetActiveStoryAutomationAnchors();
   const incompleteQuery = incompleteSearchInput.value.trim();
   const completeQuery = completeSearchInput.value.trim();
 
