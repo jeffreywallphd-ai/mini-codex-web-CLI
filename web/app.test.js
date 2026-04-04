@@ -37,3 +37,14 @@ test("editor state persists selected context bundle choice", () => {
   assert.match(source, /contextBundleSelect\.value = "";/);
   assert.match(source, /\[projectSelect,\s*baseBranchSelect,\s*executionModeSelect,\s*promptInput,\s*contextBundleSelect\]\.forEach/);
 });
+
+test("index page renders selected context bundle summary metadata", () => {
+  const source = readAppScript();
+
+  assert.match(source, /const contextBundleSummaryCard = document\.getElementById\("contextBundleSummaryCard"\);/);
+  assert.match(source, /function renderContextBundleSelectionSummary\(\)/);
+  assert.match(source, /Summary: \$\{summary \|\| "\(\s*none\s*\)"\}/);
+  assert.match(source, /Intended use: \$\{intendedUse \|\| "\(\s*none\s*\)"\}/);
+  assert.match(source, /Project affinity: \$\{projectAffinity \|\| "\(\s*none\s*\)"\}/);
+  assert.match(source, /contextBundleSelect\.addEventListener\("change", renderContextBundleSelectionSummary\);/);
+});

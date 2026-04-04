@@ -728,6 +728,30 @@ details pre {
   border-color: rgba(79, 140, 255, 0.28);
 }
 
+.context-bundle-summary {
+  margin: -4px 0 12px;
+  padding: 10px;
+  border: 1px solid rgba(79, 140, 255, 0.35);
+  border-radius: 8px;
+  background: rgba(79, 140, 255, 0.08);
+}
+
+.context-bundle-summary__title {
+  margin: 0 0 6px;
+  font-weight: 700;
+}
+
+.context-bundle-summary__guidance,
+.context-bundle-summary__meta {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.context-bundle-summary__meta {
+  margin-top: 6px;
+}
+
 .active-story-command-box {
   margin: 0;
   min-height: calc(1.4em * 3 + 20px);

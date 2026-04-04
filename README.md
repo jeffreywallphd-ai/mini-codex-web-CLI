@@ -35,7 +35,7 @@ The app is designed for personal LAN use, not for public internet exposure or mu
 - Automated run-origin linkage persisted on each run (`automation_origin_type`, `automation_origin_id`, `automation_run_id`) for feature/epic/story traceability
 - Context bundle schema + model persistence with ordered multi-part composition (`context_bundles`, `context_bundle_parts`) and reusable metadata (`intended_use`, `tags`, `project_name`, `summary`, `updated_at`)
 - Run and automation API payloads include selected context bundle linkage (`context_bundle_id`) and resolved title metadata (`context_bundle_title` / `contextBundleTitle`) for execution traceability
-- Index page run form includes an optional single-bundle selector with concise metadata hints (title/intended use/summary) so manual runs can include one bundle or none
+- Index page run form includes an optional single-bundle selector with concise metadata hints (title/intended use/summary) plus a compact selected-bundle summary card (summary/intended use/project affinity) so manual runs can include one bundle or none
 - Feature card automation control in **Not Yet Implemented** for launching feature-wide automation (`Complete with Automation`)
 - Feature/epic/story automation summaries include concise stop reasons for early stops (`execution_failed`, `story_incomplete`, `manual_stop`) when backend state provides one
 - SQLite storage with no external database
@@ -163,6 +163,7 @@ Context bundles are persisted with a parent-child data model in SQLite:
 - Optional compile limits (`maxCompiledChars` or token-equivalent options) apply deterministic prefix-preserving truncation: higher-priority compilation sections are preserved first, then earlier ordered parts, with explainable truncation metadata (`truncation.preservedPartIds`, `truncation.partiallyTruncatedPartIds`, `truncation.omittedPartIds`).
 - Run preparation can now accept an optional `contextBundleId`; when provided, the selected bundle is compiled during run creation using the same `compileContextBundle(...)` path used by preview.
 - The index page manual run form now includes a lightweight single-select context bundle control (`No context bundle` or exactly one saved bundle) that lists bundle title plus concise metadata hints (intended use and summary when available).
+- When a bundle is selected on the index page, a compact metadata summary card appears under the selector and updates on selection changes, showing summary/intended use/project affinity with safe `(none)` fallbacks when optional metadata is missing.
 - Run and automation records persist nullable `context_bundle_id` linkage so bundle-backed and non-bundle executions remain backward compatible in one explicit model.
 - Run and automation APIs surface both bundle id and bundle title metadata (`context_bundle_id` + `context_bundle_title`, and camelCase variants in automation route payloads) so historical runs can be traced to bundle context selection.
 - Prompt assembly uses a stable rule: compiled bundle context is injected **before** the task prompt using `bundle_context_before_task_prompt_v1` in `server/runPromptContext.js`.
