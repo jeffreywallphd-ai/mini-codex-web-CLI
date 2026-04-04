@@ -28,6 +28,7 @@ let automationScope = {
   baseBranch: ""
 };
 let globalAutomationLock = null;
+let globalAutomationStatus = null;
 let epicDraftId = 0;
 let storyDraftId = 0;
 const epicDrafts = [];
@@ -319,6 +320,63 @@ function getEpicAutomationStatusLabel(status) {
   return getAutomationStatusLabel(status);
 }
 
+function getCurrentExecutingStorySummary(automationType, targetId) {
+  if (!globalAutomationLock?.isActive) {
+    return null;
+  }
+
+  const activeRun = globalAutomationStatus?.automationRun;
+  const currentItem = globalAutomationStatus?.queue?.currentItem;
+  if (!activeRun || !currentItem) {
+    return null;
+  }
+
+  if (String(activeRun.status || "").toLowerCase() !== "running") {
+    return null;
+  }
+
+  if (String(activeRun.automationType || "").toLowerCase() !== String(automationType || "").toLowerCase()) {
+    return null;
+  }
+
+  if (Number(activeRun.targetId) !== Number(targetId)) {
+    return null;
+  }
+
+  const storyId = Number.parseInt(currentItem.storyId, 10);
+  const storyTitle = String(currentItem.storyTitle || "").trim();
+  if (!storyTitle && (!Number.isInteger(storyId) || storyId <= 0)) {
+    return null;
+  }
+
+  return { storyId, storyTitle };
+}
+
+function appendCurrentExecutingStoryLine(content, automationType, targetId) {
+  const currentStory = getCurrentExecutingStorySummary(automationType, targetId);
+  if (!currentStory) {
+    return;
+  }
+
+  let summary = "";
+  if (currentStory.storyTitle && Number.isInteger(currentStory.storyId) && currentStory.storyId > 0) {
+    summary = `${currentStory.storyTitle} (#${currentStory.storyId})`;
+  } else if (currentStory.storyTitle) {
+    summary = currentStory.storyTitle;
+  } else if (Number.isInteger(currentStory.storyId) && currentStory.storyId > 0) {
+    summary = `#${currentStory.storyId}`;
+  }
+
+  if (!summary) {
+    return;
+  }
+
+  const row = document.createElement("p");
+  row.className = "feature-automation-status-row";
+  row.textContent = `Current story: ${summary}`;
+  content.appendChild(row);
+}
+
 function getStoryAutomationStatus(story) {
   const activeStoryRun = Boolean(
     globalAutomationLock?.isActive
@@ -357,6 +415,7 @@ function createFeatureAutomationStatusSummary(content, feature) {
   }
 
   content.appendChild(row);
+  appendCurrentExecutingStoryLine(content, "feature", feature?.id);
 }
 
 function createEpicAutomationStatusSummary(content, epic) {
@@ -378,6 +437,7 @@ function createEpicAutomationStatusSummary(content, epic) {
   }
 
   content.appendChild(row);
+  appendCurrentExecutingStoryLine(content, "epic", epic?.id);
 }
 
 function createStoryAutomationStatusSummary(content, story) {
@@ -524,7 +584,7 @@ function createFeatureAutomationUi(content, feature) {
       createStatusBox.textContent = Number.isInteger(runId)
         ? `Feature automation started for feature #${feature.id} (run #${runId}, ${totalStories} story(s) queued).`
         : `Feature automation started for feature #${feature.id}.`;
-      await loadAutomationLock();
+      await refreshAutomationState();
     } catch (error) {
       createStatusBox.textContent = `Feature automation failed to start: ${error.message}`;
       button.disabled = isAnyAutomationInFlight() && !isActiveFeatureRun;
@@ -619,7 +679,7 @@ function createEpicAutomationUi(content, epic) {
       createStatusBox.textContent = Number.isInteger(runId)
         ? `Epic automation started for epic #${epic.id} (run #${runId}, ${totalStories} story(s) queued).`
         : `Epic automation started for epic #${epic.id}.`;
-      await loadAutomationLock();
+      await refreshAutomationState();
     } catch (error) {
       createStatusBox.textContent = `Epic automation failed to start: ${error.message}`;
       button.disabled = isAnyAutomationInFlight() && !isActiveEpicRun;
@@ -684,7 +744,7 @@ function createStoryAutomationUi(content, story) {
       createStatusBox.textContent = Number.isInteger(runId)
         ? `Story automation started for story #${story.id} (run #${runId}, 1 story queued).`
         : `Story automation started for story #${story.id} (1 story queued).`;
-      await loadAutomationLock();
+      await refreshAutomationState();
     } catch (error) {
       createStatusBox.textContent = `Story automation failed to start: ${error.message}`;
     } finally {
@@ -1000,6 +1060,29 @@ async function loadAutomationLock() {
   }
 
   globalAutomationLock = result;
+}
+
+async function loadAutomationStatus() {
+  globalAutomationStatus = null;
+
+  const runId = Number.parseInt(globalAutomationLock?.automationRunId, 10);
+  const shouldLoadStatus = Boolean(globalAutomationLock?.isActive) && Number.isInteger(runId) && runId > 0;
+  if (!shouldLoadStatus) {
+    return;
+  }
+
+  const response = await fetch(`/api/automation/status/${encodeURIComponent(String(runId))}`);
+  const result = await response.json();
+  if (!response.ok) {
+    throw new Error(result.error || "Failed to load automation status.");
+  }
+
+  globalAutomationStatus = result;
+}
+
+async function refreshAutomationState() {
+  await loadAutomationLock();
+  await loadAutomationStatus();
   renderFeatureLists();
 }
 
@@ -1132,7 +1215,7 @@ clearCompleteSearchButton.addEventListener("click", () => {
 });
 
 setInterval(() => {
-  loadAutomationLock().catch((error) => {
+  refreshAutomationState().catch((error) => {
     createStatusBox.textContent = `Automation lock refresh failed: ${error.message}`;
   });
 }, 3000);
@@ -1145,7 +1228,7 @@ setInterval(() => {
     syncScopeIntoEditorState(automationScope);
     renderScopeHint();
     await reloadAllData();
-    await loadAutomationLock();
+    await refreshAutomationState();
     renderDrafts();
   } catch (error) {
     createStatusBox.textContent = `Initial load failed: ${error.message}`;

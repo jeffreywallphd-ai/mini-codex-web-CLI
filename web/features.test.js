@@ -95,3 +95,24 @@ test("story card automation UI stays lightweight without story-level stop-on-inc
   assert.match(source, /return "not_started";/);
   assert.doesNotMatch(source, /Stop Merge if Story Implementation is Incomplete/);
 });
+
+test("automation summaries render current executing story from backend status payload", () => {
+  const source = readFeaturesScript();
+
+  assert.match(source, /function getCurrentExecutingStorySummary\(automationType,\s*targetId\)/);
+  assert.match(source, /const currentItem = globalAutomationStatus\?\.queue\?\.currentItem;/);
+  assert.match(source, /if \(String\(activeRun\.status \|\| ""\)\.toLowerCase\(\) !== "running"\)/);
+  assert.match(source, /row\.textContent = `Current story: \$\{summary\}`;/);
+  assert.match(source, /appendCurrentExecutingStoryLine\(content,\s*"feature",\s*feature\?\.id\);/);
+  assert.match(source, /appendCurrentExecutingStoryLine\(content,\s*"epic",\s*epic\?\.id\);/);
+});
+
+test("frontend polls automation status endpoint using active backend automation run id", () => {
+  const source = readFeaturesScript();
+
+  assert.match(source, /async function loadAutomationStatus\(\)/);
+  assert.match(source, /const runId = Number\.parseInt\(globalAutomationLock\?\.automationRunId,\s*10\);/);
+  assert.match(source, /fetch\(`\/api\/automation\/status\/\$\{encodeURIComponent\(String\(runId\)\)\}`\)/);
+  assert.match(source, /globalAutomationStatus = result;/);
+  assert.match(source, /await loadAutomationLock\(\);\s*await loadAutomationStatus\(\);\s*renderFeatureLists\(\);/m);
+});
