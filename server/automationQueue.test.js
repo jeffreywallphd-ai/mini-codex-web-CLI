@@ -2,6 +2,12 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 
 const {
+  AUTOMATION_OUTCOME,
+  AUTOMATION_SCOPE,
+  DEFAULT_AUTOMATION_RULES,
+  createAutomationRules,
+  defineAutomationExecutionPlan,
+  evaluateAutomationStopCondition,
   flattenStoryExecutionQueues,
   generateStoryExecutionQueues,
   withStableOrdering
@@ -116,4 +122,126 @@ test("flattenStoryExecutionQueues throws when queue input is invalid", () => {
     () => flattenStoryExecutionQueues(null),
     /queues must be an array/
   );
+});
+
+test("automation rule defaults define strict feature epic story ordering", () => {
+  assert.deepEqual(DEFAULT_AUTOMATION_RULES.ordering.levels, [
+    AUTOMATION_SCOPE.FEATURE,
+    AUTOMATION_SCOPE.EPIC,
+    AUTOMATION_SCOPE.STORY
+  ]);
+  assert.equal(DEFAULT_AUTOMATION_RULES.ordering.strategy, "order-asc-stable");
+  assert.equal(DEFAULT_AUTOMATION_RULES.stopConditions.stopOnStoryFailure, true);
+  assert.equal(DEFAULT_AUTOMATION_RULES.stopConditions.stopOnEpicFailure, true);
+});
+
+test("createAutomationRules merges stop-condition overrides", () => {
+  const rules = createAutomationRules({
+    stopConditions: {
+      stopOnStoryFailure: false
+    }
+  });
+
+  assert.equal(rules.stopConditions.stopOnStoryFailure, false);
+  assert.equal(rules.stopConditions.stopOnStoryBlocked, true);
+  assert.deepEqual(rules.ordering.levels, [
+    AUTOMATION_SCOPE.FEATURE,
+    AUTOMATION_SCOPE.EPIC,
+    AUTOMATION_SCOPE.STORY
+  ]);
+});
+
+test("evaluateAutomationStopCondition applies fail-fast rules", () => {
+  assert.deepEqual(
+    evaluateAutomationStopCondition({
+      entityType: AUTOMATION_SCOPE.STORY,
+      outcome: AUTOMATION_OUTCOME.FAILED
+    }),
+    {
+      shouldStop: true,
+      entityType: AUTOMATION_SCOPE.STORY,
+      outcome: AUTOMATION_OUTCOME.FAILED,
+      reason: "story.failed"
+    }
+  );
+
+  assert.deepEqual(
+    evaluateAutomationStopCondition(
+      {
+        entityType: AUTOMATION_SCOPE.STORY,
+        outcome: AUTOMATION_OUTCOME.FAILED
+      },
+      {
+        stopConditions: {
+          stopOnStoryFailure: false
+        }
+      }
+    ),
+    {
+      shouldStop: false,
+      entityType: AUTOMATION_SCOPE.STORY,
+      outcome: AUTOMATION_OUTCOME.FAILED,
+      reason: null
+    }
+  );
+
+  assert.deepEqual(
+    evaluateAutomationStopCondition({
+      entityType: AUTOMATION_SCOPE.STORY,
+      outcome: AUTOMATION_OUTCOME.SUCCESS
+    }),
+    {
+      shouldStop: false,
+      entityType: AUTOMATION_SCOPE.STORY,
+      outcome: AUTOMATION_OUTCOME.SUCCESS,
+      reason: null
+    }
+  );
+});
+
+test("evaluateAutomationStopCondition validates event shape", () => {
+  assert.throws(
+    () => evaluateAutomationStopCondition(null),
+    /event must be an object/
+  );
+
+  assert.throws(
+    () => evaluateAutomationStopCondition({ entityType: "team", outcome: AUTOMATION_OUTCOME.SUCCESS }),
+    /event.entityType must be feature, epic, or story/
+  );
+
+  assert.throws(
+    () => evaluateAutomationStopCondition({ entityType: AUTOMATION_SCOPE.STORY, outcome: "unknown" }),
+    /event.outcome must be success, failed, blocked, or cancelled/
+  );
+});
+
+test("defineAutomationExecutionPlan returns rules, queues, and flattened stories", () => {
+  const plan = defineAutomationExecutionPlan([
+    {
+      id: "feature-1",
+      title: "Feature 1",
+      order: 1,
+      epics: [
+        {
+          id: "epic-1",
+          title: "Epic 1",
+          order: 1,
+          stories: [
+            { id: "story-2", title: "Story 2", order: 2 },
+            { id: "story-1", title: "Story 1", order: 1 }
+          ]
+        }
+      ]
+    }
+  ]);
+
+  assert.deepEqual(plan.scope, [
+    AUTOMATION_SCOPE.FEATURE,
+    AUTOMATION_SCOPE.EPIC,
+    AUTOMATION_SCOPE.STORY
+  ]);
+  assert.equal(plan.queues.length, 1);
+  assert.deepEqual(plan.stories.map((story) => story.storyId), ["story-1", "story-2"]);
+  assert.equal(plan.rules.stopConditions.stopOnStoryFailure, true);
 });

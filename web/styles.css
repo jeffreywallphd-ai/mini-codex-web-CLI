@@ -108,6 +108,7 @@ button:disabled {
 .panel,
 #statusBox,
 #creditsBox,
+#automationStatusBox,
 details,
 pre {
   background: var(--panel);
@@ -146,7 +147,8 @@ pre {
 }
 
 #statusBox,
-#creditsBox {
+#creditsBox,
+#automationStatusBox {
   margin: 0 0 12px;
   padding: 10px;
   color: var(--text);
@@ -447,6 +449,11 @@ details pre {
 
 .page-actions button {
   margin-bottom: 0;
+}
+
+.is-disabled-link {
+  pointer-events: none;
+  opacity: 0.5;
 }
 
 .search-row {

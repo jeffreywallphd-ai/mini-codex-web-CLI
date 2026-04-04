@@ -34,6 +34,7 @@ const PROJECTS_DIR = path.resolve(__dirname, process.env.PROJECTS_DIR);
 
 const runningProjects = new Set();
 const runEventStreams = new Map();
+let activeFeatureAutomation = null;
 
 function getRunStreamConnections(streamId) {
   if (!streamId) return null;
@@ -83,6 +84,24 @@ function getErrorMessage(error) {
   }
 
   return String(error);
+}
+
+function getFeatureAutomationLock() {
+  if (!activeFeatureAutomation) {
+    return {
+      isActive: false,
+      source: null
+    };
+  }
+
+  return {
+    isActive: true,
+    source: "feature_automation",
+    projectName: activeFeatureAutomation.projectName,
+    baseBranch: activeFeatureAutomation.baseBranch,
+    storyId: activeFeatureAutomation.storyId,
+    startedAt: activeFeatureAutomation.startedAt
+  };
 }
 
 function normalizeCompletionStatus(status) {
@@ -205,6 +224,10 @@ app.get("/api/running-projects", (req, res) => {
   });
 });
 
+app.get("/api/automation-lock", (req, res) => {
+  res.json(getFeatureAutomationLock());
+});
+
 app.post("/api/running-projects/refresh", (req, res) => {
   const clearedCount = runningProjects.size;
   runningProjects.clear();
@@ -224,6 +247,11 @@ app.post("/api/projects/:projectName/pull", async (req, res) => {
 
   if (runningProjects.has(projectName)) {
     return res.status(400).json({ error: "Project already running" });
+  }
+  if (activeFeatureAutomation) {
+    return res.status(423).json({
+      error: `Feature automation is currently running for ${activeFeatureAutomation.projectName} (${activeFeatureAutomation.baseBranch}).`
+    });
   }
 
   runningProjects.add(projectName);
@@ -307,6 +335,11 @@ app.post("/api/run-test", async (req, res) => {
   if (runningProjects.has(projectName)) {
     return res.status(400).json({ error: "Project already running" });
   }
+  if (activeFeatureAutomation) {
+    return res.status(423).json({
+      error: `Feature automation is currently running for ${activeFeatureAutomation.projectName} (${activeFeatureAutomation.baseBranch}).`
+    });
+  }
 
   const repoPath = getRepoPath(projectName);
   const selectedBaseBranch = typeof baseBranch === "string" && baseBranch.trim()
@@ -342,6 +375,8 @@ app.post("/api/run-test", async (req, res) => {
 app.post("/api/stories/:storyId/complete-with-automation", async (req, res) => {
   const storyId = Number.parseInt(req.params.storyId, 10);
   const projectName = String(req.body?.projectName || "").trim();
+  const baseBranch = String(req.body?.baseBranch || "").trim();
+  const streamId = String(req.body?.streamId || "").trim() || null;
   const executionMode = "write";
 
   if (!Number.isInteger(storyId) || storyId <= 0) {
@@ -351,40 +386,68 @@ app.post("/api/stories/:storyId/complete-with-automation", async (req, res) => {
   if (!projectName || !isValidProject(projectName)) {
     return res.status(400).json({ error: "A valid project name is required." });
   }
+  if (!baseBranch) {
+    return res.status(400).json({ error: "A base branch is required." });
+  }
+  if (activeFeatureAutomation) {
+    return res.status(423).json({
+      error: `Feature automation is already running for story #${activeFeatureAutomation.storyId}.`
+    });
+  }
 
   if (runningProjects.has(projectName)) {
     return res.status(400).json({ error: "Project already running" });
   }
 
   try {
-    const storyContext = await getStoryAutomationContext(storyId);
+    const branchResult = await listLocalBranches(getRepoPath(projectName));
+    if (!branchResult.branches.includes(baseBranch)) {
+      return res.status(400).json({ error: `Invalid base branch '${baseBranch}' for project '${projectName}'.` });
+    }
+
+    const storyContext = await getStoryAutomationContext(storyId, { projectName, baseBranch });
     if (!storyContext) {
       return res.status(404).json({ error: "Story not found." });
     }
 
     const prompt = buildStoryAutomationPrompt(storyContext);
     runningProjects.add(projectName);
+    activeFeatureAutomation = {
+      projectName,
+      baseBranch,
+      storyId,
+      startedAt: new Date().toISOString()
+    };
+    publishRunEvent(streamId, { type: "automation.started", message: `Story automation started for #${storyId}.` });
 
     const { runId, responsePayload } = await executeRunFlow({
       projectName,
       prompt,
-      executionMode
+      executionMode,
+      baseBranch,
+      streamId
     });
 
     await attachRunToStory(storyId, runId);
-    const updatedFeatures = await getFeaturesTree();
+    const updatedFeatures = await getFeaturesTree({ projectName, baseBranch });
+    publishRunEvent(streamId, { type: "automation.completed", message: `Story automation completed for #${storyId}.` });
 
     res.json({
       storyId,
       runId,
       prompt,
       run: responsePayload,
-      features: updatedFeatures
+      features: updatedFeatures,
+      projectName,
+      baseBranch
     });
   } catch (error) {
+    publishRunEvent(streamId, { type: "automation.failed", message: `Story automation failed: ${getErrorMessage(error)}` });
     res.status(500).json({ error: getErrorMessage(error) });
   } finally {
     runningProjects.delete(projectName);
+    activeFeatureAutomation = null;
+    closeRunStream(streamId);
   }
 });
 
@@ -407,8 +470,15 @@ app.get("/api/runs/:id", async (req, res) => {
 });
 
 app.get("/api/features/tree", async (req, res) => {
+  const projectName = String(req.query?.projectName || "").trim();
+  const baseBranch = String(req.query?.baseBranch || "").trim();
+
+  if (!projectName || !baseBranch) {
+    return res.status(400).json({ error: "projectName and baseBranch are required." });
+  }
+
   try {
-    const features = await getFeaturesTree();
+    const features = await getFeaturesTree({ projectName, baseBranch });
     res.json(features);
   } catch (error) {
     res.status(500).json({ error: getErrorMessage(error) });
@@ -417,9 +487,17 @@ app.get("/api/features/tree", async (req, res) => {
 
 app.post("/api/features/tree", async (req, res) => {
   const draft = req.body || {};
+  const projectName = String(draft.projectName || "").trim();
+  const baseBranch = String(draft.baseBranch || "").trim();
 
   if (typeof draft.name !== "string" || !draft.name.trim()) {
     return res.status(400).json({ error: "Feature name is required." });
+  }
+  if (!projectName || !isValidProject(projectName)) {
+    return res.status(400).json({ error: "A valid project name is required." });
+  }
+  if (!baseBranch) {
+    return res.status(400).json({ error: "Base branch is required." });
   }
 
   const epics = Array.isArray(draft.epics) ? draft.epics : [];
@@ -437,8 +515,8 @@ app.post("/api/features/tree", async (req, res) => {
   }
 
   try {
-    await createFeatureTree(draft);
-    const features = await getFeaturesTree();
+    await createFeatureTree(draft, { projectName, baseBranch });
+    const features = await getFeaturesTree({ projectName, baseBranch });
     res.status(201).json(features);
   } catch (error) {
     res.status(400).json({ error: getErrorMessage(error) });

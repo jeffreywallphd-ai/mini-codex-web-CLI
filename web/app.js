@@ -16,6 +16,8 @@ const runStatusFilterSelect = document.getElementById("runStatusFilterSelect");
 const creditsBox = document.getElementById("creditsBox");
 const errorCard = document.getElementById("errorCard");
 const errorCardMessage = document.getElementById("errorCardMessage");
+const manageFeaturesLink = document.getElementById("manageFeaturesLink");
+const indexLockHint = document.getElementById("indexLockHint");
 
 const EDITOR_STATE_KEY = "mini-codex-editor-state";
 let allRuns = [];
@@ -27,6 +29,7 @@ let activeRunStartedAt = null;
 let runTimerInterval = null;
 let lastBranchLoadRequestId = 0;
 let loadRunsRequestId = 0;
+let activeAutomationLock = null;
 
 function escapeHtml(text) {
   return String(text ?? "")
@@ -183,6 +186,7 @@ function getEditorState() {
 
 function saveEditorState() {
   localStorage.setItem(EDITOR_STATE_KEY, JSON.stringify(getEditorState()));
+  updateManageFeaturesLink();
 }
 
 function clearBranchOptions() {
@@ -199,6 +203,7 @@ function clearEditorState() {
   }
   clearBranchOptions();
   branchHint.textContent = "";
+  updateManageFeaturesLink();
 }
 
 function restoreEditorState(projects) {
@@ -284,18 +289,72 @@ function pickDefaultBranch(branches, currentBranch, preferredBranch) {
   return branches[0] || "";
 }
 
+function getScopeFromQuery() {
+  const params = new URLSearchParams(window.location.search);
+  return {
+    projectName: (params.get("projectName") || "").trim(),
+    baseBranch: (params.get("baseBranch") || "").trim()
+  };
+}
+
+function getSelectedScope() {
+  return {
+    projectName: projectSelect.value || "",
+    baseBranch: baseBranchSelect.value || ""
+  };
+}
+
+function isIndexLockedByFeatureAutomation() {
+  return Boolean(activeAutomationLock?.isActive);
+}
+
+function updateManageFeaturesLink() {
+  const { projectName, baseBranch } = getSelectedScope();
+  const query = new URLSearchParams();
+  if (projectName) {
+    query.set("projectName", projectName);
+  }
+  if (baseBranch) {
+    query.set("baseBranch", baseBranch);
+  }
+
+  const queryString = query.toString();
+  manageFeaturesLink.href = queryString ? `/features.html?${queryString}` : "/features.html";
+}
+
 function updateProjectActionState() {
   const projectName = projectSelect.value;
   const branchName = baseBranchSelect.value;
   const isProjectRunning = projectName && runningProjects.has(projectName);
+  const isLockedByFeatureAutomation = isIndexLockedByFeatureAutomation();
   const isRunActive = isRunningRequestInFlight || isProjectRunning;
-  const hasValidBranch = Boolean(projectName && branchName && !baseBranchSelect.disabled);
+  const hasValidBranch = Boolean(projectName && branchName);
+  const isEditorFrozen = isLockedByFeatureAutomation;
 
-  runningProjectHint.textContent = isProjectRunning
+  runningProjectHint.textContent = isProjectRunning && !isLockedByFeatureAutomation
     ? `"${projectName}" is currently running. Wait for it to finish.`
     : "";
 
-  runButton.disabled = !projectName || !hasValidBranch || isRunActive;
+  if (isLockedByFeatureAutomation) {
+    const lockProject = activeAutomationLock.projectName || "unknown project";
+    const lockBranch = activeAutomationLock.baseBranch || "unknown branch";
+    indexLockHint.textContent = `Feature automation is in progress on ${lockProject} (${lockBranch}). Wait for it to finish before editing on this page.`;
+    indexLockHint.classList.remove("hidden");
+  } else {
+    indexLockHint.textContent = "";
+    indexLockHint.classList.add("hidden");
+  }
+
+  projectSelect.disabled = isEditorFrozen;
+  baseBranchSelect.disabled = isEditorFrozen || !projectName || baseBranchSelect.options.length === 0;
+  executionModeSelect.disabled = isEditorFrozen;
+  promptInput.disabled = isEditorFrozen;
+  pasteClipboardButton.disabled = isEditorFrozen;
+  clearStateButton.disabled = isEditorFrozen;
+  manageFeaturesLink.classList.toggle("is-disabled-link", isEditorFrozen);
+  manageFeaturesLink.setAttribute("aria-disabled", isEditorFrozen ? "true" : "false");
+
+  runButton.disabled = isEditorFrozen || !projectName || !hasValidBranch || isRunActive;
   runButton.textContent = isRunActive ? "Running..." : "Run";
   runButton.classList.toggle("running-button", isRunActive);
 
@@ -311,8 +370,10 @@ function updateProjectActionState() {
   }
 
   if (!isPullRequestInFlight) {
-    pullButton.disabled = !projectName || isProjectRunning;
+    pullButton.disabled = isEditorFrozen || !projectName || isProjectRunning;
   }
+
+  updateManageFeaturesLink();
 }
 
 async function loadBranchesForSelectedProject(preferredBranch = "") {
@@ -392,6 +453,19 @@ async function loadRunningProjects() {
   updateProjectActionState();
 }
 
+async function loadAutomationLock() {
+  const response = await fetch("/api/automation-lock");
+  const result = await parseJsonResponse(response);
+
+  if (!response.ok) {
+    throw new Error(buildErrorMessage("Could not load automation lock", result, "Request failed"));
+  }
+
+  activeAutomationLock = result;
+  updateProjectActionState();
+  renderRunsList(allRuns);
+}
+
 async function refreshRunningProjects() {
   try {
     const response = await fetch("/api/running-projects/refresh", {
@@ -442,6 +516,7 @@ function renderStatus(run) {
 
 function renderRunsList(runs) {
   runsList.innerHTML = "";
+  const isFrozen = isIndexLockedByFeatureAutomation();
 
   if (!runs.length) {
     const li = document.createElement("li");
@@ -486,7 +561,9 @@ function renderRunsList(runs) {
     archiveButton.type = "button";
     archiveButton.className = "secondary-button";
     archiveButton.textContent = run.archived ? "Unarchive" : "Archive";
+    archiveButton.disabled = isFrozen;
     archiveButton.onclick = async () => {
+      if (isFrozen) return;
       const endpoint = run.archived ? "unarchive" : "archive";
       archiveButton.disabled = true;
       deleteButton.disabled = true;
@@ -518,7 +595,9 @@ function renderRunsList(runs) {
     deleteButton.type = "button";
     deleteButton.className = "danger-button";
     deleteButton.textContent = "Delete";
+    deleteButton.disabled = isFrozen;
     deleteButton.onclick = async () => {
+      if (isFrozen) return;
       const confirmation = window.prompt(`Type "Delete" to delete run #${run.id}.`);
       if (confirmation !== "Delete") {
         statusBox.textContent = `Delete canceled for run #${run.id}.`;
@@ -577,7 +656,13 @@ async function loadProjects() {
   }
 
   const restoredState = restoreEditorState(projects);
-  await loadBranchesForSelectedProject(restoredState?.baseBranch || "");
+  const queryScope = getScopeFromQuery();
+  if (queryScope.projectName && projects.some((project) => project.name === queryScope.projectName)) {
+    projectSelect.value = queryScope.projectName;
+  }
+
+  const preferredBranch = queryScope.baseBranch || restoredState?.baseBranch || "";
+  await loadBranchesForSelectedProject(preferredBranch);
   updateProjectActionState();
 }
 
@@ -609,6 +694,10 @@ async function loadRuns() {
 
 async function pullSelectedRepository() {
   const projectName = projectSelect.value;
+  if (isIndexLockedByFeatureAutomation()) {
+    statusBox.textContent = "Editor is locked while feature automation is running.";
+    return;
+  }
 
   if (!projectName) {
     statusBox.textContent = "Select a repository before pulling.";
@@ -651,6 +740,11 @@ async function pullSelectedRepository() {
 }
 
 async function pastePromptFromClipboard() {
+  if (isIndexLockedByFeatureAutomation()) {
+    statusBox.textContent = "Editor is locked while feature automation is running.";
+    return;
+  }
+
   try {
     const clipboardText = await navigator.clipboard.readText();
     promptInput.value = clipboardText;
@@ -664,6 +758,11 @@ async function pastePromptFromClipboard() {
 }
 
 runButton.addEventListener("click", async () => {
+  if (isIndexLockedByFeatureAutomation()) {
+    statusBox.textContent = "Editor is locked while feature automation is running.";
+    return;
+  }
+
   const projectName = projectSelect.value;
   const baseBranch = baseBranchSelect.value;
   const prompt = promptInput.value.trim();
@@ -719,6 +818,16 @@ runButton.addEventListener("click", async () => {
 
 pullButton.addEventListener("click", pullSelectedRepository);
 pasteClipboardButton.addEventListener("click", pastePromptFromClipboard);
+manageFeaturesLink.addEventListener("click", (event) => {
+  if (isIndexLockedByFeatureAutomation()) {
+    event.preventDefault();
+    statusBox.textContent = "Feature automation is in progress. Wait for completion before navigating.";
+    return;
+  }
+
+  saveEditorState();
+  updateManageFeaturesLink();
+});
 clearStateButton.addEventListener("click", async () => {
   clearEditorState();
   await loadBranchesForSelectedProject();
@@ -753,9 +862,17 @@ runStatusFilterSelect.addEventListener("change", () => {
   });
 });
 
+setInterval(() => {
+  loadAutomationLock().catch((error) => {
+    const message = `Automation lock refresh failed: ${error.message}`;
+    statusBox.textContent = message;
+    showErrorCard(message);
+  });
+}, 3000);
+
 (async () => {
   try {
-    await Promise.all([loadProjects(), loadRuns(), loadRunningProjects()]);
+    await Promise.all([loadProjects(), loadRuns(), loadRunningProjects(), loadAutomationLock()]);
   } catch (error) {
     const message = `Initial page load failed: ${error.message}`;
     statusBox.textContent = message;
