@@ -269,6 +269,9 @@ test("compileContextBundle provides lightweight size estimates and warning notes
   assert.ok(compiled.partSizeEstimates[0].contentTokens > 0);
   assert.equal(compiled.compilerNotes.length, 1);
   assert.match(compiled.compilerNotes[0], /exceeds warning threshold/i);
+  assert.ok(Array.isArray(compiled.qualityWarnings));
+  assert.ok(compiled.qualityWarnings.some((warning) => warning.code === "oversized_bundle_estimate"));
+  assert.equal(compiled.qualityWarningSummary.total, compiled.qualityWarnings.length);
 });
 
 test("compileContextBundle truncates deterministically and preserves highest-priority prefix first", () => {
@@ -315,4 +318,67 @@ test("compileContextBundle truncates deterministically and preserves highest-pri
   assert.deepEqual(compiled.truncation.omittedPartIds, [503]);
   assert.deepEqual(compiled.truncation.partiallyTruncatedPartIds, [502]);
   assert.match(compiled.compilerNotes.join("\n"), /was truncated/i);
+});
+
+test("compileContextBundle surfaces simple advisory quality warnings", () => {
+  const compiled = compileContextBundle({
+    id: 55,
+    parts: [
+      {
+        id: 551,
+        part_type: "feature_background",
+        part_type_label: "Feature Background",
+        title: "Implementation Plan",
+        content: "Use one endpoint and one payload. Must include audit logging and retry tracking.",
+        position: 1,
+        include_in_compiled: 1
+      },
+      {
+        id: 552,
+        part_type: "user_notes",
+        part_type_label: "User Notes",
+        title: "Implementation planning",
+        content: "Use one endpoint and one payload. Must include audit logging and retry tracking.",
+        position: 2,
+        include_in_compiled: 1
+      },
+      {
+        id: 553,
+        part_type: "testing_expectations",
+        part_type_label: "Testing Expectations",
+        title: "Test Plan",
+        content: "Should include audit logging and retry tracking.",
+        position: 3,
+        include_in_compiled: 1
+      },
+      {
+        id: 554,
+        part_type: "coding_standards",
+        part_type_label: "Coding Standards",
+        title: "Safety Rules",
+        content: "Do not include audit logging and retry tracking.",
+        position: 4,
+        include_in_compiled: 1
+      },
+      {
+        id: 555,
+        part_type: "documentation_standards",
+        part_type_label: "Documentation Standards",
+        title: "Doc Notes",
+        content: "Ok.",
+        position: 5,
+        include_in_compiled: 1
+      }
+    ]
+  }, {
+    warningThresholdChars: 200
+  });
+
+  const warningCodes = compiled.qualityWarnings.map((warning) => warning.code);
+  assert.ok(warningCodes.includes("empty_high_value_section"));
+  assert.ok(warningCodes.includes("duplicate_part_content"));
+  assert.ok(warningCodes.includes("near_duplicate_titles"));
+  assert.ok(warningCodes.includes("contradictory_guidance"));
+  assert.ok(warningCodes.includes("low_signal_part_content"));
+  assert.ok(warningCodes.includes("oversized_bundle_estimate"));
 });
