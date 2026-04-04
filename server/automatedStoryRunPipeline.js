@@ -31,6 +31,14 @@ function createAutomatedStoryRunExecutor(deps = {}) {
 
   return async function executeAutomatedStoryRun(input = {}) {
     const storyId = Number.parseInt(input.storyId, 10);
+    const rawAutomationType = String(input.automationType || "").trim().toLowerCase();
+    const automationType = rawAutomationType || "story";
+    const targetId = input.targetId === null || input.targetId === undefined || input.targetId === ""
+      ? storyId
+      : Number.parseInt(input.targetId, 10);
+    const automationRunId = input.automationRunId === null || input.automationRunId === undefined || input.automationRunId === ""
+      ? null
+      : Number.parseInt(input.automationRunId, 10);
     const projectName = String(input.projectName || "").trim();
     const baseBranch = String(input.baseBranch || "").trim();
     const executionMode = String(input.executionMode || "write").trim() || "write";
@@ -44,6 +52,15 @@ function createAutomatedStoryRunExecutor(deps = {}) {
     }
     if (!baseBranch) {
       throw new Error("Base branch is required.");
+    }
+    if (!["feature", "epic", "story"].includes(automationType)) {
+      throw new Error("Automation type must be feature, epic, or story.");
+    }
+    if (!Number.isInteger(targetId) || targetId <= 0) {
+      throw new Error("Automation target id must be a positive integer.");
+    }
+    if (automationRunId !== null && (!Number.isInteger(automationRunId) || automationRunId <= 0)) {
+      throw new Error("Automation run id must be a positive integer when provided.");
     }
 
     const storyContext = await getStoryAutomationContext(storyId, {
@@ -69,7 +86,12 @@ function createAutomatedStoryRunExecutor(deps = {}) {
       prompt,
       executionMode,
       baseBranch,
-      streamId
+      streamId,
+      runOrigin: {
+        automationType,
+        targetId,
+        automationRunId
+      }
     });
 
     await attachRunToStory(storyId, runId);
@@ -79,6 +101,11 @@ function createAutomatedStoryRunExecutor(deps = {}) {
       prompt,
       runId,
       responsePayload,
+      runOrigin: {
+        automationType,
+        targetId,
+        automationRunId
+      },
       completionStatus: responsePayload?.completion_status ?? null,
       completionWork: responsePayload?.completion_work ?? null
     };

@@ -276,7 +276,8 @@ async function executeRunFlow({
   prompt,
   executionMode = "read",
   baseBranch = "main",
-  streamId = null
+  streamId = null,
+  runOrigin = null
 }) {
   const repoPath = getRepoPath(projectName);
   const runStartTime = Date.now();
@@ -303,7 +304,10 @@ async function executeRunFlow({
     runEndTime,
     gitStatus: gitSnapshot.gitStatus,
     gitStatusFiles: gitSnapshot.files,
-    gitDiffMap: gitSnapshot.diffs
+    gitDiffMap: gitSnapshot.diffs,
+    automationOriginType: runOrigin?.automationType ?? null,
+    automationOriginId: runOrigin?.targetId ?? null,
+    automationRunId: runOrigin?.automationRunId ?? null
   });
 
   publishRunEvent(streamId, { type: "run.completed", message: `Run completed and saved (#${runId}).` });
@@ -319,7 +323,10 @@ async function executeRunFlow({
     gitStatus: gitSnapshot.gitStatus,
     gitStatusFiles: gitSnapshot.files,
     gitDiffMap: gitSnapshot.diffs,
-    creditsRemaining: result.creditsRemaining
+    creditsRemaining: result.creditsRemaining,
+    automation_origin_type: runOrigin?.automationType ?? null,
+    automation_origin_id: runOrigin?.targetId ?? null,
+    automation_run_id: runOrigin?.automationRunId ?? null
   });
   responsePayload.gitStatusFiles = gitSnapshot.files;
   responsePayload.gitDiffMap = gitSnapshot.diffs;
@@ -587,7 +594,10 @@ app.post("/api/stories/:storyId/complete-with-automation", async (req, res) => {
       projectName,
       baseBranch,
       executionMode,
-      streamId
+      streamId,
+      automationType: "story",
+      targetId: storyId,
+      automationRunId: automationRunRecord?.id ?? null
     });
     const { runId, responsePayload, prompt } = runResult;
 

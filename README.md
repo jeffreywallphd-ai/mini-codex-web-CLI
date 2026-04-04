@@ -30,6 +30,7 @@ The app is designed for personal LAN use, not for public internet exposure or mu
 - Automation story execution outcome persistence for status reporting (`automation_story_executions` with run linkage and queue outcome state)
 - Sequential automation runner for server-driven queue execution (`server/automationRunner.js`)
 - Shared automated story run pipeline that reuses manual run creation/execution persistence (`server/automatedStoryRunPipeline.js`)
+- Automated run-origin linkage persisted on each run (`automation_origin_type`, `automation_origin_id`, `automation_run_id`) for feature/epic/story traceability
 - SQLite storage with no external database
 - Mobile-friendly, lightweight UI intended for LAN access
 
@@ -179,6 +180,12 @@ Shared automation planning rules are defined in `server/automationQueue.js`.
   - `run_id` (linked run when available)
   - `completion_status` and `completion_work` (when available)
   - `error` (failure detail when execution failed)
+- Automated runs also persist origin linkage directly in `runs`:
+  - `automation_origin_type` (`feature`, `epic`, or `story`)
+  - `automation_origin_id` (selected planning entity id)
+  - `automation_run_id` (orchestration run id when available)
+  This keeps existing run records backward-compatible while allowing frontend
+  queries from execution results back to planning scope.
 
 ## Automation Execution Runner
 
