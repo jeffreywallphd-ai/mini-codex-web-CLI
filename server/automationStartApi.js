@@ -200,6 +200,50 @@ function getRemainingQueueStories(persistedQueueStories = [], storyExecutions = 
   });
 }
 
+function resolveStoryProgressPosition({
+  storyResult,
+  queueState,
+  totalStoriesInRunQueue,
+  fallbackPosition
+}) {
+  const normalizedTotalStories = Number.isInteger(totalStoriesInRunQueue) && totalStoriesInRunQueue > 0
+    ? totalStoriesInRunQueue
+    : 0;
+  const normalizedFallback = Number.isInteger(fallbackPosition) && fallbackPosition > 0
+    ? fallbackPosition
+    : 1;
+  const storyPosition = Number.parseInt(storyResult?.positionInQueue, 10);
+  const hasStoryPosition = Number.isInteger(storyPosition) && storyPosition > 0;
+  const queueAction = String(storyResult?.queueAction || "").trim().toLowerCase();
+  const stopReason = String(queueState?.stopReason || "").trim().toLowerCase();
+
+  if (normalizedTotalStories <= 0) {
+    return 1;
+  }
+
+  if (!hasStoryPosition) {
+    return Math.min(normalizedTotalStories, normalizedFallback);
+  }
+
+  if (queueAction === "advanced") {
+    return Math.min(normalizedTotalStories, Math.max(1, storyPosition + 1));
+  }
+
+  if (queueAction === "failed") {
+    return Math.min(normalizedTotalStories, Math.max(1, storyPosition));
+  }
+
+  if (queueAction === "stopped") {
+    if (stopReason === "manual_stop") {
+      return Math.min(normalizedTotalStories, Math.max(1, storyPosition + 1));
+    }
+
+    return Math.min(normalizedTotalStories, Math.max(1, storyPosition));
+  }
+
+  return Math.min(normalizedTotalStories, Math.max(1, storyPosition));
+}
+
 function getActiveAutomationConflictPayload(activeAutomation) {
   if (!activeAutomation) {
     return null;
@@ -623,7 +667,7 @@ function createAutomationStartRouter(deps = {}) {
             logger.error("automation progress update failed:", error);
           }
         },
-        onStoryResult: async (storyResult) => {
+        onStoryResult: async (storyResult, queueState) => {
           const runtimeState = activeStoryRuntimeByAutomationRunId.get(automationRun.id) || {};
           activeStoryRuntimeByAutomationRunId.set(automationRun.id, {
             ...runtimeState,
@@ -667,6 +711,19 @@ function createAutomationStartRouter(deps = {}) {
             });
           } catch (error) {
             logger.error("automation story execution persistence failed:", error);
+          }
+
+          try {
+            await updateAutomationRunMetadata(automationRun.id, {
+              currentPosition: resolveStoryProgressPosition({
+                storyResult,
+                queueState,
+                totalStoriesInRunQueue: normalizedTotalStoriesInRunQueue,
+                fallbackPosition: normalizedInitialPosition
+              })
+            });
+          } catch (error) {
+            logger.error("automation story progress location update failed:", error);
           }
         }
       });
@@ -1145,6 +1202,7 @@ function createAutomationStartRouter(deps = {}) {
       const stoppedExecutions = latestExecutions.filter((execution) => execution.queue_action === "stopped");
       const processedStories = latestExecutions.length;
       const totalStories = effectiveQueueStories.length;
+      const remainingQueueStories = getRemainingQueueStories(effectiveQueueStories, storyExecutions);
       const currentStory = automationRun.automation_status === "running"
         ? (effectiveQueueStories[automationRun.current_position - 1] || null)
         : null;
@@ -1176,7 +1234,7 @@ function createAutomationStartRouter(deps = {}) {
         queue: {
           totalStories,
           processedStories,
-          remainingStories: Math.max(0, totalStories - processedStories),
+          remainingStories: remainingQueueStories.length,
           currentPosition: automationRun.current_position,
           currentItem
         },

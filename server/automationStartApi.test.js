@@ -561,6 +561,12 @@ test("automation run stops with merge_failed when auto-merge fails for a story",
   assert.equal(finalEvent?.payload?.status, "failed");
   assert.equal(finalEvent?.payload?.stopReason, "merge_failed");
   assert.match(String(finalEvent?.payload?.error || ""), /merge conflict/i);
+
+  const failedPositionUpdate = harness.calls.updateAutomationRunMetadata.find(
+    (call) => Number(call.automationRunId) === Number(automationRunId)
+      && Number(call?.updates?.currentPosition) === 1
+  );
+  assert.ok(failedPositionUpdate);
 });
 
 test("feature automation executes stories in the same deterministic order returned by queue generation", async () => {
@@ -1319,6 +1325,114 @@ test("status endpoint derives queue progress from persisted run queue snapshot",
     assert.equal(payload.completedSteps.length, 1);
     assert.equal(payload.completedSteps[0].storyId, 701);
     assert.equal(payload.completedSteps[0].storyTitle, "Persisted Story 701");
+  });
+});
+
+test("status endpoint keeps failed queue items in remaining work while tracking processed attempts", async () => {
+  const harness = createServerHarness({
+    getAutomationRunById: async (automationRunId) => ({
+      id: Number(automationRunId),
+      automation_type: "feature",
+      target_id: 100,
+      project_name: "demo-project",
+      base_branch: "main",
+      stop_on_incomplete: 0,
+      stop_flag: 1,
+      current_position: 2,
+      automation_status: "failed",
+      stop_reason: "execution_failed",
+      failed_story_id: 702,
+      failure_summary: "Prompt generation failed",
+      created_at: "2026-04-04T00:00:00.000Z",
+      updated_at: "2026-04-04T00:02:00.000Z"
+    }),
+    getAutomationRunQueueItemsByRunId: async () => ([
+      {
+        id: 501,
+        automationRunId: 3901,
+        positionInQueue: 1,
+        featureId: 100,
+        featureTitle: "Feature 100",
+        epicId: 201,
+        epicTitle: "Epic 201",
+        storyId: 701,
+        storyTitle: "Persisted Story 701",
+        storyDescription: "Persisted snapshot item 1",
+        storyCreatedAt: "2026-01-01T10:00:00.000Z",
+        createdAt: "2026-04-04T00:00:00.000Z"
+      },
+      {
+        id: 502,
+        automationRunId: 3901,
+        positionInQueue: 2,
+        featureId: 100,
+        featureTitle: "Feature 100",
+        epicId: 201,
+        epicTitle: "Epic 201",
+        storyId: 702,
+        storyTitle: "Persisted Story 702",
+        storyDescription: "Persisted snapshot item 2",
+        storyCreatedAt: "2026-01-01T10:01:00.000Z",
+        createdAt: "2026-04-04T00:00:00.000Z"
+      },
+      {
+        id: 503,
+        automationRunId: 3901,
+        positionInQueue: 3,
+        featureId: 100,
+        featureTitle: "Feature 100",
+        epicId: 201,
+        epicTitle: "Epic 201",
+        storyId: 703,
+        storyTitle: "Persisted Story 703",
+        storyDescription: "Persisted snapshot item 3",
+        storyCreatedAt: "2026-01-01T10:02:00.000Z",
+        createdAt: "2026-04-04T00:00:00.000Z"
+      }
+    ]),
+    getAutomationStoryExecutionsByRunId: async () => ([
+      {
+        id: 601,
+        automation_run_id: 3901,
+        story_id: 701,
+        position_in_queue: 1,
+        execution_status: "completed",
+        queue_action: "advanced",
+        run_id: 901,
+        completion_status: "complete",
+        completion_work: "none",
+        error: null,
+        created_at: "2026-04-04T00:00:30.000Z"
+      },
+      {
+        id: 602,
+        automation_run_id: 3901,
+        story_id: 702,
+        position_in_queue: 2,
+        execution_status: "failed",
+        queue_action: "failed",
+        run_id: null,
+        completion_status: "unknown",
+        completion_work: null,
+        error: "Prompt generation failed",
+        created_at: "2026-04-04T00:00:50.000Z"
+      }
+    ])
+  });
+
+  await withServer(harness, async (baseUrl) => {
+    const response = await fetch(`${baseUrl}/api/automation/status/3901`);
+    assert.equal(response.status, 200);
+    const payload = await response.json();
+
+    assert.equal(payload.queue.totalStories, 3);
+    assert.equal(payload.queue.processedStories, 2);
+    assert.equal(payload.queue.remainingStories, 2);
+    assert.equal(payload.summary.completedCount, 1);
+    assert.equal(payload.summary.failedCount, 1);
+    assert.equal(payload.completedSteps.length, 1);
+    assert.equal(payload.failedSteps.length, 1);
+    assert.equal(payload.failedSteps[0].storyId, 702);
   });
 });
 

@@ -381,6 +381,9 @@ Automation status response (`200 OK`) includes polling-friendly state:
 - queue progress is derived from persisted `automation_run_queue_items` plus
   persisted story execution outcomes, so refresh/restart does not depend on
   reconstructing queue state from mutable feature tree data
+- `remainingStories` is derived from persisted queue positions that have not
+  reached a persisted `completed` execution outcome yet, so failed attempts stay
+  visible as remaining work for restart decisions
 - queue snapshots are normalized by `position_in_queue` before calculating
   current/remaining items to avoid relying on accidental row order
 - `summary` (completed/failed/stopped execution counts)
