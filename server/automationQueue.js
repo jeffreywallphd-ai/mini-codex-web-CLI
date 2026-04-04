@@ -33,7 +33,7 @@ const QUEUE_BUILD_STATUS = Object.freeze({
 const DEFAULT_AUTOMATION_RULES = Object.freeze({
   ordering: {
     strategy: "original-creation-asc-stable",
-    keys: ["created_at", "id", "order"]
+    keys: ["created_at", "order", "id"]
   },
   scopes: {
     [AUTOMATION_SCOPE.FEATURE]: {
@@ -118,20 +118,20 @@ function withStableCreationOrdering(items) {
       item,
       index,
       createdAt: toTimestampKey(item?.created_at),
-      id: toIdKey(item?.id),
-      order: toOrderKey(item?.order)
+      order: toOrderKey(item?.order),
+      id: toIdKey(item?.id)
     }))
     .sort((a, b) => {
       if (a.createdAt !== b.createdAt) {
         return a.createdAt - b.createdAt;
       }
 
-      if (a.id !== b.id) {
-        return a.id - b.id;
-      }
-
       if (a.order !== b.order) {
         return a.order - b.order;
+      }
+
+      if (a.id !== b.id) {
+        return a.id - b.id;
       }
 
       return a.index - b.index;

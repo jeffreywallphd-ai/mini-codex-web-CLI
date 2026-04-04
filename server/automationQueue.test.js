@@ -88,6 +88,16 @@ test("withStableCreationOrdering sorts by created_at then id", () => {
   assert.deepEqual(result.map((item) => item.id), [3, 1, 2]);
 });
 
+test("withStableCreationOrdering uses explicit order before id when creation timestamps match", () => {
+  const result = withStableCreationOrdering([
+    { id: 22, order: 3, created_at: "2026-01-01T10:00:00.000Z" },
+    { id: 11, order: 2, created_at: "2026-01-01T10:00:00.000Z" },
+    { id: 33, order: 1, created_at: "2026-01-01T10:00:00.000Z" }
+  ]);
+
+  assert.deepEqual(result.map((item) => item.id), [33, 11, 22]);
+});
+
 test("feature automation queues all stories in feature epic/story creation order", () => {
   const plan = defineAutomationExecutionPlan(
     FEATURES_FIXTURE,

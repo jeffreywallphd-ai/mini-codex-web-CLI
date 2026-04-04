@@ -145,6 +145,13 @@ Shared automation planning rules are defined in `server/automationQueue.js`.
   queues, a flattened list of stories with `positionInQueue`, and
   `queueStatus` (`ready`, `target_not_found`, `empty_queue`, `target_ineligible`, `validation_failed`)
   so invalid/empty/ineligible queue states are surfaced cleanly.
+- Queue traversal order is deterministic and stable for both queue planning and
+  execution handoff:
+  - feature automation processes epics in original creation order
+  - feature/epic automation process stories in original creation order within
+    each epic
+  - tie-breaks use explicit `order` (when present) and then id so ordering does
+    not depend on accidental database return order
 - Automation eligibility is intentionally simple: a story is eligible when it is
   not marked `complete`; completed stories are filtered out of feature/epic
   queues and story-target automation rejects completed stories.
