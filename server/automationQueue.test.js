@@ -2,6 +2,7 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 
 const {
+  QUEUE_BUILD_STATUS,
   AUTOMATION_SCOPE,
   AUTOMATION_STOP_REASON,
   DEFAULT_AUTOMATION_RULES,
@@ -66,6 +67,7 @@ const FEATURES_FIXTURE = [
           {
             id: 111,
             name: "Story 1.1.1",
+            description: "Implement queue ordering helper.",
             created_at: "2026-01-01T09:06:00.000Z",
             completion_status: "complete"
           }
@@ -104,6 +106,8 @@ test("feature automation queues all stories in feature epic/story creation order
     plan.stories.map((story) => story.positionInQueue),
     [1, 2, 3]
   );
+  assert.equal(plan.queueStatus?.isValid, true);
+  assert.equal(plan.queueStatus?.code, QUEUE_BUILD_STATUS.READY);
 });
 
 test("epic automation queues only selected epic stories in story creation order", () => {
@@ -137,9 +141,31 @@ test("story automation queues only the selected story", () => {
   assert.equal(plan.stories.length, 1);
   assert.equal(plan.stories[0].storyId, 121);
   assert.equal(plan.stories[0].positionInQueue, 1);
+  assert.equal(plan.stories[0].automationType, AUTOMATION_SCOPE.STORY);
+  assert.equal(plan.stories[0].targetId, "121");
 });
 
-test("buildScopedStoryExecutionQueue returns empty queue when target is not found", () => {
+test("queue items include execution and status metadata needed for reporting", () => {
+  const queueResult = buildScopedStoryExecutionQueue(
+    FEATURES_FIXTURE,
+    {
+      automationType: AUTOMATION_SCOPE.EPIC,
+      targetId: 11
+    }
+  );
+
+  const firstStory = queueResult.stories[0];
+  assert.equal(firstStory.automationType, AUTOMATION_SCOPE.EPIC);
+  assert.equal(firstStory.targetId, "11");
+  assert.equal(firstStory.featureId, 1);
+  assert.equal(firstStory.epicId, 11);
+  assert.equal(firstStory.storyId, 111);
+  assert.equal(firstStory.storyDescription, "Implement queue ordering helper.");
+  assert.equal(typeof firstStory.storyCreatedAt, "string");
+  assert.equal(firstStory.completionStatus, "complete");
+});
+
+test("buildScopedStoryExecutionQueue surfaces target-not-found cleanly", () => {
   const queueResult = buildScopedStoryExecutionQueue(
     FEATURES_FIXTURE,
     {
@@ -150,6 +176,45 @@ test("buildScopedStoryExecutionQueue returns empty queue when target is not foun
 
   assert.deepEqual(queueResult.queues, []);
   assert.deepEqual(queueResult.stories, []);
+  assert.deepEqual(queueResult.queueStatus, {
+    isValid: false,
+    code: QUEUE_BUILD_STATUS.TARGET_NOT_FOUND,
+    message: "No epic found for target '999'."
+  });
+});
+
+test("buildScopedStoryExecutionQueue surfaces empty queue when scope has no stories", () => {
+  const featuresWithEmptyEpic = [
+    {
+      id: 1,
+      name: "Feature 1",
+      created_at: "2026-01-01T09:00:00.000Z",
+      epics: [
+        {
+          id: 11,
+          name: "Epic 1.1",
+          created_at: "2026-01-01T09:05:00.000Z",
+          stories: []
+        }
+      ]
+    }
+  ];
+
+  const queueResult = buildScopedStoryExecutionQueue(
+    featuresWithEmptyEpic,
+    {
+      automationType: AUTOMATION_SCOPE.EPIC,
+      targetId: 11
+    }
+  );
+
+  assert.deepEqual(queueResult.queues, []);
+  assert.deepEqual(queueResult.stories, []);
+  assert.deepEqual(queueResult.queueStatus, {
+    isValid: false,
+    code: QUEUE_BUILD_STATUS.EMPTY_QUEUE,
+    message: "No runnable stories found for epic '11'."
+  });
 });
 
 test("default automation rules define explicit scope and stop-rule contract", () => {

@@ -136,7 +136,16 @@ Shared automation planning rules are defined in `server/automationQueue.js`.
 - `defineAutomationExecutionPlan(features, selection, overrides)` builds a
   scope-aware plan for a selected `automationType` + `targetId`.
 - `buildScopedStoryExecutionQueue(features, selection)` returns deterministic
-  queues and a flattened list of stories with `positionInQueue`.
+  queues, a flattened list of stories with `positionInQueue`, and
+  `queueStatus` (`ready`, `target_not_found`, `empty_queue`) so invalid/empty
+  queue states are surfaced cleanly.
+- Queue story items include execution/reporting metadata:
+  - `automationType`
+  - `targetId`
+  - `featureId`, `epicId`, `storyId`
+  - `featureTitle`, `epicTitle`, `storyTitle`
+  - `storyDescription`, `storyCreatedAt`
+  - `completionStatus`
 - `evaluateAutomationStopCondition(event, rules)` supports these stop outcomes:
   - run complete (`queue_complete` -> `all_work_complete`)
   - execution failure (`execution_failed` -> `execution_failed`)
