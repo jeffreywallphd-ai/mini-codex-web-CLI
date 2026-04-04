@@ -19,6 +19,7 @@ const incompleteListContainer = document.getElementById("incompleteListContainer
 const completeListContainer = document.getElementById("completeListContainer");
 const scopeHint = document.getElementById("scopeHint");
 const EDITOR_STATE_KEY = "mini-codex-editor-state";
+const AUTOMATION_UI_STATE_KEY = "mini-codex-feature-automation-ui-state";
 
 let allFeatures = [];
 const featureAutomationStartInFlight = new Set();
@@ -74,6 +75,90 @@ function getEditorState() {
   } catch (error) {
     return {};
   }
+}
+
+function getAutomationUiState() {
+  const rawState = localStorage.getItem(AUTOMATION_UI_STATE_KEY);
+  if (!rawState) return {};
+
+  try {
+    const parsed = JSON.parse(rawState);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return {};
+    }
+    return parsed;
+  } catch (error) {
+    return {};
+  }
+}
+
+function saveAutomationUiState(nextState) {
+  localStorage.setItem(AUTOMATION_UI_STATE_KEY, JSON.stringify(nextState || {}));
+}
+
+function getAutomationScopeKey(scope = {}) {
+  const projectName = String(scope.projectName || "").trim();
+  const baseBranch = String(scope.baseBranch || "").trim();
+  if (!projectName || !baseBranch) {
+    return "";
+  }
+  return `${projectName}::${baseBranch}`;
+}
+
+function readPersistedAutomationState(scope = automationScope) {
+  const scopeKey = getAutomationScopeKey(scope);
+  if (!scopeKey) {
+    return null;
+  }
+
+  const state = getAutomationUiState();
+  const value = state[scopeKey];
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return null;
+  }
+  return value;
+}
+
+function persistAutomationStateSnapshot(scope = automationScope, updates = {}) {
+  const scopeKey = getAutomationScopeKey(scope);
+  if (!scopeKey) {
+    return;
+  }
+
+  const state = getAutomationUiState();
+  const currentScopeState = readPersistedAutomationState(scope) || {};
+  const mergedScopeState = {
+    ...currentScopeState,
+    ...updates
+  };
+
+  state[scopeKey] = mergedScopeState;
+  saveAutomationUiState(state);
+}
+
+function parsePersistedAutomationRunId(scope = automationScope) {
+  const persistedState = readPersistedAutomationState(scope);
+  const persistedRunId = Number.parseInt(persistedState?.lastAutomationRunId, 10);
+  if (!Number.isInteger(persistedRunId) || persistedRunId <= 0) {
+    return null;
+  }
+  return persistedRunId;
+}
+
+function hydrateAutomationStatusFromPersistence() {
+  const persistedState = readPersistedAutomationState();
+  if (!persistedState) {
+    globalAutomationStatus = null;
+    return;
+  }
+
+  const statusSnapshot = persistedState.lastAutomationStatus;
+  if (!statusSnapshot || typeof statusSnapshot !== "object" || Array.isArray(statusSnapshot)) {
+    globalAutomationStatus = null;
+    return;
+  }
+
+  globalAutomationStatus = statusSnapshot;
 }
 
 function readScopeFromUrlOrState() {
@@ -1320,14 +1405,23 @@ async function loadAutomationLock() {
   }
 
   globalAutomationLock = result;
+  const activeRunId = Number.parseInt(result?.automationRunId, 10);
+  if (result?.isActive && Number.isInteger(activeRunId) && activeRunId > 0) {
+    persistAutomationStateSnapshot(automationScope, {
+      lastAutomationRunId: activeRunId
+    });
+  }
 }
 
 async function loadAutomationStatus() {
-  globalAutomationStatus = null;
+  const activeRunId = Number.parseInt(globalAutomationLock?.automationRunId, 10);
+  const persistedRunId = parsePersistedAutomationRunId(automationScope);
+  const runId = Number.isInteger(activeRunId) && activeRunId > 0
+    ? activeRunId
+    : persistedRunId;
 
-  const runId = Number.parseInt(globalAutomationLock?.automationRunId, 10);
-  const shouldLoadStatus = Boolean(globalAutomationLock?.isActive) && Number.isInteger(runId) && runId > 0;
-  if (!shouldLoadStatus) {
+  if (!Number.isInteger(runId) || runId <= 0) {
+    globalAutomationStatus = null;
     return;
   }
 
@@ -1338,6 +1432,17 @@ async function loadAutomationStatus() {
   }
 
   globalAutomationStatus = result;
+  const statusRunId = Number.parseInt(result?.automationRun?.id, 10);
+  const statusScope = {
+    projectName: String(result?.automationRun?.projectName || automationScope.projectName || "").trim(),
+    baseBranch: String(result?.automationRun?.baseBranch || automationScope.baseBranch || "").trim()
+  };
+  if (Number.isInteger(statusRunId) && statusRunId > 0) {
+    persistAutomationStateSnapshot(statusScope, {
+      lastAutomationRunId: statusRunId,
+      lastAutomationStatus: result
+    });
+  }
 }
 
 async function refreshAutomationState() {
@@ -1486,7 +1591,9 @@ setInterval(() => {
     wireStaticCardToggle(manifestCardToggle, manifestCardContent, { defaultOpen: false });
     automationScope = readScopeFromUrlOrState();
     syncScopeIntoEditorState(automationScope);
+    hydrateAutomationStatusFromPersistence();
     renderScopeHint();
+    renderFeatureLists();
     await reloadAllData();
     await refreshAutomationState();
     renderDrafts();

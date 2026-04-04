@@ -174,10 +174,25 @@ test("frontend polls automation status endpoint using active backend automation 
   const source = readFeaturesScript();
 
   assert.match(source, /async function loadAutomationStatus\(\)/);
-  assert.match(source, /const runId = Number\.parseInt\(globalAutomationLock\?\.automationRunId,\s*10\);/);
+  assert.match(source, /const activeRunId = Number\.parseInt\(globalAutomationLock\?\.automationRunId,\s*10\);/);
+  assert.match(source, /const persistedRunId = parsePersistedAutomationRunId\(automationScope\);/);
+  assert.match(source, /const runId = Number\.isInteger\(activeRunId\) && activeRunId > 0\s*\?\s*activeRunId\s*:\s*persistedRunId;/m);
   assert.match(source, /fetch\(`\/api\/automation\/status\/\$\{encodeURIComponent\(String\(runId\)\)\}`\)/);
   assert.match(source, /globalAutomationStatus = result;/);
   assert.match(source, /await loadAutomationLock\(\);\s*await loadAutomationStatus\(\);\s*renderFeatureLists\(\);/m);
+});
+
+test("feature automation UI persists latest run id and cached status for refresh recovery", () => {
+  const source = readFeaturesScript();
+
+  assert.match(source, /const AUTOMATION_UI_STATE_KEY = "mini-codex-feature-automation-ui-state";/);
+  assert.match(source, /function parsePersistedAutomationRunId\(scope = automationScope\)/);
+  assert.match(source, /function hydrateAutomationStatusFromPersistence\(\)/);
+  assert.match(source, /const statusSnapshot = persistedState\.lastAutomationStatus;/);
+  assert.match(source, /globalAutomationStatus = statusSnapshot;/);
+  assert.match(source, /persistAutomationStateSnapshot\(automationScope,\s*\{\s*lastAutomationRunId:\s*activeRunId\s*\}\);/m);
+  assert.match(source, /persistAutomationStateSnapshot\(statusScope,\s*\{\s*lastAutomationRunId:\s*statusRunId,\s*lastAutomationStatus:\s*result\s*\}\);/m);
+  assert.match(source, /hydrateAutomationStatusFromPersistence\(\);\s*renderScopeHint\(\);\s*renderFeatureLists\(\);/m);
 });
 
 test("automation status and history expose run-details links with graceful fallback", () => {

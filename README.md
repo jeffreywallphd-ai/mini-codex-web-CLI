@@ -277,6 +277,7 @@ Feature Management UI integration:
 - feature cards include a compact automation status summary badge sourced from backend feature automation state (`not_started`, `running`, `completed`, `stopped`, `failed`) with graceful fallback to `not_started` when status data is missing
 - running feature/epic automation summaries include a concise `Current story` line sourced from `GET /api/automation/status/:automationRunId` queue status data (`queue.currentItem`)
 - feature/epic/story automation summaries and recent execution history include run-details links (`/run-details.html?id=<runId>`) when run ids are available, with a graceful `Run details unavailable` fallback when they are not
+- feature automation UI stores a lightweight per-scope (`projectName` + `baseBranch`) snapshot of the latest automation run id and status payload in `localStorage`, allowing cards to recover recent automation context after page refresh without introducing a client-side state library
 - the button is hidden for completed features and replaced with a lightweight hint when no incomplete stories are available in the feature
 - incomplete epic cards surface a **Complete with Automation** button
 - the epic button starts automation via `POST /api/automation/start/epic/:epicId`
@@ -299,6 +300,7 @@ Automation status response (`200 OK`) includes polling-friendly state:
 - `summary` (completed/failed/stopped execution counts)
 - `completedSteps` and `failedSteps` (per-story summarized outcomes with run linkage)
 - `finalResult` (`status` + `stopReason`) when automation is no longer running
+- when no active automation lock exists, the feature page can still request the last persisted run id for the selected scope to recover recent completed/stopped status details after refresh
 
 Automation stop behavior (`POST /api/automation/stop/:automationRunId`):
 
