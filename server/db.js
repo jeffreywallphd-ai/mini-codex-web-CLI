@@ -13,7 +13,7 @@ const dbPath = path.resolve(dataDir, "app.db");
 const db = new sqlite3.Database(dbPath);
 db.run("PRAGMA foreign_keys = ON");
 
-const LATEST_SCHEMA_VERSION = 17;
+const LATEST_SCHEMA_VERSION = 18;
 const VALID_AUTOMATION_TYPES = new Set(["feature", "epic", "story"]);
 const VALID_AUTOMATION_STATUSES = new Set(["pending", "running", "completed", "failed", "stopped"]);
 const VALID_AUTOMATION_STORY_EXECUTION_STATUSES = new Set(["completed", "failed"]);
@@ -165,7 +165,14 @@ async function detectVersionFromSchema() {
                     const hasActiveTargetIndex = await indexExists("idx_automation_runs_active_target");
                     const hasContextBundleTables = await tableExists("context_bundles")
                       && await tableExists("context_bundle_parts");
-                    if (hasContextBundleTables) return 17;
+                    if (hasContextBundleTables) {
+                      const hasBundleMetadata = await columnExists("context_bundles", "intended_use")
+                        && await columnExists("context_bundles", "tags")
+                        && await columnExists("context_bundles", "project_name")
+                        && await columnExists("context_bundles", "summary");
+                      if (hasBundleMetadata) return 18;
+                      return 17;
+                    }
                     if (hasActiveTargetIndex) return 16;
                     return 15;
                   }
@@ -482,6 +489,10 @@ async function migrateToV17() {
       title TEXT NOT NULL,
       description TEXT NOT NULL DEFAULT '',
       status TEXT NOT NULL DEFAULT 'draft',
+      intended_use TEXT,
+      tags TEXT,
+      project_name TEXT,
+      summary TEXT,
       token_estimate INTEGER,
       is_active INTEGER,
       last_used_at DATETIME,
@@ -514,6 +525,13 @@ async function migrateToV17() {
     CREATE INDEX IF NOT EXISTS idx_context_bundle_parts_bundle_position
     ON context_bundle_parts(bundle_id, position, id)
   `);
+}
+
+async function migrateToV18() {
+  await ensureColumn("context_bundles", "intended_use", "TEXT");
+  await ensureColumn("context_bundles", "tags", "TEXT");
+  await ensureColumn("context_bundles", "project_name", "TEXT");
+  await ensureColumn("context_bundles", "summary", "TEXT");
 }
 
 async function runMigrations() {
@@ -623,6 +641,12 @@ async function runMigrations() {
     await setSchemaVersion(version);
   }
 
+  if (version < 18) {
+    await migrateToV18();
+    version = 18;
+    await setSchemaVersion(version);
+  }
+
   if (version > LATEST_SCHEMA_VERSION) {
     throw new Error(`Unsupported schema version ${version}. Latest supported is ${LATEST_SCHEMA_VERSION}.`);
   }
@@ -669,6 +693,69 @@ function normalizePositiveInteger(value, fieldName) {
   return parsed;
 }
 
+function normalizeNullableText(value) {
+  if (typeof value !== "string") {
+    return null;
+  }
+
+  const normalized = value.trim();
+  return normalized ? normalized : null;
+}
+
+function normalizeBundleTags(value) {
+  if (value === null || value === undefined || value === "") {
+    return null;
+  }
+
+  const sourceTags = Array.isArray(value)
+    ? value
+    : String(value).split(",");
+  const normalizedTags = [...new Set(
+    sourceTags
+      .map((tag) => (typeof tag === "string" ? tag.trim() : ""))
+      .filter(Boolean)
+  )];
+
+  if (normalizedTags.length <= 0) {
+    return null;
+  }
+
+  return JSON.stringify(normalizedTags);
+}
+
+function parseBundleTags(value) {
+  if (typeof value !== "string" || !value.trim()) {
+    return [];
+  }
+
+  try {
+    const parsed = JSON.parse(value);
+    if (Array.isArray(parsed)) {
+      return parsed
+        .map((tag) => (typeof tag === "string" ? tag.trim() : ""))
+        .filter(Boolean);
+    }
+  } catch (error) {
+    // Preserve backward compatibility with any legacy comma-separated values.
+  }
+
+  return value
+    .split(",")
+    .map((tag) => tag.trim())
+    .filter(Boolean);
+}
+
+function decorateContextBundle(bundle) {
+  if (!bundle || typeof bundle !== "object") {
+    return bundle;
+  }
+
+  return {
+    ...bundle,
+    tags: parseBundleTags(bundle.tags)
+  };
+}
+
 function decorateContextBundlePart(part) {
   if (!part || typeof part !== "object") {
     return part;
@@ -686,6 +773,10 @@ async function createContextBundle(input = {}) {
   const title = String(input.title || "").trim();
   const description = typeof input.description === "string" ? input.description.trim() : "";
   const status = String(input.status || "draft").trim().toLowerCase();
+  const intendedUse = normalizeNullableText(input.intendedUse ?? input.intended_use);
+  const tags = normalizeBundleTags(input.tags);
+  const projectName = normalizeNullableText(input.projectName ?? input.project_name);
+  const summary = normalizeNullableText(input.summary);
   const tokenEstimate = normalizeNullableInteger(input.tokenEstimate, "Bundle token estimate");
   const isActive = normalizeNullableFlag(input.isActive, "Bundle active flag");
   const lastUsedAt = typeof input.lastUsedAt === "string" && input.lastUsedAt.trim()
@@ -707,13 +798,17 @@ async function createContextBundle(input = {}) {
         title,
         description,
         status,
+        intended_use,
+        tags,
+        project_name,
+        summary,
         token_estimate,
         is_active,
         last_used_at
       )
-      VALUES (?, ?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `,
-    [title, description, status, tokenEstimate, isActive, lastUsedAt]
+    [title, description, status, intendedUse, tags, projectName, summary, tokenEstimate, isActive, lastUsedAt]
   );
 
   return getContextBundleById(id);
@@ -734,6 +829,10 @@ async function getContextBundleById(id, options = {}) {
         title,
         description,
         status,
+        intended_use,
+        tags,
+        project_name,
+        summary,
         token_estimate,
         is_active,
         last_used_at,
@@ -750,12 +849,12 @@ async function getContextBundleById(id, options = {}) {
   }
 
   if (options.includeParts === false) {
-    return bundle;
+    return decorateContextBundle(bundle);
   }
 
   const parts = await getContextBundlePartsByBundleId(bundle.id);
   return {
-    ...bundle,
+    ...decorateContextBundle(bundle),
     parts
   };
 }
@@ -770,6 +869,10 @@ async function getContextBundles(options = {}) {
         title,
         description,
         status,
+        intended_use,
+        tags,
+        project_name,
+        summary,
         token_estimate,
         is_active,
         last_used_at,
@@ -781,7 +884,7 @@ async function getContextBundles(options = {}) {
   );
 
   if (options.includeParts === false || bundles.length <= 0) {
-    return bundles;
+    return bundles.map((bundle) => decorateContextBundle(bundle));
   }
 
   const bundleIds = bundles.map((bundle) => bundle.id);
@@ -818,7 +921,7 @@ async function getContextBundles(options = {}) {
   }
 
   return bundles.map((bundle) => ({
-    ...bundle,
+    ...decorateContextBundle(bundle),
     parts: partsByBundleId.get(bundle.id) || []
   }));
 }
@@ -851,6 +954,28 @@ async function updateContextBundle(id, updates = {}) {
     }
     clauses.push("status = ?");
     params.push(status);
+  }
+
+  if (Object.prototype.hasOwnProperty.call(updates, "intendedUse")
+    || Object.prototype.hasOwnProperty.call(updates, "intended_use")) {
+    clauses.push("intended_use = ?");
+    params.push(normalizeNullableText(updates.intendedUse ?? updates.intended_use));
+  }
+
+  if (Object.prototype.hasOwnProperty.call(updates, "tags")) {
+    clauses.push("tags = ?");
+    params.push(normalizeBundleTags(updates.tags));
+  }
+
+  if (Object.prototype.hasOwnProperty.call(updates, "projectName")
+    || Object.prototype.hasOwnProperty.call(updates, "project_name")) {
+    clauses.push("project_name = ?");
+    params.push(normalizeNullableText(updates.projectName ?? updates.project_name));
+  }
+
+  if (Object.prototype.hasOwnProperty.call(updates, "summary")) {
+    clauses.push("summary = ?");
+    params.push(normalizeNullableText(updates.summary));
   }
 
   if (Object.prototype.hasOwnProperty.call(updates, "tokenEstimate")) {

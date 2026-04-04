@@ -13,6 +13,11 @@ const {
   updateRunMerge,
   createFeatureTree,
   getFeaturesTree,
+  createContextBundle,
+  getContextBundleById,
+  getContextBundles,
+  updateContextBundle,
+  deleteContextBundleById,
   getStoryAutomationContext,
   attachRunToStory,
   syncStoryCompletionFromRun,
@@ -33,6 +38,7 @@ const {
 const { createAutomatedStoryRunExecutor } = require("./automatedStoryRunPipeline");
 const { createCodexBranch, getGitSnapshot, listLocalBranches, mergeBranch, pullRepository } = require("./git");
 const { createAutomationStartRouter } = require("./automationStartApi");
+const { createContextBundlesRouter } = require("./contextBundlesApi");
 
 const app = express();
 app.use(cors());
@@ -399,6 +405,14 @@ app.use("/api/automation", createAutomationStartRouter({
   setActiveAutomation: (nextAutomation) => {
     activeFeatureAutomation = nextAutomation;
   }
+}));
+
+app.use("/api/context-bundles", createContextBundlesRouter({
+  createContextBundle,
+  getContextBundleById,
+  getContextBundles,
+  updateContextBundle,
+  deleteContextBundleById
 }));
 
 app.get("/api/projects", (req, res) => {

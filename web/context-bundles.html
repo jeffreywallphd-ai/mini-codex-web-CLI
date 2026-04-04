@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Context Bundles - Codex LAN</title>
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <main>
+    <div class="page-actions">
+      <a class="nav-link-button secondary-button" href="/">Back to Editor</a>
+    </div>
+
+    <h1>Context Bundles</h1>
+    <p class="page-copy">Author reusable bundle metadata for better run-time context selection.</p>
+
+    <section class="panel stack-gap">
+      <h2>Bundle Metadata Authoring</h2>
+      <div id="bundleStatusBox">Ready.</div>
+      <p id="editingHint" class="inline-hint">Creating a new bundle.</p>
+
+      <label for="bundleTitleInput">Title</label>
+      <input id="bundleTitleInput" type="text" placeholder="Bundle title" />
+
+      <label for="bundleDescriptionInput">Description</label>
+      <textarea id="bundleDescriptionInput" rows="3" placeholder="Bundle description"></textarea>
+
+      <label for="bundleStatusInput">Status</label>
+      <select id="bundleStatusInput">
+        <option value="draft">draft</option>
+        <option value="active">active</option>
+        <option value="archived">archived</option>
+      </select>
+
+      <label for="bundleIntendedUseInput">Intended Use</label>
+      <input id="bundleIntendedUseInput" type="text" placeholder="e.g. story_implementation, bugfix" />
+
+      <label for="bundleProjectNameInput">Default Project Affinity</label>
+      <input id="bundleProjectNameInput" type="text" placeholder="Optional project name" />
+
+      <label for="bundleTagsInput">Tags (comma-separated)</label>
+      <input id="bundleTagsInput" type="text" placeholder="backend, migration, api" />
+
+      <label for="bundleSummaryInput">Summary</label>
+      <textarea id="bundleSummaryInput" rows="3" placeholder="Optional summary for quick selection context"></textarea>
+
+      <div class="draft-actions">
+        <button id="saveBundleButton" type="button">Create Bundle</button>
+        <button id="updateBundleButton" class="secondary-button" type="button" disabled>Update Bundle</button>
+        <button id="deleteBundleButton" class="danger-button" type="button" disabled>Delete Bundle</button>
+        <button id="clearBundleFormButton" class="secondary-button" type="button">Clear Form</button>
+      </div>
+    </section>
+
+    <section class="panel stack-gap">
+      <h2>Saved Bundles</h2>
+      <div id="contextBundlesList" class="hier-stack"></div>
+    </section>
+  </main>
+
+  <script src="/context-bundles.js"></script>
+</body>
+</html>
