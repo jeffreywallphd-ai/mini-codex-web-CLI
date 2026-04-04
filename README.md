@@ -380,6 +380,7 @@ Request body fields:
 - `targetId` (optional but validated against route id when provided)
 - scoped id field (`featureId`, `epicId`, `storyId`) (optional but validated against route id when provided)
 - `contextBundleId` (optional positive integer; when provided, each queued run compiles and injects that bundle into final run prompt context)
+- automation execution uses the persisted automation-run bundle selection for every queued story run, so one automation run maps to one bundle context with no per-story bundle override
 - automation start/resume requests enforce a single-bundle API shape: `contextBundleId` only (plural/multi-reference payload fields are rejected)
 
 Success response (`202 Accepted`) includes tracking metadata for the UI:

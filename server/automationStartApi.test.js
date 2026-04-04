@@ -423,6 +423,52 @@ test("feature/epic/story start endpoints launch automation and return tracking p
   );
 });
 
+test("feature start applies persisted automation bundle id to every generated story run", async () => {
+  const harness = createServerHarness({
+    createAutomationRun: async (input) => ({
+      id: 9100,
+      automation_type: input.automationType,
+      target_id: Number(input.targetId),
+      project_name: input.projectName ?? null,
+      base_branch: input.baseBranch ?? null,
+      stop_on_incomplete: input.stopOnIncomplete ? 1 : 0,
+      stop_flag: input.stopFlag ? 1 : 0,
+      current_position: input.currentPosition,
+      automation_status: input.automationStatus,
+      stop_reason: input.stopReason ?? null,
+      context_bundle_id: 77,
+      context_bundle_title: "Bundle 77",
+      failed_story_id: null,
+      failure_summary: null,
+      created_at: "2026-04-04T00:00:00.000Z",
+      updated_at: "2026-04-04T00:00:00.000Z"
+    })
+  });
+
+  await withServer(harness, async (baseUrl) => {
+    const response = await fetch(`${baseUrl}/api/automation/start/feature/100`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        projectName: "demo-project",
+        baseBranch: "main",
+        contextBundleId: 44
+      })
+    });
+
+    assert.equal(response.status, 202);
+    const payload = await response.json();
+    assert.equal(payload.automationRun.contextBundleId, 77);
+    assert.equal(payload.automationRun.contextBundleTitle, "Bundle 77");
+  });
+
+  await harness.runDetachedTasks();
+  assert.equal(harness.calls.executeAutomatedStoryRun.length, 2);
+  assert.ok(harness.calls.executeAutomatedStoryRun.every((call) => call.contextBundleId === 77));
+});
+
 test("automation lifecycle logging includes launch, story execution, stop reason, and final outcome", async () => {
   const harness = createServerHarness();
   let automationRunId = null;
