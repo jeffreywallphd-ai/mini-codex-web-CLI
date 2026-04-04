@@ -7,13 +7,71 @@ function formatSection(title, lines) {
   ].join("\n");
 }
 
+class StoryAutomationPromptError extends Error {
+  constructor(message) {
+    super(message);
+    this.name = "StoryAutomationPromptError";
+    this.code = "prompt_generation_failed";
+  }
+}
+
+function firstNonEmptyString(values) {
+  if (!Array.isArray(values)) return "";
+
+  for (const value of values) {
+    if (typeof value === "string") {
+      const trimmed = value.trim();
+      if (trimmed) {
+        return trimmed;
+      }
+    }
+  }
+
+  return "";
+}
+
 function buildStoryAutomationPrompt(context) {
-  const featureTitle = String(context?.feature_name || "").trim();
-  const featureDescription = String(context?.feature_description || "").trim();
-  const epicTitle = String(context?.epic_name || "").trim();
-  const epicDescription = String(context?.epic_description || "").trim();
-  const storyTitle = String(context?.story_name || "").trim();
-  const storyDescription = String(context?.story_description || "").trim();
+  const source = context && typeof context === "object" ? context : {};
+  const featureTitle = firstNonEmptyString([
+    source.feature_name,
+    source.featureTitle,
+    source.feature_title,
+    source.featureName
+  ]);
+  const featureDescription = firstNonEmptyString([
+    source.feature_description,
+    source.featureDescription
+  ]);
+  const epicTitle = firstNonEmptyString([
+    source.epic_name,
+    source.epicTitle,
+    source.epic_title,
+    source.epicName
+  ]);
+  const epicDescription = firstNonEmptyString([
+    source.epic_description,
+    source.epicDescription
+  ]);
+  const storyTitle = firstNonEmptyString([
+    source.story_name,
+    source.storyTitle,
+    source.story_title,
+    source.storyName,
+    source.name
+  ]);
+  const storyDescription = firstNonEmptyString([
+    source.story_description,
+    source.storyDescription,
+    source.description
+  ]);
+
+  if (!storyTitle) {
+    throw new StoryAutomationPromptError("Story prompt generation requires a story title.");
+  }
+
+  if (!storyDescription) {
+    throw new StoryAutomationPromptError("Story prompt generation requires a story description.");
+  }
 
   return [
     "Implement the requested story in this repository.",
@@ -41,5 +99,6 @@ function buildStoryAutomationPrompt(context) {
 }
 
 module.exports = {
-  buildStoryAutomationPrompt
+  buildStoryAutomationPrompt,
+  StoryAutomationPromptError
 };

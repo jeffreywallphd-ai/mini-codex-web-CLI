@@ -526,7 +526,16 @@ app.post("/api/stories/:storyId/complete-with-automation", async (req, res) => {
       return res.status(404).json({ error: "Story not found." });
     }
 
-    const prompt = buildStoryAutomationPrompt(storyContext);
+    let prompt = "";
+    try {
+      prompt = buildStoryAutomationPrompt(storyContext);
+    } catch (promptError) {
+      const wrappedPromptError = new Error(getErrorMessage(promptError));
+      wrappedPromptError.code = "prompt_generation_failed";
+      wrappedPromptError.cause = promptError;
+      throw wrappedPromptError;
+    }
+
     runningProjects.add(projectName);
     activeFeatureAutomation = {
       projectName,
@@ -642,7 +651,11 @@ app.post("/api/stories/:storyId/complete-with-automation", async (req, res) => {
     publishRunEvent(streamId, { type: "automation.failed", message: `Story automation failed: ${getErrorMessage(error)}` });
     res.status(500).json({
       error: getErrorMessage(error),
-      errorType: error?.code === "merge_failed" ? "merge_failed" : "execution_failed"
+      errorType: error?.code === "merge_failed"
+        ? "merge_failed"
+        : error?.code === "prompt_generation_failed"
+          ? "prompt_generation_failed"
+          : "execution_failed"
     });
   } finally {
     runningProjects.delete(projectName);

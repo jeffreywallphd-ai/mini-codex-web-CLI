@@ -181,6 +181,22 @@ is compatible with the existing story run lifecycle.
 - `onProgress` is invoked after each story to support persistence of queue
   progress (for example, updating `automation_runs.current_position`).
 
+## Story Automation Prompt Generation
+
+`server/storyAutomationPrompt.js` is the single source of truth for converting
+story automation context into a Codex-ready prompt.
+
+- `buildStoryAutomationPrompt(context)` always includes story title and story
+  description in the generated prompt.
+- Parent context is included when available (`feature` and `epic` title and
+  description).
+- The builder accepts both database-shaped context keys (for example
+  `story_name`) and queued-story keys (for example `storyTitle`) so queued
+  story items can be transformed without additional mapping in handlers.
+- Prompt generation failures throw `StoryAutomationPromptError` with code
+  `prompt_generation_failed`; story automation treats this as a terminal
+  execution failure and stops the run.
+
 ## Security
 
 This application is meant for trusted LAN usage only.
