@@ -54,6 +54,23 @@ function parseTargetId(targetIdRaw) {
   return targetId;
 }
 
+function parseOptionalTargetId(value) {
+  if (value === null || value === undefined || value === "") {
+    return {
+      provided: false,
+      targetId: null,
+      invalid: false
+    };
+  }
+
+  const targetId = parseTargetId(value);
+  return {
+    provided: true,
+    targetId,
+    invalid: targetId === null
+  };
+}
+
 function toStatusApiAutomationRun(automationRun) {
   return {
     id: automationRun.id,
@@ -264,9 +281,38 @@ function createAutomationStartRouter(deps = {}) {
     const projectName = String(req.body?.projectName || "").trim();
     const baseBranch = String(req.body?.baseBranch || "").trim();
     const stopOnIncompleteStory = normalizeBoolean(req.body?.stopOnIncompleteStory);
+    const requestedAutomationType = String(req.body?.automationType || "").trim().toLowerCase();
+    const requestedTargetId = parseOptionalTargetId(req.body?.targetId);
+    const scopedTargetId = parseOptionalTargetId(req.body?.[targetParamName]);
 
     if (!targetId) {
       return res.status(400).json({ error: `Invalid ${automationType} id.` });
+    }
+
+    if (requestedAutomationType && requestedAutomationType !== automationType) {
+      return res.status(400).json({
+        error: `Automation scope mismatch: expected '${automationType}' but received '${requestedAutomationType}'.`
+      });
+    }
+
+    if (requestedTargetId.invalid) {
+      return res.status(400).json({ error: "Invalid target id in request body." });
+    }
+
+    if (requestedTargetId.provided && requestedTargetId.targetId !== targetId) {
+      return res.status(400).json({
+        error: `Target mismatch: route id '${targetId}' does not match body target id '${requestedTargetId.targetId}'.`
+      });
+    }
+
+    if (scopedTargetId.invalid) {
+      return res.status(400).json({ error: `Invalid ${targetParamName} in request body.` });
+    }
+
+    if (scopedTargetId.provided && scopedTargetId.targetId !== targetId) {
+      return res.status(400).json({
+        error: `Target mismatch: route id '${targetId}' does not match body ${targetParamName} '${scopedTargetId.targetId}'.`
+      });
     }
 
     if (!projectName || !isValidProject(projectName)) {

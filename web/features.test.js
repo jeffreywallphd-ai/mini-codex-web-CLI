@@ -16,7 +16,13 @@ test("feature automation button starts feature-scoped automation endpoint", () =
     source,
     /fetch\(`\/api\/automation\/start\/feature\/\$\{encodeURIComponent\(String\(featureId\)\)\}`,\s*\{\s*method:\s*"POST"/m
   );
-  assert.match(source, /body:\s*JSON\.stringify\(\{\s*projectName,\s*baseBranch,\s*stopOnIncompleteStory\s*\}\)/m);
+  assert.match(source, /automationType:\s*"feature"/);
+  assert.match(source, /targetId:\s*featureId/);
+  assert.match(source, /featureId/);
+  assert.match(
+    source,
+    /assertAutomationStartScope\(result,\s*\{\s*automationType:\s*"feature",\s*targetId:\s*feature\.id\s*\}\);/m
+  );
 });
 
 test("epic automation button starts epic-scoped automation endpoint with epic identifier", () => {
@@ -26,10 +32,16 @@ test("epic automation button starts epic-scoped automation endpoint with epic id
     source,
     /fetch\(`\/api\/automation\/start\/epic\/\$\{encodeURIComponent\(String\(epicId\)\)\}`,\s*\{\s*method:\s*"POST"/m
   );
-  assert.match(source, /body:\s*JSON\.stringify\(\{\s*projectName,\s*baseBranch,\s*stopOnIncompleteStory\s*\}\)/m);
+  assert.match(source, /automationType:\s*"epic"/);
+  assert.match(source, /targetId:\s*epicId/);
+  assert.match(source, /epicId/);
   assert.match(
     source,
     /const result = await startEpicAutomation\(epic\.id,\s*\{\s*stopOnIncompleteStory:\s*stopOnIncompleteCheckbox\.checked\s*\}\);/m
+  );
+  assert.match(
+    source,
+    /assertAutomationStartScope\(result,\s*\{\s*automationType:\s*"epic",\s*targetId:\s*epic\.id\s*\}\);/m
   );
 });
 
@@ -40,11 +52,23 @@ test("story automation button starts story-scoped automation endpoint and queues
     source,
     /fetch\(`\/api\/automation\/start\/story\/\$\{encodeURIComponent\(String\(storyId\)\)\}`,\s*\{\s*method:\s*"POST"/m
   );
-  assert.match(source, /body:\s*JSON\.stringify\(\{\s*projectName,\s*baseBranch\s*\}\)/m);
-  assert.match(source, /const totalStories = Number\(result\?\.queue\?\.totalStories\);/);
-  assert.match(source, /if \(totalStories !== 1\)/);
+  assert.match(source, /automationType:\s*"story"/);
+  assert.match(source, /targetId:\s*storyId/);
+  assert.match(source, /storyId/);
+  assert.match(
+    source,
+    /assertAutomationStartScope\(result,\s*\{\s*automationType:\s*"story",\s*targetId:\s*story\.id,\s*enforceSingleStory:\s*true\s*\}\);/m
+  );
   assert.doesNotMatch(source, /\/api\/stories\/\$\{story\.id\}\/complete-with-automation/);
   assert.match(source, /"Complete with Automation"/);
+});
+
+test("frontend validates start response scope alignment before reporting launch", () => {
+  const source = readFeaturesScript();
+
+  assert.match(source, /function assertAutomationStartScope\(result,\s*\{\s*automationType,\s*targetId,\s*enforceSingleStory = false\s*\} = \{\}\)/m);
+  assert.match(source, /Automation scope mismatch:/);
+  assert.match(source, /Automation target mismatch:/);
 });
 
 test("feature card automation UI keeps existing card copy and eligibility affordance", () => {

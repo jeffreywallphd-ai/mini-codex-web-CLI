@@ -318,7 +318,10 @@ async function startStoryAutomation(storyId) {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       projectName,
-      baseBranch
+      baseBranch,
+      automationType: "story",
+      targetId: storyId,
+      storyId
     })
   });
   const result = await response.json();
@@ -328,6 +331,36 @@ async function startStoryAutomation(storyId) {
   }
 
   return result;
+}
+
+function assertAutomationStartScope(result, { automationType, targetId, enforceSingleStory = false } = {}) {
+  const expectedType = String(automationType || "").trim().toLowerCase();
+  const expectedTargetId = Number.parseInt(targetId, 10);
+  const actualType = String(result?.automationRun?.automationType || "").trim().toLowerCase();
+  const actualTargetId = Number.parseInt(result?.automationRun?.targetId, 10);
+
+  if (!expectedType) {
+    throw new Error("Missing expected automation type for scope validation.");
+  }
+
+  if (!Number.isInteger(expectedTargetId) || expectedTargetId <= 0) {
+    throw new Error("Missing expected automation target id for scope validation.");
+  }
+
+  if (actualType !== expectedType) {
+    throw new Error(`Automation scope mismatch: expected '${expectedType}' but received '${actualType || "unknown"}'.`);
+  }
+
+  if (!Number.isInteger(actualTargetId) || actualTargetId !== expectedTargetId) {
+    throw new Error(`Automation target mismatch: expected '${expectedTargetId}' but received '${result?.automationRun?.targetId ?? "unknown"}'.`);
+  }
+
+  if (enforceSingleStory) {
+    const totalStories = Number(result?.queue?.totalStories);
+    if (totalStories !== 1) {
+      throw new Error(`Story automation should queue exactly one story, but queued ${totalStories}.`);
+    }
+  }
 }
 
 function getIncompleteStoryCountForFeature(feature) {
@@ -663,7 +696,10 @@ async function startFeatureAutomation(featureId, options = {}) {
     body: JSON.stringify({
       projectName,
       baseBranch,
-      stopOnIncompleteStory
+      stopOnIncompleteStory,
+      automationType: "feature",
+      targetId: featureId,
+      featureId
     })
   });
   const result = await response.json();
@@ -689,7 +725,10 @@ async function startEpicAutomation(epicId, options = {}) {
     body: JSON.stringify({
       projectName,
       baseBranch,
-      stopOnIncompleteStory
+      stopOnIncompleteStory,
+      automationType: "epic",
+      targetId: epicId,
+      epicId
     })
   });
   const result = await response.json();
@@ -777,6 +816,10 @@ function createFeatureAutomationUi(content, feature) {
     try {
       const result = await startFeatureAutomation(feature.id, {
         stopOnIncompleteStory: stopOnIncompleteCheckbox.checked
+      });
+      assertAutomationStartScope(result, {
+        automationType: "feature",
+        targetId: feature.id
       });
       const runId = result?.automationRun?.id;
       const totalStories = result?.queue?.totalStories;
@@ -885,6 +928,10 @@ function createEpicAutomationUi(content, epic) {
       const result = await startEpicAutomation(epic.id, {
         stopOnIncompleteStory: stopOnIncompleteCheckbox.checked
       });
+      assertAutomationStartScope(result, {
+        automationType: "epic",
+        targetId: epic.id
+      });
       const runId = result?.automationRun?.id;
       const totalStories = result?.queue?.totalStories;
       createStatusBox.textContent = Number.isInteger(runId)
@@ -949,12 +996,12 @@ function createStoryAutomationUi(content, story) {
 
     try {
       const result = await startStoryAutomation(story.id);
+      assertAutomationStartScope(result, {
+        automationType: "story",
+        targetId: story.id,
+        enforceSingleStory: true
+      });
       const runId = result?.automationRun?.id;
-      const totalStories = Number(result?.queue?.totalStories);
-      if (totalStories !== 1) {
-        throw new Error(`Story automation should queue exactly one story, but queued ${totalStories}.`);
-      }
-
       createStatusBox.textContent = Number.isInteger(runId)
         ? `Story automation started for story #${story.id} (run #${runId}, 1 story queued).`
         : `Story automation started for story #${story.id} (1 story queued).`;

@@ -343,6 +343,80 @@ test("start endpoint validates target existence", async () => {
   assert.equal(harness.calls.detachedTasks.length, 0);
 });
 
+test("start endpoint rejects mismatched automation scope or target ids cleanly", async () => {
+  const harness = createServerHarness();
+
+  await withServer(harness, async (baseUrl) => {
+    const scopeMismatchResponse = await fetch(`${baseUrl}/api/automation/start/feature/100`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        projectName: "demo-project",
+        baseBranch: "main",
+        automationType: "epic",
+        targetId: 100
+      })
+    });
+    assert.equal(scopeMismatchResponse.status, 400);
+    const scopeMismatchPayload = await scopeMismatchResponse.json();
+    assert.match(scopeMismatchPayload.error, /Automation scope mismatch/);
+
+    const targetMismatchResponse = await fetch(`${baseUrl}/api/automation/start/epic/201`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        projectName: "demo-project",
+        baseBranch: "main",
+        automationType: "epic",
+        targetId: 999
+      })
+    });
+    assert.equal(targetMismatchResponse.status, 400);
+    const targetMismatchPayload = await targetMismatchResponse.json();
+    assert.match(targetMismatchPayload.error, /Target mismatch/);
+
+    const scopedBodyMismatchResponse = await fetch(`${baseUrl}/api/automation/start/story/301`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        projectName: "demo-project",
+        baseBranch: "main",
+        automationType: "story",
+        targetId: 301,
+        storyId: 302
+      })
+    });
+    assert.equal(scopedBodyMismatchResponse.status, 400);
+    const scopedBodyMismatchPayload = await scopedBodyMismatchResponse.json();
+    assert.match(scopedBodyMismatchPayload.error, /Target mismatch/);
+
+    const invalidBodyTargetResponse = await fetch(`${baseUrl}/api/automation/start/feature/100`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        projectName: "demo-project",
+        baseBranch: "main",
+        automationType: "feature",
+        targetId: "not-a-number"
+      })
+    });
+    assert.equal(invalidBodyTargetResponse.status, 400);
+    const invalidBodyTargetPayload = await invalidBodyTargetResponse.json();
+    assert.match(invalidBodyTargetPayload.error, /Invalid target id/);
+  });
+
+  assert.equal(harness.calls.createAutomationRun.length, 0);
+  assert.equal(harness.calls.detachedTasks.length, 0);
+});
+
 test("start endpoint rejects ineligible targets with no runnable stories", async () => {
   const harness = createServerHarness({
     getFeaturesTree: async () => [
