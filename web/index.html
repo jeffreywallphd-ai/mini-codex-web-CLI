@@ -14,6 +14,11 @@
     <section class="panel stack-gap">
       <label for="projectSelect">Project</label>
       <select id="projectSelect"></select>
+
+      <label for="baseBranchSelect">Base Branch</label>
+      <select id="baseBranchSelect" disabled></select>
+      <p id="branchHint" class="inline-hint" aria-live="polite"></p>
+
       <button id="pullButton" class="secondary-button" type="button">Git Pull Selected Repo</button>
 
       <label for="executionModeSelect">Execution Mode</label>

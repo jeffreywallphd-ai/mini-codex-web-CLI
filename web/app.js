@@ -1,4 +1,6 @@
 const projectSelect = document.getElementById("projectSelect");
+const baseBranchSelect = document.getElementById("baseBranchSelect");
+const branchHint = document.getElementById("branchHint");
 const pullButton = document.getElementById("pullButton");
 const executionModeSelect = document.getElementById("executionModeSelect");
 const promptInput = document.getElementById("promptInput");
@@ -22,6 +24,7 @@ let isPullRequestInFlight = false;
 let activeRunStream = null;
 let activeRunStartedAt = null;
 let runTimerInterval = null;
+let lastBranchLoadRequestId = 0;
 
 function escapeHtml(text) {
   return String(text ?? "")
@@ -144,6 +147,7 @@ function startRunStream(streamId) {
 function getEditorState() {
   return {
     projectName: projectSelect.value || "",
+    baseBranch: baseBranchSelect.value || "",
     executionMode: executionModeSelect.value || "read",
     prompt: promptInput.value
   };
@@ -153,6 +157,11 @@ function saveEditorState() {
   localStorage.setItem(EDITOR_STATE_KEY, JSON.stringify(getEditorState()));
 }
 
+function clearBranchOptions() {
+  baseBranchSelect.innerHTML = "";
+  baseBranchSelect.disabled = true;
+}
+
 function clearEditorState() {
   localStorage.removeItem(EDITOR_STATE_KEY);
   promptInput.value = "";
@@ -160,12 +169,13 @@ function clearEditorState() {
   if (projectSelect.options.length > 0) {
     projectSelect.selectedIndex = 0;
   }
-  updateProjectActionState();
+  clearBranchOptions();
+  branchHint.textContent = "";
 }
 
 function restoreEditorState(projects) {
   const rawState = localStorage.getItem(EDITOR_STATE_KEY);
-  if (!rawState) return;
+  if (!rawState) return null;
 
   try {
     const state = JSON.parse(rawState);
@@ -180,8 +190,11 @@ function restoreEditorState(projects) {
     if (state.projectName && projects.some((project) => project.name === state.projectName)) {
       projectSelect.value = state.projectName;
     }
+
+    return state;
   } catch (error) {
     console.warn("Unable to restore editor state", error);
+    return null;
   }
 }
 
@@ -227,16 +240,34 @@ function buildErrorMessage(context, result, fallback) {
   return `${context}: ${fallback}`;
 }
 
+function pickDefaultBranch(branches, currentBranch, preferredBranch) {
+  if (preferredBranch && branches.includes(preferredBranch)) {
+    return preferredBranch;
+  }
+
+  if (currentBranch && branches.includes(currentBranch)) {
+    return currentBranch;
+  }
+
+  if (branches.includes("main")) {
+    return "main";
+  }
+
+  return branches[0] || "";
+}
+
 function updateProjectActionState() {
   const projectName = projectSelect.value;
+  const branchName = baseBranchSelect.value;
   const isProjectRunning = projectName && runningProjects.has(projectName);
   const isRunActive = isRunningRequestInFlight || isProjectRunning;
+  const hasValidBranch = Boolean(projectName && branchName && !baseBranchSelect.disabled);
 
   runningProjectHint.textContent = isProjectRunning
     ? `"${projectName}" is currently running. Wait for it to finish.`
     : "";
 
-  runButton.disabled = !projectName || isRunActive;
+  runButton.disabled = !projectName || !hasValidBranch || isRunActive;
   runButton.textContent = isRunActive ? "Running..." : "Run";
   runButton.classList.toggle("running-button", isRunActive);
 
@@ -253,6 +284,71 @@ function updateProjectActionState() {
 
   if (!isPullRequestInFlight) {
     pullButton.disabled = !projectName || isProjectRunning;
+  }
+}
+
+async function loadBranchesForSelectedProject(preferredBranch = "") {
+  const projectName = projectSelect.value;
+  const requestId = ++lastBranchLoadRequestId;
+
+  if (!projectName) {
+    clearBranchOptions();
+    branchHint.textContent = "Select a project to choose a base branch.";
+    updateProjectActionState();
+    return;
+  }
+
+  branchHint.textContent = "Loading branches...";
+  clearBranchOptions();
+  updateProjectActionState();
+
+  try {
+    const response = await fetch(`/api/projects/${encodeURIComponent(projectName)}/branches`);
+    const result = await parseJsonResponse(response);
+
+    if (requestId !== lastBranchLoadRequestId) {
+      return;
+    }
+
+    if (!response.ok) {
+      throw new Error(buildErrorMessage("Could not load branches", result, "Request failed"));
+    }
+
+    const branches = (result.branches || [])
+      .map((entry) => entry?.name)
+      .filter((name) => typeof name === "string" && name.trim())
+      .map((name) => name.trim());
+
+    if (!branches.length) {
+      throw new Error(`No local branches found for ${projectName}.`);
+    }
+
+    baseBranchSelect.innerHTML = "";
+    for (const branchName of branches) {
+      const option = document.createElement("option");
+      option.value = branchName;
+      option.textContent = branchName;
+      baseBranchSelect.appendChild(option);
+    }
+
+    const selectedBranch = pickDefaultBranch(branches, result.currentBranch || "", preferredBranch);
+    baseBranchSelect.value = selectedBranch;
+    baseBranchSelect.disabled = false;
+    branchHint.textContent = "";
+  } catch (error) {
+    if (requestId !== lastBranchLoadRequestId) {
+      return;
+    }
+
+    clearBranchOptions();
+    branchHint.textContent = `Could not load branches for ${projectName}.`;
+    statusBox.textContent = `Branch load failed: ${error.message}`;
+    showErrorCard(`Branch load failed: ${error.message}`);
+  } finally {
+    if (requestId === lastBranchLoadRequestId) {
+      updateProjectActionState();
+      saveEditorState();
+    }
   }
 }
 
@@ -337,7 +433,7 @@ function renderRunsList(runs) {
     const title = run.change_title ? `\nTitle: ${run.change_title}` : "";
     button.classList.toggle("run-item-unmerged", !run.merged_at);
     button.innerHTML = `
-      <div>#${escapeHtml(run.id)} · ${escapeHtml(run.project_name)} · ${escapeHtml(executionMode)} · ${escapeHtml(run.branch_name || "(no branch)")} · ${mergeBadgeHtml}</div>
+      <div>#${escapeHtml(run.id)} - ${escapeHtml(run.project_name)} - ${escapeHtml(executionMode)} - ${escapeHtml(run.branch_name || "(no branch)")} - ${mergeBadgeHtml}</div>
       <div>${escapeHtml(title ? title.trim() : "")}</div>
       <div>${escapeHtml(promptPreview || "(no prompt)")}</div>
     `;
@@ -384,7 +480,8 @@ async function loadProjects() {
     projectSelect.appendChild(option);
   }
 
-  restoreEditorState(projects);
+  const restoredState = restoreEditorState(projects);
+  await loadBranchesForSelectedProject(restoredState?.baseBranch || "");
   updateProjectActionState();
 }
 
@@ -458,10 +555,11 @@ async function pastePromptFromClipboard() {
 
 runButton.addEventListener("click", async () => {
   const projectName = projectSelect.value;
+  const baseBranch = baseBranchSelect.value;
   const prompt = promptInput.value.trim();
   const executionMode = executionModeSelect.value;
 
-  if (!projectName || !prompt || runButton.disabled) return;
+  if (!projectName || !baseBranch || !prompt || runButton.disabled) return;
 
   hideErrorCard();
   saveEditorState();
@@ -479,7 +577,7 @@ runButton.addEventListener("click", async () => {
       headers: {
         "Content-Type": "application/json"
       },
-      body: JSON.stringify({ projectName, prompt, executionMode, streamId })
+      body: JSON.stringify({ projectName, baseBranch, prompt, executionMode, streamId })
     });
 
     const result = await parseJsonResponse(response);
@@ -513,16 +611,23 @@ pullButton.addEventListener("click", pullSelectedRepository);
 pasteClipboardButton.addEventListener("click", pastePromptFromClipboard);
 clearStateButton.addEventListener("click", async () => {
   clearEditorState();
+  await loadBranchesForSelectedProject();
   await refreshRunningProjects();
   statusBox.textContent = "Saved form state cleared and running-project cache refreshed.";
 });
 
-[projectSelect, executionModeSelect, promptInput].forEach((element) => {
+[projectSelect, baseBranchSelect, executionModeSelect, promptInput].forEach((element) => {
   element.addEventListener("change", saveEditorState);
   element.addEventListener("input", saveEditorState);
 });
 
-projectSelect.addEventListener("change", updateProjectActionState);
+projectSelect.addEventListener("change", async () => {
+  hideErrorCard();
+  await loadBranchesForSelectedProject();
+  updateProjectActionState();
+});
+
+baseBranchSelect.addEventListener("change", updateProjectActionState);
 runSearchInput.addEventListener("input", filterRuns);
 
 (async () => {

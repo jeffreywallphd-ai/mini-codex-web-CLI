@@ -7,7 +7,7 @@ const fs = require("fs");
 
 const { runCodexWithUsage, EXECUTION_MODE_OPTIONS } = require("./codexRunner");
 const { saveRun, getRuns, getRunById, updateRunMerge } = require("./db");
-const { createCodexBranch, getGitSnapshot, mergeBranch, pullRepository } = require("./git");
+const { createCodexBranch, getGitSnapshot, listLocalBranches, mergeBranch, pullRepository } = require("./git");
 
 const app = express();
 app.use(cors());
@@ -148,6 +148,26 @@ app.post("/api/projects/:projectName/pull", async (req, res) => {
   }
 });
 
+app.get("/api/projects/:projectName/branches", async (req, res) => {
+  const { projectName } = req.params;
+
+  if (!isValidProject(projectName)) {
+    return res.status(400).json({ error: "Invalid project" });
+  }
+
+  try {
+    const branchResult = await listLocalBranches(getRepoPath(projectName));
+    res.json({
+      projectName,
+      branches: branchResult.branches.map((name) => ({ name })),
+      currentBranch: branchResult.currentBranch
+    });
+  } catch (err) {
+    console.error("project branch list failed:", err);
+    res.status(500).json({ error: getErrorMessage(err) });
+  }
+});
+
 app.get("/api/run-test/stream/:streamId", (req, res) => {
   const { streamId } = req.params;
 
@@ -176,6 +196,7 @@ app.get("/api/run-test/stream/:streamId", (req, res) => {
 app.post("/api/run-test", async (req, res) => {
   const {
     projectName,
+    baseBranch = "main",
     prompt,
     executionMode = "read",
     streamId = null
@@ -194,11 +215,19 @@ app.post("/api/run-test", async (req, res) => {
   }
 
   const repoPath = getRepoPath(projectName);
+  const selectedBaseBranch = typeof baseBranch === "string" && baseBranch.trim()
+    ? baseBranch.trim()
+    : "main";
   runningProjects.add(projectName);
 
   try {
+    const branchResult = await listLocalBranches(repoPath);
+    if (!branchResult.branches.includes(selectedBaseBranch)) {
+      return res.status(400).json({ error: `Invalid base branch '${selectedBaseBranch}' for project '${projectName}'.` });
+    }
+
     publishRunEvent(streamId, { type: "branch.creating", message: "Creating branch from base..." });
-    const branchInfo = await createCodexBranch(repoPath);
+    const branchInfo = await createCodexBranch(repoPath, selectedBaseBranch);
     publishRunEvent(streamId, { type: "branch.created", message: `Branch created: ${branchInfo.branchName || "unknown"}.` });
     const result = await runCodexWithUsage(repoPath, prompt, executionMode, (event) => {
       publishRunEvent(streamId, event);
