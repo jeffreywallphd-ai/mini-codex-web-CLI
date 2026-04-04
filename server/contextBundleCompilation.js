@@ -1,5 +1,50 @@
 const { getContextBundlePartTypeLabel } = require("./contextBundlePartTypes");
 
+const COMPILATION_SECTION_LAYOUT = Object.freeze([
+  {
+    key: "implementation_constraints",
+    label: "Implementation Constraints",
+    contextRole: "constraints",
+    partTypes: ["implementation_constraints"]
+  },
+  {
+    key: "architecture_guidance",
+    label: "Architecture Guidance",
+    contextRole: "instructions",
+    partTypes: ["architecture_guidance", "coding_standards", "testing_expectations"]
+  },
+  {
+    key: "documentation_standards",
+    label: "Documentation Standards",
+    contextRole: "instructions",
+    partTypes: ["documentation_standards"]
+  },
+  {
+    key: "background_context",
+    label: "Background Context",
+    contextRole: "reference",
+    partTypes: ["repository_context", "feature_background", "user_notes"]
+  },
+  {
+    key: "glossary",
+    label: "Glossary",
+    contextRole: "reference",
+    partTypes: ["domain_glossary"]
+  }
+]);
+
+const PART_TYPE_TO_COMPILATION_SECTION = (() => {
+  const map = new Map();
+  for (const section of COMPILATION_SECTION_LAYOUT) {
+    for (const partType of section.partTypes) {
+      map.set(partType, section.key);
+    }
+  }
+  return map;
+})();
+
+const DEFAULT_COMPILATION_SECTION_KEY = "background_context";
+
 function normalizeTruthyFlag(value, defaultValue = true) {
   if (value === null || value === undefined) {
     return defaultValue;
@@ -88,6 +133,57 @@ function buildTypeGroups(sections) {
   return [...grouped.values()];
 }
 
+function resolveCompilationSection(partType) {
+  const normalizedPartType = String(partType || "").trim().toLowerCase();
+  const sectionKey = PART_TYPE_TO_COMPILATION_SECTION.get(normalizedPartType) || DEFAULT_COMPILATION_SECTION_KEY;
+  return COMPILATION_SECTION_LAYOUT.find((section) => section.key === sectionKey);
+}
+
+function buildCompilationGroups(sections) {
+  const groupsByKey = new Map();
+
+  for (const layoutSection of COMPILATION_SECTION_LAYOUT) {
+    groupsByKey.set(layoutSection.key, {
+      sectionKey: layoutSection.key,
+      sectionLabel: layoutSection.label,
+      contextRole: layoutSection.contextRole,
+      includedPartIds: [],
+      sectionLabels: [],
+      partTypes: [],
+      sections: []
+    });
+  }
+
+  for (const section of sections) {
+    const targetLayoutSection = resolveCompilationSection(section.partType);
+    const group = groupsByKey.get(targetLayoutSection.key);
+    group.includedPartIds.push(section.partId);
+    group.sectionLabels.push(section.sectionLabel);
+    if (!group.partTypes.includes(section.partType)) {
+      group.partTypes.push(section.partType);
+    }
+    group.sections.push(section);
+  }
+
+  return COMPILATION_SECTION_LAYOUT
+    .map((layoutSection) => groupsByKey.get(layoutSection.key))
+    .filter((group) => group.sections.length > 0);
+}
+
+function buildCompiledText(compilationGroups) {
+  return compilationGroups
+    .map((group) => [
+      `## ${group.sectionLabel}`,
+      "",
+      ...group.sections.map((section) => [
+        `### ${section.sectionLabel}`,
+        section.content
+      ].join("\n")).flat()
+    ].join("\n"))
+    .join("\n\n")
+    .trim();
+}
+
 function compileContextBundle(bundle = {}) {
   const orderedParts = getDeterministicOrderedParts(bundle?.parts);
   const compiledParts = orderedParts.filter((part) => normalizeTruthyFlag(part?.include_in_compiled, true));
@@ -100,14 +196,9 @@ function compileContextBundle(bundle = {}) {
     sectionLabel: buildSectionLabel(part),
     content: typeof part.content === "string" ? part.content : ""
   }));
+  const compilationGroups = buildCompilationGroups(sections);
 
-  const compiledText = sections
-    .map((section) => [
-      `## ${section.sectionLabel}`,
-      section.content
-    ].join("\n"))
-    .join("\n\n")
-    .trim();
+  const compiledText = buildCompiledText(compilationGroups);
 
   return {
     format: "context_bundle_compiled_preview_v1",
@@ -116,6 +207,7 @@ function compileContextBundle(bundle = {}) {
     includedPartIds: sections.map((section) => section.partId).filter(Number.isFinite),
     sectionCount: sections.length,
     typeGroups: buildTypeGroups(sections),
+    compilationGroups,
     sections,
     compiledText,
     compiledString: compiledText
