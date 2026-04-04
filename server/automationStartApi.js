@@ -88,6 +88,8 @@ function toStatusApiAutomationRun(automationRun) {
     currentPosition: automationRun.current_position,
     status: automationRun.automation_status,
     stopReason: automationRun.stop_reason,
+    failedStoryId: automationRun.failed_story_id ?? null,
+    failureSummary: automationRun.failure_summary ?? null,
     createdAt: automationRun.created_at,
     updatedAt: automationRun.updated_at
   };
@@ -391,6 +393,21 @@ function buildAutomationConflictResponse(conflictingRun) {
   };
 }
 
+function getLatestFailedStoryResult(runnerResult) {
+  const storyResults = Array.isArray(runnerResult?.storyResults)
+    ? runnerResult.storyResults
+    : [];
+
+  for (let index = storyResults.length - 1; index >= 0; index -= 1) {
+    const storyResult = storyResults[index];
+    if (String(storyResult?.status || "").trim().toLowerCase() === "failed") {
+      return storyResult;
+    }
+  }
+
+  return null;
+}
+
 function createAutomationStartRouter(deps = {}) {
   const {
     isValidProject,
@@ -655,13 +672,23 @@ function createAutomationStartRouter(deps = {}) {
       });
 
       const finalState = mapFinalAutomationState(runnerResult);
+      const failedStoryResult = getLatestFailedStoryResult(runnerResult);
+      const normalizedFailedStoryId = Number.parseInt(failedStoryResult?.storyId, 10);
+      const failedStoryId = Number.isInteger(normalizedFailedStoryId) && normalizedFailedStoryId > 0
+        ? normalizedFailedStoryId
+        : null;
+      const failureSummary = typeof failedStoryResult?.error === "string" && failedStoryResult.error.trim()
+        ? failedStoryResult.error.trim()
+        : null;
       logAutomationLifecycle(logger, "automation_stop_reason", {
         automationRunId: automationRun.id,
         automationType,
         targetId,
         projectName,
         baseBranch,
-        stopReason: finalState.stopReason
+        stopReason: finalState.stopReason,
+        failedStoryId,
+        failureSummary
       });
       await updateAutomationRunMetadata(automationRun.id, {
         stopFlag: finalState.stopFlag,
@@ -672,7 +699,9 @@ function createAutomationStartRouter(deps = {}) {
           normalizedInitialPosition
         ),
         automationStatus: finalState.automationStatus,
-        stopReason: finalState.stopReason
+        stopReason: finalState.stopReason,
+        failedStoryId: finalState.automationStatus === "failed" ? failedStoryId : null,
+        failureSummary: finalState.automationStatus === "failed" ? failureSummary : null
       });
       logAutomationLifecycle(logger, "automation_final_result", {
         automationRunId: automationRun.id,
@@ -682,17 +711,27 @@ function createAutomationStartRouter(deps = {}) {
         baseBranch,
         status: finalState.automationStatus,
         stopReason: finalState.stopReason,
+        failedStoryId,
+        failureSummary,
         processedStories: runnerResult?.processedStories ?? 0,
         totalStoriesInRunQueue: normalizedTotalStoriesInRunQueue
       });
     } catch (error) {
+      const runtimeState = activeStoryRuntimeByAutomationRunId.get(automationRun.id) || {};
+      const normalizedFailedStoryId = Number.parseInt(runtimeState?.storyId, 10);
+      const failedStoryId = Number.isInteger(normalizedFailedStoryId) && normalizedFailedStoryId > 0
+        ? normalizedFailedStoryId
+        : null;
+      const failureSummary = String(getErrorMessage(error) || "").trim() || null;
       try {
         await updateAutomationRunMetadata(automationRun.id, {
           stopFlag: true,
           automationStatus: "failed",
           stopReason: String(error?.code || "").trim().toLowerCase() === "merge_failed"
             ? "merge_failed"
-            : "execution_failed"
+            : "execution_failed",
+          failedStoryId,
+          failureSummary
         });
       } catch (metadataError) {
         logger.error("automation metadata update failed:", metadataError);
@@ -714,7 +753,9 @@ function createAutomationStartRouter(deps = {}) {
         baseBranch,
         stopReason: String(error?.code || "").trim().toLowerCase() === "merge_failed"
           ? "merge_failed"
-          : "execution_failed"
+          : "execution_failed",
+        failedStoryId,
+        failureSummary
       });
       logAutomationLifecycle(logger, "automation_final_result", {
         automationRunId: automationRun.id,
@@ -726,6 +767,8 @@ function createAutomationStartRouter(deps = {}) {
         stopReason: String(error?.code || "").trim().toLowerCase() === "merge_failed"
           ? "merge_failed"
           : "execution_failed",
+        failedStoryId,
+        failureSummary,
         totalStoriesInRunQueue: normalizedTotalStoriesInRunQueue,
         error: getErrorMessage(error)
       });
@@ -1108,6 +1151,10 @@ function createAutomationStartRouter(deps = {}) {
       const runtimeState = activeStoryRuntimeByAutomationRunId.get(automationRun.id) || null;
       const normalizedCurrentStoryId = Number.parseInt(currentStory?.storyId, 10);
       const normalizedRuntimeStoryId = Number.parseInt(runtimeState?.storyId, 10);
+      const normalizedFailedStoryId = Number.parseInt(automationRun?.failed_story_id, 10);
+      const failedStoryContext = Number.isInteger(normalizedFailedStoryId)
+        ? queueStoriesByStoryId.get(normalizedFailedStoryId)
+        : null;
       const currentItem = currentStory
         ? {
           ...currentStory,
@@ -1152,7 +1199,10 @@ function createAutomationStartRouter(deps = {}) {
           ? null
           : {
             status: automationRun.automation_status,
-            stopReason: automationRun.stop_reason ?? null
+            stopReason: automationRun.stop_reason ?? null,
+            failedStoryId: automationRun.failed_story_id ?? null,
+            failedStoryTitle: failedStoryContext?.storyTitle ?? null,
+            failureSummary: automationRun.failure_summary ?? null
           }
       });
     } catch (error) {

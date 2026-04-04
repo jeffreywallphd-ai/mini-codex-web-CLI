@@ -28,6 +28,7 @@ The app is designed for personal LAN use, not for public internet exposure or mu
 - Automation queue generation utilities for deterministic `feature -> epic -> story` ordering
 - Automation metadata persistence for orchestration state (`automation_type`, `target_id`, `project_name`, `base_branch`, `stop_on_incomplete`, `stop_flag`, `current_position`, `automation_status`, `stop_reason`)
 - Automation story execution outcome persistence for status reporting (`automation_story_executions` with run linkage and queue outcome state)
+- Automation failure detail persistence at run scope (`failed_story_id`, `failure_summary`) for quick troubleshooting context
 - Sequential automation runner for server-driven queue execution (`server/automationRunner.js`)
 - Shared automated story run pipeline that reuses manual run creation/execution persistence (`server/automatedStoryRunPipeline.js`)
 - Automated run-origin linkage persisted on each run (`automation_origin_type`, `automation_origin_id`, `automation_run_id`) for feature/epic/story traceability
@@ -183,8 +184,10 @@ Shared automation planning rules are defined in `server/automationQueue.js`.
   - `stop_flag`
   - `current_position`
   - `automation_status` (`pending`, `running`, `completed`, `failed`, or `stopped`)
-  - `stop_reason` (final outcome reason, such as `all_work_complete`,
-    `execution_failed`, or `story_incomplete`)
+- `stop_reason` (final outcome reason, such as `all_work_complete`,
+  `execution_failed`, or `story_incomplete`)
+- `failed_story_id` (failed story identifier when the run ends in failure)
+- `failure_summary` (compact failure reason captured from the failing step/error path)
 - Per-story automation execution outcomes are persisted in SQLite table
   `automation_story_executions` with:
   - `automation_run_id`
@@ -383,6 +386,9 @@ Automation status response (`200 OK`) includes polling-friendly state:
 - `summary` (completed/failed/stopped execution counts)
 - `completedSteps` and `failedSteps` (per-story summarized outcomes with run linkage, failed story id/title, and failure reasons when available)
 - `finalResult` (`status` + `stopReason`) when automation is no longer running
+- `finalResult` also includes `failedStoryId`, `failedStoryTitle`, and
+  `failureSummary` when available so the UI can explain failure context without
+  requiring a separate log subsystem
 - when no active automation lock exists, the feature page can still request the last persisted run id for the selected scope to recover recent completed/stopped status details after refresh
 
 Automation stop behavior (`POST /api/automation/stop/:automationRunId`):

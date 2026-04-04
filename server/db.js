@@ -9,7 +9,7 @@ const dbPath = path.resolve(dataDir, "app.db");
 const db = new sqlite3.Database(dbPath);
 db.run("PRAGMA foreign_keys = ON");
 
-const LATEST_SCHEMA_VERSION = 14;
+const LATEST_SCHEMA_VERSION = 15;
 const VALID_AUTOMATION_TYPES = new Set(["feature", "epic", "story"]);
 const VALID_AUTOMATION_STATUSES = new Set(["pending", "running", "completed", "failed", "stopped"]);
 const VALID_AUTOMATION_STORY_EXECUTION_STATUSES = new Set(["completed", "failed"]);
@@ -137,7 +137,12 @@ async function detectVersionFromSchema() {
                 && await columnExists("runs", "automation_run_id");
               if (hasRunOriginLinkage) {
                 const hasQueueSnapshotTable = await tableExists("automation_run_queue_items");
-                if (hasQueueSnapshotTable) return 14;
+                if (hasQueueSnapshotTable) {
+                  const hasFailedStoryDetails = await columnExists("automation_runs", "failed_story_id")
+                    && await columnExists("automation_runs", "failure_summary");
+                  if (hasFailedStoryDetails) return 15;
+                  return 14;
+                }
                 return 13;
               }
               return 12;
@@ -429,6 +434,11 @@ async function migrateToV14() {
   `);
 }
 
+async function migrateToV15() {
+  await ensureColumn("automation_runs", "failed_story_id", "INTEGER");
+  await ensureColumn("automation_runs", "failure_summary", "TEXT");
+}
+
 async function runMigrations() {
   let version = await getSchemaVersion();
 
@@ -515,6 +525,12 @@ async function runMigrations() {
   if (version < 14) {
     await migrateToV14();
     version = 14;
+    await setSchemaVersion(version);
+  }
+
+  if (version < 15) {
+    await migrateToV15();
+    version = 15;
     await setSchemaVersion(version);
   }
 
@@ -1067,6 +1083,12 @@ async function createAutomationRun(input = {}) {
   const stopReason = typeof input.stopReason === "string" && input.stopReason.trim()
     ? input.stopReason.trim()
     : null;
+  const failedStoryId = input.failedStoryId === null || input.failedStoryId === undefined || input.failedStoryId === ""
+    ? null
+    : Number.parseInt(input.failedStoryId, 10);
+  const failureSummary = typeof input.failureSummary === "string" && input.failureSummary.trim()
+    ? input.failureSummary.trim()
+    : null;
 
   if (!automationType) {
     throw new Error("Automation type is required.");
@@ -1095,6 +1117,9 @@ async function createAutomationRun(input = {}) {
   if (!Number.isInteger(currentPosition) || currentPosition <= 0) {
     throw new Error("Current position must be a positive integer.");
   }
+  if (failedStoryId !== null && (!Number.isInteger(failedStoryId) || failedStoryId <= 0)) {
+    throw new Error("Failed story id must be a positive integer when provided.");
+  }
 
   const id = await runWithLastId(
     `
@@ -1108,9 +1133,11 @@ async function createAutomationRun(input = {}) {
         stop_on_incomplete,
         current_position,
         automation_status,
-        stop_reason
+        stop_reason,
+        failed_story_id,
+        failure_summary
       )
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `,
     [
       automationType,
@@ -1121,7 +1148,9 @@ async function createAutomationRun(input = {}) {
       stopOnIncomplete,
       currentPosition,
       automationStatus,
-      stopReason
+      stopReason,
+      failedStoryId,
+      failureSummary
     ]
   );
 
@@ -1149,6 +1178,8 @@ async function getAutomationRunById(id) {
         current_position,
         automation_status,
         stop_reason,
+        failed_story_id,
+        failure_summary,
         created_at,
         updated_at
       FROM automation_runs
@@ -1205,6 +1236,25 @@ async function updateAutomationRunMetadata(id, updates = {}) {
       : null;
     updateClauses.push("stop_reason = ?");
     params.push(stopReason);
+  }
+
+  if (Object.prototype.hasOwnProperty.call(updates, "failedStoryId")) {
+    const failedStoryId = updates.failedStoryId === null || updates.failedStoryId === undefined || updates.failedStoryId === ""
+      ? null
+      : Number.parseInt(updates.failedStoryId, 10);
+    if (failedStoryId !== null && (!Number.isInteger(failedStoryId) || failedStoryId <= 0)) {
+      throw new Error("Failed story id must be a positive integer when provided.");
+    }
+    updateClauses.push("failed_story_id = ?");
+    params.push(failedStoryId);
+  }
+
+  if (Object.prototype.hasOwnProperty.call(updates, "failureSummary")) {
+    const failureSummary = typeof updates.failureSummary === "string" && updates.failureSummary.trim()
+      ? updates.failureSummary.trim()
+      : null;
+    updateClauses.push("failure_summary = ?");
+    params.push(failureSummary);
   }
 
   if (updateClauses.length === 0) {
