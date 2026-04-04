@@ -121,6 +121,13 @@ function renderRun(run) {
   const completionWork = completionStatus === "complete"
     ? "none"
     : (run.completion_work || "unknown");
+  const contextBundleTitle = String(run.context_bundle_title || "").trim();
+  const contextBundleId = Number.parseInt(run.context_bundle_id, 10);
+  const contextBundleDisplay = contextBundleTitle
+    ? (Number.isInteger(contextBundleId) && contextBundleId > 0
+      ? `${contextBundleTitle} (#${contextBundleId})`
+      : contextBundleTitle)
+    : "(none)";
   const durationMs = typeof run.duration_ms === "number"
     ? run.duration_ms
     : ((typeof run.run_start_time === "number" && typeof run.run_end_time === "number")
@@ -133,6 +140,7 @@ function renderRun(run) {
     <div><strong>Mode</strong><span>${executionMode}</span></div>
     <div><strong>Base Branch</strong><span>${run.base_branch || "main"}</span></div>
     <div><strong>Run Branch</strong><span>${run.branch_name || "(unknown)"}</span></div>
+    <div><strong>Context Bundle</strong><span>${escapeHtml(contextBundleDisplay)}</span></div>
     <div><strong>Change Title</strong><span>${changeTitle}</span></div>
     <div><strong>Commit Notes</strong><span>${commitBody.replace(/\n/g, "<br>")}</span></div>
     <div><strong>Credits</strong><span>${credits}</span></div>

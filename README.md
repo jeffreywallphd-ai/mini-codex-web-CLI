@@ -166,6 +166,7 @@ Context bundles are persisted with a parent-child data model in SQLite:
 - When a bundle is selected on the index page, a compact metadata summary card appears under the selector and updates on selection changes, showing summary/intended use/project affinity with safe `(none)` fallbacks when optional metadata is missing.
 - Run and automation records persist nullable `context_bundle_id` linkage so bundle-backed and non-bundle executions remain backward compatible in one explicit model.
 - Run and automation APIs surface both bundle id and bundle title metadata (`context_bundle_id` + `context_bundle_title`, and camelCase variants in automation route payloads) so historical runs can be traced to bundle context selection.
+- Recent run cards on the index page and run details summaries show concise selected-bundle metadata (bundle title, with id in run details when available) so the context source used for each run remains visible for troubleshooting.
 - Prompt assembly uses a stable rule: compiled bundle context is injected **before** the task prompt using `bundle_context_before_task_prompt_v1` in `server/runPromptContext.js`.
 - The index page includes a **Manage Context Bundles** navigation action that routes to `/context-bundles.html`, making it the central bundle authoring/management page.
 - Context bundle API endpoints:
