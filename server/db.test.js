@@ -1062,6 +1062,7 @@ test("feature tree includes latest feature automation status summary with safe f
   };
 
   const automationRunIds = [];
+  let completedFeatureBundleId = null;
 
   try {
     await createFeatureTree(
@@ -1119,6 +1120,13 @@ test("feature tree includes latest feature automation status summary with safe f
     assert.ok(failedFeature);
     assert.ok(notStartedFeature);
 
+    const completedFeatureBundle = await createContextBundle({
+      title: `Feature Status Bundle ${stamp}`,
+      description: "Feature automation bundle association fixture.",
+      status: "active"
+    });
+    completedFeatureBundleId = completedFeatureBundle.id;
+
     const runningRun = await createAutomationRun({
       automationType: "feature",
       targetId: runningFeature.id,
@@ -1141,7 +1149,8 @@ test("feature tree includes latest feature automation status summary with safe f
       stopOnIncomplete: false,
       automationStatus: "completed",
       currentPosition: 1,
-      stopReason: "all_work_complete"
+      stopReason: "all_work_complete",
+      contextBundleId: completedFeatureBundleId
     });
     automationRunIds.push(completedRun.id);
 
@@ -1201,10 +1210,27 @@ test("feature tree includes latest feature automation status summary with safe f
       hydratedByName.get(`Feature Completed ${stamp}`).feature_automation_stop_reason,
       "all_work_complete"
     );
+    assert.equal(
+      hydratedByName.get(`Feature Completed ${stamp}`).feature_automation_context_bundle_id,
+      completedFeatureBundleId
+    );
+    assert.equal(
+      hydratedByName.get(`Feature Completed ${stamp}`).feature_automation_context_bundle_title,
+      completedFeatureBundle.title
+    );
+    assert.equal(
+      hydratedByName.get(`Feature Not Started ${stamp}`).feature_automation_context_bundle_id,
+      null
+    );
+    assert.equal(
+      hydratedByName.get(`Feature Not Started ${stamp}`).feature_automation_context_bundle_title,
+      null
+    );
   } finally {
     for (const automationRunId of automationRunIds) {
       await cleanupAutomationRun(automationRunId);
     }
+    await cleanupContextBundle(completedFeatureBundleId);
     await cleanupFeatureScope(scope);
   }
 });
@@ -1223,6 +1249,8 @@ test("feature tree includes latest epic and story automation status summaries wi
   };
 
   const automationRunIds = [];
+  let epicCompletedBundleId = null;
+  let storyCompletedBundleId = null;
 
   try {
     await createFeatureTree(
@@ -1262,6 +1290,19 @@ test("feature tree includes latest epic and story automation status summaries wi
     const storyFailed = epicFailed.stories[0];
     const storyNotStarted = epicNotStarted.stories[0];
 
+    const epicCompletedBundle = await createContextBundle({
+      title: `Epic Status Bundle ${stamp}`,
+      description: "Epic automation bundle association fixture.",
+      status: "active"
+    });
+    epicCompletedBundleId = epicCompletedBundle.id;
+    const storyCompletedBundle = await createContextBundle({
+      title: `Story Status Bundle ${stamp}`,
+      description: "Story automation bundle association fixture.",
+      status: "active"
+    });
+    storyCompletedBundleId = storyCompletedBundle.id;
+
     const epicRunningRun = await createAutomationRun({
       automationType: "epic",
       targetId: epicRunning.id,
@@ -1284,7 +1325,8 @@ test("feature tree includes latest epic and story automation status summaries wi
       stopOnIncomplete: false,
       automationStatus: "completed",
       currentPosition: 1,
-      stopReason: "all_work_complete"
+      stopReason: "all_work_complete",
+      contextBundleId: epicCompletedBundleId
     });
     automationRunIds.push(epicCompletedRun.id);
 
@@ -1336,7 +1378,8 @@ test("feature tree includes latest epic and story automation status summaries wi
       stopOnIncomplete: false,
       automationStatus: "completed",
       currentPosition: 1,
-      stopReason: "all_work_complete"
+      stopReason: "all_work_complete",
+      contextBundleId: storyCompletedBundleId
     });
     automationRunIds.push(storyCompletedRun.id);
 
@@ -1402,6 +1445,14 @@ test("feature tree includes latest epic and story automation status summaries wi
     assert.equal(hydratedEpicsByName.get(`Epic Not Started ${stamp}`).epic_automation_status, "not_started");
     assert.equal(hydratedEpicsByName.get(`Epic Completed ${stamp}`).epic_automation_run_id, epicCompletedRun.id);
     assert.equal(hydratedEpicsByName.get(`Epic Completed ${stamp}`).epic_automation_stop_reason, "all_work_complete");
+    assert.equal(
+      hydratedEpicsByName.get(`Epic Completed ${stamp}`).epic_automation_context_bundle_id,
+      epicCompletedBundleId
+    );
+    assert.equal(
+      hydratedEpicsByName.get(`Epic Completed ${stamp}`).epic_automation_context_bundle_title,
+      epicCompletedBundle.title
+    );
 
     const storiesByName = new Map(
       hydratedFeatures[0].epics
@@ -1415,10 +1466,28 @@ test("feature tree includes latest epic and story automation status summaries wi
     assert.equal(storiesByName.get(`Story Not Started ${stamp}`).story_automation_status, "not_started");
     assert.equal(storiesByName.get(`Story Completed ${stamp}`).story_automation_run_id, storyCompletedRun.id);
     assert.equal(storiesByName.get(`Story Completed ${stamp}`).story_automation_stop_reason, "all_work_complete");
+    assert.equal(
+      storiesByName.get(`Story Completed ${stamp}`).story_automation_context_bundle_id,
+      storyCompletedBundleId
+    );
+    assert.equal(
+      storiesByName.get(`Story Completed ${stamp}`).story_automation_context_bundle_title,
+      storyCompletedBundle.title
+    );
+    assert.equal(
+      storiesByName.get(`Story Not Started ${stamp}`).story_automation_context_bundle_id,
+      null
+    );
+    assert.equal(
+      storiesByName.get(`Story Not Started ${stamp}`).story_automation_context_bundle_title,
+      null
+    );
   } finally {
     for (const automationRunId of automationRunIds) {
       await cleanupAutomationRun(automationRunId);
     }
+    await cleanupContextBundle(epicCompletedBundleId);
+    await cleanupContextBundle(storyCompletedBundleId);
     await cleanupFeatureScope(scope);
   }
 });

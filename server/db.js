@@ -1827,20 +1827,29 @@ async function getFeaturesTree(scope = {}) {
     const automationRows = await all(
       `
         SELECT
-          id,
-          target_id,
-          automation_status,
-          stop_reason,
-          created_at,
-          updated_at
+          automation_runs.id,
+          automation_runs.target_id,
+          automation_runs.automation_status,
+          automation_runs.stop_reason,
+          automation_runs.context_bundle_id,
+          context_bundles.title AS context_bundle_title,
+          automation_runs.created_at,
+          automation_runs.updated_at
         FROM automation_runs
-        WHERE automation_type = ?
-          AND target_id IN (${placeholders})
+        LEFT JOIN context_bundles
+          ON context_bundles.id = automation_runs.context_bundle_id
+        WHERE automation_runs.automation_type = ?
+          AND automation_runs.target_id IN (${placeholders})
           AND (
-            (project_name = ? AND base_branch = ?)
-            OR (COALESCE(project_name, '') = '' AND COALESCE(base_branch, '') = '')
+            (automation_runs.project_name = ? AND automation_runs.base_branch = ?)
+            OR (
+              COALESCE(automation_runs.project_name, '') = ''
+              AND COALESCE(automation_runs.base_branch, '') = ''
+            )
           )
-        ORDER BY datetime(COALESCE(updated_at, created_at)) DESC, id DESC
+        ORDER BY
+          datetime(COALESCE(automation_runs.updated_at, automation_runs.created_at)) DESC,
+          automation_runs.id DESC
       `,
       [automationType, ...targetIds, projectName, baseBranch]
     );
@@ -1857,12 +1866,21 @@ async function getFeaturesTree(scope = {}) {
         const normalizedStatus = AUTOMATION_STATUS_FOR_SUMMARY.has(rawStatus)
           ? rawStatus
           : "not_started";
+        const contextBundleId = Number.parseInt(row?.context_bundle_id, 10);
+        const contextBundleTitle = typeof row?.context_bundle_title === "string"
+          && row.context_bundle_title.trim()
+          ? row.context_bundle_title.trim()
+          : null;
 
         latestByTargetId.set(targetId, {
           automation_run_id: Number.parseInt(row?.id, 10) || null,
           automation_status: normalizedStatus,
           automation_stop_reason: row?.stop_reason || null,
-          automation_updated_at: row?.updated_at || row?.created_at || null
+          automation_updated_at: row?.updated_at || row?.created_at || null,
+          automation_context_bundle_id: Number.isInteger(contextBundleId) && contextBundleId > 0
+            ? contextBundleId
+            : null,
+          automation_context_bundle_title: contextBundleTitle
         });
       }
     }
@@ -1890,6 +1908,8 @@ async function getFeaturesTree(scope = {}) {
       feature_automation_status: latestFeatureAutomation?.feature_automation_status || "not_started",
       feature_automation_stop_reason: latestFeatureAutomation?.feature_automation_stop_reason ?? null,
       feature_automation_updated_at: latestFeatureAutomation?.feature_automation_updated_at ?? null,
+      feature_automation_context_bundle_id: latestFeatureAutomation?.feature_automation_context_bundle_id ?? null,
+      feature_automation_context_bundle_title: latestFeatureAutomation?.feature_automation_context_bundle_title ?? null,
       epics: []
     }];
   }));
@@ -1903,6 +1923,8 @@ async function getFeaturesTree(scope = {}) {
       epic_automation_status: latestEpicAutomation?.automation_status || "not_started",
       epic_automation_stop_reason: latestEpicAutomation?.automation_stop_reason ?? null,
       epic_automation_updated_at: latestEpicAutomation?.automation_updated_at ?? null,
+      epic_automation_context_bundle_id: latestEpicAutomation?.automation_context_bundle_id ?? null,
+      epic_automation_context_bundle_title: latestEpicAutomation?.automation_context_bundle_title ?? null,
       stories: []
     };
     epicsById.set(epic.id, hydratedEpic);
@@ -1937,7 +1959,9 @@ async function getFeaturesTree(scope = {}) {
       story_automation_run_id: latestStoryAutomation?.automation_run_id ?? null,
       story_automation_status: latestStoryAutomation?.automation_status || "not_started",
       story_automation_stop_reason: latestStoryAutomation?.automation_stop_reason ?? null,
-      story_automation_updated_at: latestStoryAutomation?.automation_updated_at ?? null
+      story_automation_updated_at: latestStoryAutomation?.automation_updated_at ?? null,
+      story_automation_context_bundle_id: latestStoryAutomation?.automation_context_bundle_id ?? null,
+      story_automation_context_bundle_title: latestStoryAutomation?.automation_context_bundle_title ?? null
     });
   }
 

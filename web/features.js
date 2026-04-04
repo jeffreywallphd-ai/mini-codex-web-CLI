@@ -781,6 +781,63 @@ function appendAutomationStopReasonLine(content, { status, stopReason } = {}) {
   content.appendChild(row);
 }
 
+function normalizeAutomationBundleAssociation(contextBundleId, contextBundleTitle) {
+  const normalizedId = Number.parseInt(contextBundleId, 10);
+  const hasValidId = Number.isInteger(normalizedId) && normalizedId > 0;
+  const normalizedTitle = typeof contextBundleTitle === "string" && contextBundleTitle.trim()
+    ? contextBundleTitle.trim()
+    : null;
+
+  return {
+    contextBundleId: hasValidId ? normalizedId : null,
+    contextBundleTitle: normalizedTitle
+  };
+}
+
+function resolveAutomationBundleAssociation(automationType, targetId, fallback = {}) {
+  const fallbackAssociation = normalizeAutomationBundleAssociation(
+    fallback?.contextBundleId,
+    fallback?.contextBundleTitle
+  );
+  const activeRun = globalAutomationStatus?.automationRun;
+  if (!activeRun) {
+    return fallbackAssociation;
+  }
+
+  if (String(activeRun.automationType || "").toLowerCase() !== String(automationType || "").toLowerCase()) {
+    return fallbackAssociation;
+  }
+
+  if (Number(activeRun.targetId) !== Number(targetId)) {
+    return fallbackAssociation;
+  }
+
+  return normalizeAutomationBundleAssociation(activeRun.contextBundleId, activeRun.contextBundleTitle);
+}
+
+function appendAutomationBundleAssociationLine(content, { status, automationType, targetId, fallback } = {}) {
+  if (status === "not_started") {
+    return;
+  }
+
+  const association = resolveAutomationBundleAssociation(automationType, targetId, fallback);
+  const row = document.createElement("p");
+  row.className = "feature-automation-status-row";
+
+  if (association.contextBundleTitle) {
+    const bundleLabel = association.contextBundleId
+      ? `${association.contextBundleTitle} (#${association.contextBundleId})`
+      : association.contextBundleTitle;
+    row.textContent = `Context bundle: ${bundleLabel}`;
+  } else if (association.contextBundleId) {
+    row.textContent = `Context bundle: #${association.contextBundleId}`;
+  } else {
+    row.textContent = "Context bundle: none";
+  }
+
+  content.appendChild(row);
+}
+
 function getStoryAutomationStatus(story) {
   const activeStoryRun = Boolean(
     globalAutomationLock?.isActive
@@ -891,6 +948,15 @@ function createFeatureAutomationStatusSummary(content, feature) {
   }
 
   content.appendChild(row);
+  appendAutomationBundleAssociationLine(content, {
+    status,
+    automationType: "feature",
+    targetId: feature?.id,
+    fallback: {
+      contextBundleId: feature?.feature_automation_context_bundle_id,
+      contextBundleTitle: feature?.feature_automation_context_bundle_title
+    }
+  });
   appendAutomationStopReasonLine(content, {
     status,
     stopReason: feature?.feature_automation_stop_reason
@@ -920,6 +986,15 @@ function createEpicAutomationStatusSummary(content, epic) {
   }
 
   content.appendChild(row);
+  appendAutomationBundleAssociationLine(content, {
+    status,
+    automationType: "epic",
+    targetId: epic?.id,
+    fallback: {
+      contextBundleId: epic?.epic_automation_context_bundle_id,
+      contextBundleTitle: epic?.epic_automation_context_bundle_title
+    }
+  });
   appendAutomationStopReasonLine(content, {
     status,
     stopReason: epic?.epic_automation_stop_reason
@@ -949,6 +1024,15 @@ function createStoryAutomationStatusSummary(content, story) {
   }
 
   content.appendChild(row);
+  appendAutomationBundleAssociationLine(content, {
+    status,
+    automationType: "story",
+    targetId: story?.id,
+    fallback: {
+      contextBundleId: story?.story_automation_context_bundle_id,
+      contextBundleTitle: story?.story_automation_context_bundle_title
+    }
+  });
   appendAutomationStopReasonLine(content, {
     status,
     stopReason: story?.story_automation_stop_reason

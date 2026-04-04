@@ -38,6 +38,7 @@ The app is designed for personal LAN use, not for public internet exposure or mu
 - Index page run form includes an optional single-bundle selector with concise metadata hints (title/intended use/summary) plus a compact selected-bundle summary card (summary/intended use/project affinity) so manual runs can include one bundle or none
 - Feature card automation control in **Not Yet Implemented** for launching feature-wide automation (`Complete with Automation`)
 - Feature-management automation launch controls (feature/epic/story) include a compact optional single-bundle selector powered by the same context-bundle list API as the index page (`/api/context-bundles?includeParts=false`), and send the selected `contextBundleId` with start/resume requests
+- Feature/epic/story automation summaries display concise associated bundle labels (`title` + id when available, or `none`) so active and completed automation context remains transparent in feature-management status views
 - Feature/epic/story automation summaries include concise stop reasons for early stops (`execution_failed`, `story_incomplete`, `manual_stop`) when backend state provides one
 - SQLite storage with no external database
 - Mobile-friendly, lightweight UI intended for LAN access
@@ -427,6 +428,7 @@ Feature Management UI integration:
 - feature launch controls include a compact optional single-bundle selector (`No context bundle` or one saved bundle) so each automation start/resume can explicitly attach one bundle
 - feature cards include a `Stop Run For Incomplete Stories` checkbox that controls `stopOnIncompleteStory` in the start request (defaults to unchecked)
 - feature cards include a compact automation status summary badge sourced from backend feature automation state (`not_started`, `running`, `completed`, `stopped`, `failed`) with graceful fallback to `not_started` when status data is missing
+- feature/epic/story automation status summaries include a compact `Context bundle` line sourced from automation metadata (`context_bundle_id` + `context_bundle_title`) so users can quickly identify the bundle attached to each automation run
 - running feature/epic automation summaries include a concise `Current story` line sourced from `GET /api/automation/status/:automationRunId` queue status data (`queue.currentItem`)
 - feature/epic/story automation summaries and recent execution history include run-details links (`/run-details.html?id=<runId>`) when run ids are available, with a graceful `Run details unavailable` fallback when they are not
 - feature automation UI stores a lightweight per-scope (`projectName` + `baseBranch`) snapshot of the latest automation run id and status payload in `localStorage`, allowing cards to recover recent automation context after page refresh without introducing a client-side state library
