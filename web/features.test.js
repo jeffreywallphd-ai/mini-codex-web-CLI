@@ -305,15 +305,17 @@ test("automation bundle selector surfaces non-blocking project-affinity mismatch
   assert.match(source, /refreshAffinityWarning\(\);/);
 });
 
-test("feature page syncs open cards with active queue story and auto-collapses completed nodes", () => {
+test("feature page syncs automation-driven open cards for incomplete features only", () => {
   const source = readFeaturesScript();
 
-  assert.match(source, /function syncAutomationDrivenCardState\(\)/);
+  assert.match(source, /function syncAutomationDrivenCardState\(incompleteFeatures = \[\]\)/);
+  assert.match(source, /const managedCardKeys = buildAutomationManagedCardKeySet\(incompleteFeatures\);/);
   assert.match(source, /openCards\.add\(`feature:\$\{activeStory\.featureId\}`\);/);
   assert.match(source, /openCards\.add\(`epic:\$\{activeStory\.epicId\}`\);/);
   assert.match(source, /openCards\.add\(`story:\$\{activeStory\.storyId\}`\);/);
   assert.match(source, /openCards\.delete\(`story:\$\{storyId\}`\);/);
-  assert.match(source, /if \(isEpicComplete\(epic\)\) \{\s*openCards\.delete\(`epic:\$\{epic\.id\}`\);/m);
+  assert.match(source, /for \(const feature of incompleteFeatures\)/);
+  assert.match(source, /if \(isManagedCard\(featureCardKey\)\) \{\s*openCards\.delete\(featureCardKey\);/m);
   assert.match(source, /removeFeatureDescendantOpenCards\(activeRun\.targetId\);/);
 });
 
@@ -369,6 +371,30 @@ test("active automation cards render abort actions that purge queue and request 
   assert.match(source, /async function abortAutomationRun\(automationRunId\)/);
   assert.match(source, /purgeRemainingQueue:\s*true/);
   assert.match(source, /abortActiveStoryIfPossible:\s*true/);
+  assert.match(source, /clearFeatureAutomationQueue\(\{\s*preserveStatusMessage:\s*true\s*\}\);/m);
   assert.match(source, /abortButton\.textContent = "Abort";/);
   assert.match(source, /Remaining queued stories removed:/);
+});
+
+test("feature page includes ordered feature automation queue orchestration", () => {
+  const source = readFeaturesScript();
+
+  assert.match(source, /const featureAutomationQueue = \[\];/);
+  assert.match(source, /function toggleFeatureInQueue\(featureId\)/);
+  assert.match(source, /function moveFeatureQueueItem\(featureId,\s*direction\)/);
+  assert.match(source, /async function runFeatureAutomationQueue\(\)/);
+  assert.match(source, /async function maybeAdvanceFeatureQueue\(\)/);
+  assert.match(source, /featureAutomationQueue\.shift\(\);/);
+  assert.match(source, /await launchFeatureAutomationForFeature\(nextFeature,\s*\{/m);
+  assert.match(source, /runFeatureQueueButton\.textContent = isFeatureQueueRunning \? "Feature Queue Running\.\.\." : "Complete Queue with Automation";/);
+  assert.match(source, /queueToggleButton\.textContent = featureAutomationQueue\.includes\(feature\.id\)/);
+});
+
+test("manifest create clears textarea on success and create feature card defaults collapsed", () => {
+  const source = readFeaturesScript();
+
+  assert.match(source, /createManifestButton\.disabled = true;/);
+  assert.match(source, /manifestJsonInput\.value = "";/);
+  assert.match(source, /createManifestButton\.disabled = false;/);
+  assert.match(source, /wireStaticCardToggle\(createFeatureCardToggle,\s*createFeatureCardContent,\s*\{\s*defaultOpen:\s*false\s*\}\);/);
 });
