@@ -34,8 +34,6 @@ let automationTimerInterval = null;
 let activeAutomationStatusMessage = "Automation status will appear here.";
 let activeStoryAutomationTimerNode = null;
 let activeStoryAutomationStatusNode = null;
-const featureAutomationQueueByFeatureId = new Map();
-let activeFeatureAutomationQueue = null;
 let epicDraftId = 0;
 let storyDraftId = 0;
 const epicDrafts = [];
@@ -233,8 +231,7 @@ function startAutomationStream(streamId) {
 
 function isAnyAutomationInFlight() {
   return storyAutomationInFlight.size > 0
-    || Boolean(globalAutomationLock?.isActive)
-    || Boolean(activeFeatureAutomationQueue?.isActive);
+    || Boolean(globalAutomationLock?.isActive);
 }
 
 function matchesQuery(feature, query) {
@@ -346,38 +343,6 @@ function wireStaticCardToggle(toggleButton, contentNode, { defaultOpen = false }
   applyState();
 }
 
-function findStoryById(storyId) {
-  for (const feature of allFeatures) {
-    for (const epic of feature.epics || []) {
-      for (const story of epic.stories || []) {
-        if (story.id === storyId) {
-          return story;
-        }
-      }
-    }
-  }
-
-  return null;
-}
-
-function buildFeatureStoryQueue(feature) {
-  const queue = [];
-
-  for (const epic of feature.epics || []) {
-    for (const story of epic.stories || []) {
-      if (isStoryComplete(story)) {
-        continue;
-      }
-
-      queue.push({
-        storyId: story.id
-      });
-    }
-  }
-
-  return queue;
-}
-
 async function executeStoryAutomation(story, options = {}) {
   const stopMergeIfStoryImplementationIncomplete = Boolean(options.stopMergeIfStoryImplementationIncomplete);
   const skipInFlightCheck = Boolean(options.skipInFlightCheck);
@@ -449,60 +414,41 @@ async function executeStoryAutomation(story, options = {}) {
   }
 }
 
-async function runFeatureAutomationQueue(featureId) {
-  const queue = featureAutomationQueueByFeatureId.get(featureId);
-  if (!queue || !queue.length) {
-    createStatusBox.textContent = "No incomplete stories in this feature to automate.";
-    featureAutomationQueueByFeatureId.delete(featureId);
-    renderFeatureLists();
-    return;
-  }
-
-  activeFeatureAutomationQueue = {
-    featureId,
-    isActive: true
-  };
-  renderFeatureLists();
-
-  try {
-    while (queue.length > 0) {
-      const nextItem = queue[0];
-      const story = findStoryById(nextItem.storyId);
-      if (!story || isStoryComplete(story)) {
-        queue.shift();
-        continue;
-      }
-
-      try {
-        const result = await executeStoryAutomation(story, {
-          stopMergeIfStoryImplementationIncomplete: false,
-          skipInFlightCheck: true
-        });
-
-        if (result?.autoMerge?.status === "merged") {
-          queue.shift();
-          createStatusBox.textContent = `Feature automation merged story #${story.id}. ${queue.length} story(s) remaining.`;
-          continue;
-        }
-
-        queue.shift();
-      } catch (error) {
-        if (error?.errorType === "merge_failed") {
-          createStatusBox.textContent = `Feature automation stopped on merge failure for story #${story.id}: ${error.message}`;
-          return;
-        }
-
-        queue.shift();
-        createStatusBox.textContent = `Story #${story.id} failed but queue continued: ${error.message}`;
+function getIncompleteStoryCountForFeature(feature) {
+  let count = 0;
+  for (const epic of feature.epics || []) {
+    for (const story of epic.stories || []) {
+      if (!isStoryComplete(story)) {
+        count += 1;
       }
     }
-
-    createStatusBox.textContent = "Feature automation queue completed.";
-    featureAutomationQueueByFeatureId.delete(featureId);
-  } finally {
-    activeFeatureAutomationQueue = null;
-    renderFeatureLists();
   }
+
+  return count;
+}
+
+async function startFeatureAutomation(featureId) {
+  const projectName = automationScope.projectName;
+  const baseBranch = automationScope.baseBranch;
+  if (!projectName || !baseBranch) {
+    throw new Error("Select a project and branch on the editor page first, then retry automation.");
+  }
+
+  const response = await fetch(`/api/automation/start/feature/${encodeURIComponent(String(featureId))}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      projectName,
+      baseBranch
+    })
+  });
+  const result = await response.json();
+
+  if (!response.ok) {
+    throw new Error(result.error || "Unable to start feature automation.");
+  }
+
+  return result;
 }
 
 function createFeatureAutomationUi(content, feature) {
@@ -510,39 +456,62 @@ function createFeatureAutomationUi(content, feature) {
     return;
   }
 
-  const existingQueue = featureAutomationQueueByFeatureId.get(feature.id);
-  const queueCount = Array.isArray(existingQueue) ? existingQueue.length : 0;
-  if (queueCount > 0) {
-    content.appendChild(createTextNode("p", "inline-hint", `Automation queue: ${queueCount} story(s) remaining.`));
+  const incompleteStoryCount = getIncompleteStoryCountForFeature(feature);
+  if (incompleteStoryCount <= 0) {
+    content.appendChild(createTextNode("p", "inline-hint", "No incomplete stories in this feature."));
+    return;
+  }
+
+  const isActiveFeatureRun = Boolean(
+    globalAutomationLock?.isActive
+      && globalAutomationLock?.automationType === "feature"
+      && Number(globalAutomationLock?.targetId) === Number(feature.id)
+  );
+
+  if (isActiveFeatureRun) {
+    const runLabel = Number.isInteger(Number(globalAutomationLock?.automationRunId))
+      ? `Feature automation run #${globalAutomationLock.automationRunId} is in progress.`
+      : "Feature automation is in progress.";
+    content.appendChild(createTextNode("p", "inline-hint", runLabel));
   }
 
   const button = document.createElement("button");
   button.type = "button";
   button.className = "secondary-button";
-  button.textContent = activeFeatureAutomationQueue?.featureId === feature.id
+  button.textContent = isActiveFeatureRun
     ? "Automation Running..."
     : "Complete with Automation";
-  button.disabled = isAnyAutomationInFlight();
+  button.disabled = isAnyAutomationInFlight() && !isActiveFeatureRun;
 
   button.addEventListener("click", async () => {
-    const projectName = automationScope.projectName;
-    const baseBranch = automationScope.baseBranch;
-    if (!projectName || !baseBranch) {
-      createStatusBox.textContent = "Select a project and branch on the editor page first, then retry automation.";
-      return;
-    }
-
-    if (isAnyAutomationInFlight()) {
+    if (isAnyAutomationInFlight() && !isActiveFeatureRun) {
       createStatusBox.textContent = "Automation is already running. Wait for completion before starting another run.";
       return;
     }
 
-    if (!featureAutomationQueueByFeatureId.has(feature.id)) {
-      featureAutomationQueueByFeatureId.set(feature.id, buildFeatureStoryQueue(feature));
+    if (isActiveFeatureRun) {
+      createStatusBox.textContent = "Feature automation is already running for this feature.";
+      return;
     }
 
-    await runFeatureAutomationQueue(feature.id);
-    await loadAutomationLock();
+    button.disabled = true;
+    button.textContent = "Starting Automation...";
+
+    try {
+      const result = await startFeatureAutomation(feature.id);
+      const runId = result?.automationRun?.id;
+      const totalStories = result?.queue?.totalStories;
+      createStatusBox.textContent = Number.isInteger(runId)
+        ? `Feature automation started for feature #${feature.id} (run #${runId}, ${totalStories} story(s) queued).`
+        : `Feature automation started for feature #${feature.id}.`;
+      await loadAutomationLock();
+    } catch (error) {
+      createStatusBox.textContent = `Feature automation failed to start: ${error.message}`;
+      button.disabled = isAnyAutomationInFlight() && !isActiveFeatureRun;
+      button.textContent = "Complete with Automation";
+    } finally {
+      renderFeatureLists();
+    }
   });
 
   content.appendChild(button);

@@ -31,6 +31,7 @@ The app is designed for personal LAN use, not for public internet exposure or mu
 - Sequential automation runner for server-driven queue execution (`server/automationRunner.js`)
 - Shared automated story run pipeline that reuses manual run creation/execution persistence (`server/automatedStoryRunPipeline.js`)
 - Automated run-origin linkage persisted on each run (`automation_origin_type`, `automation_origin_id`, `automation_run_id`) for feature/epic/story traceability
+- Feature card automation control in **Not Yet Implemented** for launching feature-wide automation (`Complete with Automation`)
 - SQLite storage with no external database
 - Mobile-friendly, lightweight UI intended for LAN access
 
@@ -260,6 +261,12 @@ Success response (`202 Accepted`) includes tracking metadata for the UI:
 - `queue` (`totalStories`, `storyIds`, and queue readiness metadata)
 - `projectName`
 - `baseBranch`
+
+Feature Management UI integration:
+
+- incomplete feature cards surface a **Complete with Automation** button
+- the feature button starts automation via `POST /api/automation/start/feature/:featureId`
+- the button is hidden for completed features and replaced with a lightweight hint when no incomplete stories are available in the feature
 
 Automation status response (`200 OK`) includes polling-friendly state:
 
