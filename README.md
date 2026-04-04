@@ -29,6 +29,7 @@ The app is designed for personal LAN use, not for public internet exposure or mu
 - Automation metadata persistence for orchestration state (`automation_type`, `target_id`, `stop_on_incomplete`, `stop_flag`, `current_position`, `automation_status`, `stop_reason`)
 - Automation story execution outcome persistence for status reporting (`automation_story_executions` with run linkage and queue outcome state)
 - Sequential automation runner for server-driven queue execution (`server/automationRunner.js`)
+- Shared automated story run pipeline that reuses manual run creation/execution persistence (`server/automatedStoryRunPipeline.js`)
 - SQLite storage with no external database
 - Mobile-friendly, lightweight UI intended for LAN access
 
@@ -199,6 +200,19 @@ is compatible with the existing story run lifecycle.
   `queueAction` (`advanced`, `stopped`, `failed`) and completion fields so
   each story outcome can be persisted for automation status displays.
 
+## Automated Story Run Pipeline
+
+`server/automatedStoryRunPipeline.js` is the shared integration point between
+automation and the existing run pipeline.
+
+- resolves story context in project/branch scope
+- builds the story automation prompt
+- executes story work via the same `executeRunFlow` path used by manual run
+  creation/execution
+- persists run output through the standard `runs` table lifecycle and then
+  links the run to the story (`attachRunToStory`)
+- returns normalized completion metadata consumed by queue orchestration
+
 ## Automation Start API
 
 `server/automationStartApi.js` exposes minimal endpoints for launching
@@ -217,8 +231,8 @@ Each endpoint:
 - validates the selected target is eligible (non-empty runnable queue)
 - creates an `automation_runs` record with initial state
 - initializes a deterministic queue from `defineAutomationExecutionPlan`
-- starts background execution using the existing run system (`executeRunFlow`
-  + sequential queue runner)
+- starts background execution using the shared automated story run pipeline
+  (`createAutomatedStoryRunExecutor` + `executeRunFlow` + sequential queue runner)
 
 Request body fields:
 

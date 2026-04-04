@@ -27,7 +27,7 @@ const {
   deleteRunById,
   dbReady
 } = require("./db");
-const { buildStoryAutomationPrompt } = require("./storyAutomationPrompt");
+const { createAutomatedStoryRunExecutor } = require("./automatedStoryRunPipeline");
 const { createCodexBranch, getGitSnapshot, listLocalBranches, mergeBranch, pullRepository } = require("./git");
 const { createAutomationStartRouter } = require("./automationStartApi");
 
@@ -332,6 +332,13 @@ async function executeRunFlow({
   };
 }
 
+const executeAutomatedStoryRun = createAutomatedStoryRunExecutor({
+  getStoryAutomationContext,
+  executeRunFlow,
+  attachRunToStory,
+  getErrorMessage
+});
+
 app.use("/api/automation", createAutomationStartRouter({
   isValidProject,
   listLocalBranches,
@@ -340,9 +347,7 @@ app.use("/api/automation", createAutomationStartRouter({
   createAutomationRun,
   updateAutomationRunMetadata,
   recordAutomationStoryExecution,
-  getStoryAutomationContext,
-  attachRunToStory,
-  executeRunFlow,
+  executeAutomatedStoryRun,
   getAutomationRunById,
   getAutomationStoryExecutionsByRunId,
   getAutomationQueueStoriesByTarget,
@@ -557,16 +562,6 @@ app.post("/api/stories/:storyId/complete-with-automation", async (req, res) => {
       return res.status(404).json({ error: "Story not found." });
     }
 
-    let prompt = "";
-    try {
-      prompt = buildStoryAutomationPrompt(storyContext);
-    } catch (promptError) {
-      const wrappedPromptError = new Error(getErrorMessage(promptError));
-      wrappedPromptError.code = "prompt_generation_failed";
-      wrappedPromptError.cause = promptError;
-      throw wrappedPromptError;
-    }
-
     runningProjects.add(projectName);
     activeFeatureAutomation = {
       projectName,
@@ -585,16 +580,15 @@ app.post("/api/stories/:storyId/complete-with-automation", async (req, res) => {
     });
     publishRunEvent(streamId, { type: "automation.started", message: `Story automation started for #${storyId}.` });
 
-    const { runId, responsePayload } = await executeRunFlow({
+    const runResult = await executeAutomatedStoryRun({
+      storyId,
       projectName,
-      prompt,
-      executionMode,
       baseBranch,
+      executionMode,
       streamId
     });
+    const { runId, responsePayload, prompt } = runResult;
 
-    await attachRunToStory(storyId, runId);
-    const runCompletionStatus = normalizeCompletionStatus(responsePayload.completion_status);
     executionRecordInput = {
       automationRunId: automationRunRecord?.id,
       storyId,
@@ -602,10 +596,10 @@ app.post("/api/stories/:storyId/complete-with-automation", async (req, res) => {
       executionStatus: "completed",
       queueAction: "advanced",
       runId,
-      completionStatus: runCompletionStatus,
+      completionStatus: normalizeCompletionStatus(responsePayload.completion_status),
       completionWork: responsePayload.completion_work ?? null
     };
-    const shouldSkipAutoMerge = stopMergeIfStoryImplementationIncomplete && runCompletionStatus !== "complete";
+    const shouldSkipAutoMerge = stopMergeIfStoryImplementationIncomplete && executionRecordInput.completionStatus !== "complete";
     let autoMerge = {
       status: "not_attempted",
       reason: "No merge outcome available."
@@ -622,7 +616,7 @@ app.post("/api/stories/:storyId/complete-with-automation", async (req, res) => {
       executionRecordInput.queueAction = "stopped";
       autoMerge = {
         status: "skipped",
-        reason: `Run completion status was '${runCompletionStatus}'.`
+        reason: `Run completion status was '${executionRecordInput.completionStatus}'.`
       };
       publishRunEvent(streamId, {
         type: "merge.skipped",
