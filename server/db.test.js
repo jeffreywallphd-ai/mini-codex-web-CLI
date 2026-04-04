@@ -12,7 +12,8 @@ const {
   getAutomationRunById,
   updateAutomationRunMetadata,
   recordAutomationStoryExecution,
-  getAutomationStoryExecutionsByRunId
+  getAutomationStoryExecutionsByRunId,
+  getAutomationQueueStoriesByTarget
 } = require("./db");
 
 const dbPath = path.resolve(__dirname, "../data/app.db");
@@ -308,4 +309,68 @@ test("automation story execution persistence validates required fields", async (
     }),
     /Queue action must be advanced, stopped, or failed/
   );
+});
+
+test("automation queue stories can be resolved by feature/epic/story targets", async () => {
+  await dbReady;
+
+  const stamp = Date.now();
+  const scope = {
+    projectName: `db-automation-status-${stamp}`,
+    baseBranch: "main"
+  };
+
+  await createFeatureTree(
+    {
+      name: `Feature ${stamp}`,
+      description: "Queue scope fixture",
+      epics: [
+        {
+          name: `Epic A ${stamp}`,
+          description: "First epic",
+          stories: [
+            { name: `Story A1 ${stamp}`, description: "A1" },
+            { name: `Story A2 ${stamp}`, description: "A2" }
+          ]
+        },
+        {
+          name: `Epic B ${stamp}`,
+          description: "Second epic",
+          stories: [
+            { name: `Story B1 ${stamp}`, description: "B1" }
+          ]
+        }
+      ]
+    },
+    scope
+  );
+
+  const features = await getFeaturesTree(scope);
+  const feature = features[0];
+  const epicA = feature.epics[0];
+  const epicB = feature.epics[1];
+  const storyA1 = epicA.stories[0];
+
+  const featureQueue = await getAutomationQueueStoriesByTarget("feature", feature.id);
+  assert.equal(featureQueue.length, 3);
+  assert.deepEqual(featureQueue.map((item) => item.positionInQueue), [1, 2, 3]);
+  assert.deepEqual(featureQueue.map((item) => item.storyId), [
+    epicA.stories[0].id,
+    epicA.stories[1].id,
+    epicB.stories[0].id
+  ]);
+
+  const epicQueue = await getAutomationQueueStoriesByTarget("epic", epicA.id);
+  assert.equal(epicQueue.length, 2);
+  assert.deepEqual(epicQueue.map((item) => item.storyId), [
+    epicA.stories[0].id,
+    epicA.stories[1].id
+  ]);
+
+  const storyQueue = await getAutomationQueueStoriesByTarget("story", storyA1.id);
+  assert.equal(storyQueue.length, 1);
+  assert.equal(storyQueue[0].storyId, storyA1.id);
+
+  const invalidQueue = await getAutomationQueueStoriesByTarget("feature", 0);
+  assert.deepEqual(invalidQueue, []);
 });

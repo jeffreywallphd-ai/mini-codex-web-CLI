@@ -55,6 +55,36 @@ function parseTargetId(targetIdRaw) {
   return targetId;
 }
 
+function toStatusApiAutomationRun(automationRun) {
+  return {
+    id: automationRun.id,
+    automationType: automationRun.automation_type,
+    targetId: automationRun.target_id,
+    stopOnIncomplete: automationRun.stop_on_incomplete === 1,
+    stopFlag: automationRun.stop_flag === 1,
+    currentPosition: automationRun.current_position,
+    status: automationRun.automation_status,
+    stopReason: automationRun.stop_reason,
+    createdAt: automationRun.created_at,
+    updatedAt: automationRun.updated_at
+  };
+}
+
+function toStatusApiExecutionSummary(execution = {}) {
+  return {
+    id: execution.id ?? null,
+    storyId: execution.story_id ?? null,
+    positionInQueue: execution.position_in_queue ?? null,
+    executionStatus: execution.execution_status ?? null,
+    queueAction: execution.queue_action ?? null,
+    runId: execution.run_id ?? null,
+    completionStatus: execution.completion_status ?? null,
+    completionWork: execution.completion_work ?? null,
+    error: execution.error ?? null,
+    createdAt: execution.created_at ?? null
+  };
+}
+
 function createAutomationStartRouter(deps = {}) {
   const {
     isValidProject,
@@ -67,6 +97,9 @@ function createAutomationStartRouter(deps = {}) {
     getStoryAutomationContext,
     attachRunToStory,
     executeRunFlow,
+    getAutomationRunById,
+    getAutomationStoryExecutionsByRunId,
+    getAutomationQueueStoriesByTarget,
     getErrorMessage,
     runningProjects,
     getActiveAutomation,
@@ -85,6 +118,9 @@ function createAutomationStartRouter(deps = {}) {
   if (typeof getStoryAutomationContext !== "function") throw new Error("getStoryAutomationContext dependency is required.");
   if (typeof attachRunToStory !== "function") throw new Error("attachRunToStory dependency is required.");
   if (typeof executeRunFlow !== "function") throw new Error("executeRunFlow dependency is required.");
+  if (typeof getAutomationRunById !== "function") throw new Error("getAutomationRunById dependency is required.");
+  if (typeof getAutomationStoryExecutionsByRunId !== "function") throw new Error("getAutomationStoryExecutionsByRunId dependency is required.");
+  if (typeof getAutomationQueueStoriesByTarget !== "function") throw new Error("getAutomationQueueStoriesByTarget dependency is required.");
   if (typeof getErrorMessage !== "function") throw new Error("getErrorMessage dependency is required.");
   if (!runningProjects || typeof runningProjects.has !== "function") throw new Error("runningProjects dependency is required.");
   if (typeof getActiveAutomation !== "function") throw new Error("getActiveAutomation dependency is required.");
@@ -324,6 +360,62 @@ function createAutomationStartRouter(deps = {}) {
 
   router.post("/start/story/:storyId", (req, res) => {
     startScopedAutomation(req, res, "story", "storyId");
+  });
+
+  router.get("/status/:automationRunId", async (req, res) => {
+    const automationRunId = parseTargetId(req.params?.automationRunId);
+    if (!automationRunId) {
+      return res.status(400).json({ error: "Invalid automation id." });
+    }
+
+    try {
+      const automationRun = await getAutomationRunById(automationRunId);
+      if (!automationRun) {
+        return res.status(404).json({ error: "Automation run not found." });
+      }
+
+      const [queueStories, storyExecutions] = await Promise.all([
+        getAutomationQueueStoriesByTarget(automationRun.automation_type, automationRun.target_id),
+        getAutomationStoryExecutionsByRunId(automationRun.id)
+      ]);
+
+      const completedExecutions = storyExecutions.filter((execution) => execution.execution_status === "completed");
+      const failedExecutions = storyExecutions.filter((execution) => execution.execution_status === "failed");
+      const stoppedExecutions = storyExecutions.filter((execution) => execution.queue_action === "stopped");
+      const processedStories = storyExecutions.length;
+      const totalStories = queueStories.length;
+      const currentStory = automationRun.automation_status === "running"
+        ? (queueStories[automationRun.current_position - 1] || null)
+        : null;
+
+      return res.json({
+        automationRun: toStatusApiAutomationRun(automationRun),
+        queue: {
+          totalStories,
+          processedStories,
+          remainingStories: Math.max(0, totalStories - processedStories),
+          currentPosition: automationRun.current_position,
+          currentItem: currentStory
+        },
+        summary: {
+          completedCount: completedExecutions.length,
+          failedCount: failedExecutions.length,
+          stoppedCount: stoppedExecutions.length
+        },
+        completedSteps: completedExecutions.map((execution) => toStatusApiExecutionSummary(execution)),
+        failedSteps: failedExecutions.map((execution) => toStatusApiExecutionSummary(execution)),
+        finalResult: automationRun.automation_status === "running"
+          ? null
+          : {
+            status: automationRun.automation_status,
+            stopReason: automationRun.stop_reason ?? null
+          }
+      });
+    } catch (error) {
+      return res.status(500).json({
+        error: getErrorMessage(error)
+      });
+    }
   });
 
   return router;

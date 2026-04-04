@@ -1124,6 +1124,115 @@ async function getAutomationStoryExecutionsByRunId(automationRunId) {
   );
 }
 
+async function getAutomationQueueStoriesByTarget(automationType, targetId) {
+  await dbReady;
+
+  const normalizedType = String(automationType || "").trim().toLowerCase();
+  const normalizedTargetId = Number.parseInt(targetId, 10);
+
+  if (!VALID_AUTOMATION_TYPES.has(normalizedType)) {
+    return [];
+  }
+
+  if (!Number.isInteger(normalizedTargetId) || normalizedTargetId <= 0) {
+    return [];
+  }
+
+  let rows = [];
+
+  if (normalizedType === "feature") {
+    rows = await all(
+      `
+        SELECT
+          features.id AS feature_id,
+          features.name AS feature_title,
+          epics.id AS epic_id,
+          epics.name AS epic_title,
+          stories.id AS story_id,
+          stories.name AS story_title,
+          stories.description AS story_description,
+          stories.created_at AS story_created_at
+        FROM features
+        INNER JOIN epics
+          ON epics.feature_id = features.id
+        INNER JOIN stories
+          ON stories.epic_id = epics.id
+        WHERE features.id = ?
+        ORDER BY
+          datetime(epics.created_at) ASC,
+          epics.id ASC,
+          datetime(stories.created_at) ASC,
+          stories.id ASC
+      `,
+      [normalizedTargetId]
+    );
+  }
+
+  if (normalizedType === "epic") {
+    rows = await all(
+      `
+        SELECT
+          features.id AS feature_id,
+          features.name AS feature_title,
+          epics.id AS epic_id,
+          epics.name AS epic_title,
+          stories.id AS story_id,
+          stories.name AS story_title,
+          stories.description AS story_description,
+          stories.created_at AS story_created_at
+        FROM epics
+        INNER JOIN features
+          ON features.id = epics.feature_id
+        INNER JOIN stories
+          ON stories.epic_id = epics.id
+        WHERE epics.id = ?
+        ORDER BY
+          datetime(stories.created_at) ASC,
+          stories.id ASC
+      `,
+      [normalizedTargetId]
+    );
+  }
+
+  if (normalizedType === "story") {
+    rows = await all(
+      `
+        SELECT
+          features.id AS feature_id,
+          features.name AS feature_title,
+          epics.id AS epic_id,
+          epics.name AS epic_title,
+          stories.id AS story_id,
+          stories.name AS story_title,
+          stories.description AS story_description,
+          stories.created_at AS story_created_at
+        FROM stories
+        INNER JOIN epics
+          ON epics.id = stories.epic_id
+        INNER JOIN features
+          ON features.id = epics.feature_id
+        WHERE stories.id = ?
+        ORDER BY
+          datetime(stories.created_at) ASC,
+          stories.id ASC
+      `,
+      [normalizedTargetId]
+    );
+  }
+
+  return rows.map((row, index) => ({
+    positionInQueue: index + 1,
+    featureId: row.feature_id,
+    featureTitle: row.feature_title,
+    epicId: row.epic_id,
+    epicTitle: row.epic_title,
+    storyId: row.story_id,
+    storyTitle: row.story_title,
+    storyDescription: row.story_description,
+    storyCreatedAt: row.story_created_at
+  }));
+}
+
 function setRunArchived(id, archived) {
   return new Promise((resolve, reject) => {
     dbReady
@@ -1173,6 +1282,7 @@ module.exports = {
   updateAutomationRunMetadata,
   recordAutomationStoryExecution,
   getAutomationStoryExecutionsByRunId,
+  getAutomationQueueStoriesByTarget,
   getCompletionEligibleRuns,
   setRunArchived,
   deleteRunById,

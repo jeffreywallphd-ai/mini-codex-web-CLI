@@ -94,6 +94,57 @@ function createServerHarness(overrides = {}) {
         completion_work: "none"
       }
     }),
+    getAutomationRunById: async (automationRunId) => ({
+      id: Number(automationRunId),
+      automation_type: "feature",
+      target_id: 100,
+      stop_on_incomplete: 0,
+      stop_flag: 0,
+      current_position: 2,
+      automation_status: "running",
+      stop_reason: null,
+      created_at: "2026-04-04T00:00:00.000Z",
+      updated_at: "2026-04-04T00:01:00.000Z"
+    }),
+    getAutomationStoryExecutionsByRunId: async () => ([
+      {
+        id: 1,
+        automation_run_id: 1001,
+        story_id: 301,
+        position_in_queue: 1,
+        execution_status: "completed",
+        queue_action: "advanced",
+        run_id: 77,
+        completion_status: "complete",
+        completion_work: "none",
+        error: null,
+        created_at: "2026-04-04T00:00:30.000Z"
+      }
+    ]),
+    getAutomationQueueStoriesByTarget: async () => ([
+      {
+        positionInQueue: 1,
+        featureId: 100,
+        featureTitle: "Feature 100",
+        epicId: 201,
+        epicTitle: "Epic 201",
+        storyId: 301,
+        storyTitle: "Story 301",
+        storyDescription: "Do setup work",
+        storyCreatedAt: "2026-01-01T10:04:00.000Z"
+      },
+      {
+        positionInQueue: 2,
+        featureId: 100,
+        featureTitle: "Feature 100",
+        epicId: 201,
+        epicTitle: "Epic 201",
+        storyId: 302,
+        storyTitle: "Story 302",
+        storyDescription: "Do follow-up work",
+        storyCreatedAt: "2026-01-01T10:05:00.000Z"
+      }
+    ]),
     getErrorMessage: (error) => error?.message || String(error),
     runningProjects: new Set(),
     getActiveAutomation: () => activeAutomation,
@@ -256,4 +307,94 @@ test("start endpoint rejects ineligible targets with no runnable stories", async
 
   assert.equal(harness.calls.createAutomationRun.length, 0);
   assert.equal(harness.calls.detachedTasks.length, 0);
+});
+
+test("status endpoint returns queue progress and current item for running automation", async () => {
+  const harness = createServerHarness();
+
+  await withServer(harness, async (baseUrl) => {
+    const response = await fetch(`${baseUrl}/api/automation/status/1001`);
+
+    assert.equal(response.status, 200);
+    const payload = await response.json();
+
+    assert.equal(payload.automationRun.id, 1001);
+    assert.equal(payload.automationRun.status, "running");
+    assert.equal(payload.queue.totalStories, 2);
+    assert.equal(payload.queue.processedStories, 1);
+    assert.equal(payload.queue.remainingStories, 1);
+    assert.equal(payload.queue.currentPosition, 2);
+    assert.equal(payload.queue.currentItem.storyId, 302);
+    assert.equal(payload.summary.completedCount, 1);
+    assert.equal(payload.summary.failedCount, 0);
+    assert.equal(payload.completedSteps.length, 1);
+    assert.equal(payload.failedSteps.length, 0);
+    assert.equal(payload.finalResult, null);
+  });
+});
+
+test("status endpoint returns final result and handles invalid or missing ids", async () => {
+  const harness = createServerHarness({
+    getAutomationRunById: async (automationRunId) => {
+      if (Number(automationRunId) === 9999) return null;
+      return {
+        id: Number(automationRunId),
+        automation_type: "story",
+        target_id: 301,
+        stop_on_incomplete: 1,
+        stop_flag: 1,
+        current_position: 1,
+        automation_status: "stopped",
+        stop_reason: "story_incomplete",
+        created_at: "2026-04-04T00:00:00.000Z",
+        updated_at: "2026-04-04T00:01:00.000Z"
+      };
+    },
+    getAutomationStoryExecutionsByRunId: async () => ([
+      {
+        id: 2,
+        automation_run_id: 1002,
+        story_id: 301,
+        position_in_queue: 1,
+        execution_status: "completed",
+        queue_action: "stopped",
+        run_id: 88,
+        completion_status: "incomplete",
+        completion_work: "Remaining validation updates.",
+        error: null,
+        created_at: "2026-04-04T00:00:30.000Z"
+      }
+    ]),
+    getAutomationQueueStoriesByTarget: async () => ([
+      {
+        positionInQueue: 1,
+        featureId: 100,
+        featureTitle: "Feature 100",
+        epicId: 201,
+        epicTitle: "Epic 201",
+        storyId: 301,
+        storyTitle: "Story 301",
+        storyDescription: "Do work",
+        storyCreatedAt: "2026-01-01T10:04:00.000Z"
+      }
+    ])
+  });
+
+  await withServer(harness, async (baseUrl) => {
+    const completedResponse = await fetch(`${baseUrl}/api/automation/status/1002`);
+    assert.equal(completedResponse.status, 200);
+    const completedPayload = await completedResponse.json();
+    assert.equal(completedPayload.finalResult.status, "stopped");
+    assert.equal(completedPayload.finalResult.stopReason, "story_incomplete");
+
+    const invalidResponse = await fetch(`${baseUrl}/api/automation/status/not-a-number`);
+    assert.equal(invalidResponse.status, 400);
+    const invalidPayload = await invalidResponse.json();
+    assert.match(invalidPayload.error, /Invalid automation id/);
+
+    const missingResponse = await fetch(`${baseUrl}/api/automation/status/9999`);
+    assert.equal(missingResponse.status, 404);
+    const missingPayload = await missingResponse.json();
+    assert.match(missingPayload.error, /Automation run not found/);
+  });
 });
