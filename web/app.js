@@ -12,6 +12,7 @@ const runningProjectHint = document.getElementById("runningProjectHint");
 const runsList = document.getElementById("runsList");
 const statusBox = document.getElementById("statusBox");
 const runSearchInput = document.getElementById("runSearchInput");
+const runStatusFilterSelect = document.getElementById("runStatusFilterSelect");
 const creditsBox = document.getElementById("creditsBox");
 const errorCard = document.getElementById("errorCard");
 const errorCardMessage = document.getElementById("errorCardMessage");
@@ -25,6 +26,7 @@ let activeRunStream = null;
 let activeRunStartedAt = null;
 let runTimerInterval = null;
 let lastBranchLoadRequestId = 0;
+let loadRunsRequestId = 0;
 
 function escapeHtml(text) {
   return String(text ?? "")
@@ -424,44 +426,106 @@ function renderRunsList(runs) {
 
   for (const run of runs) {
     const li = document.createElement("li");
-    const button = document.createElement("button");
+    li.className = "run-card";
+
+    const openButton = document.createElement("button");
+    openButton.className = "run-card__open-button";
     const promptPreview = `${(run.prompt || "").replace(/\s+/g, " ").slice(0, 120)}${(run.prompt || "").length > 120 ? "..." : ""}`;
     const mergeBadgeHtml = run.merged_at
       ? '<span class="merge-badge merge-badge--merged">merged</span>'
       : '<span class="merge-badge merge-badge--not-merged">not merged</span>';
     const executionMode = run.execution_mode === "write" ? "Write Mode" : "Read Mode";
     const title = run.change_title ? `\nTitle: ${run.change_title}` : "";
-    button.classList.toggle("run-item-unmerged", !run.merged_at);
-    button.innerHTML = `
+    openButton.classList.toggle("run-item-unmerged", !run.merged_at);
+    openButton.innerHTML = `
       <div>#${escapeHtml(run.id)} - ${escapeHtml(run.project_name)} - ${escapeHtml(executionMode)} - ${escapeHtml(run.branch_name || "(no branch)")} - ${mergeBadgeHtml}</div>
       <div>${escapeHtml(title ? title.trim() : "")}</div>
       <div>${escapeHtml(promptPreview || "(no prompt)")}</div>
     `;
-    button.onclick = () => {
+    openButton.onclick = () => {
       saveEditorState();
       window.location.href = `/run-details.html?id=${run.id}`;
     };
-    li.appendChild(button);
+
+    const actions = document.createElement("div");
+    actions.className = "run-card__actions";
+
+    const archiveButton = document.createElement("button");
+    archiveButton.type = "button";
+    archiveButton.className = "secondary-button";
+    archiveButton.textContent = run.archived ? "Unarchive" : "Archive";
+    archiveButton.onclick = async () => {
+      const endpoint = run.archived ? "unarchive" : "archive";
+      archiveButton.disabled = true;
+      deleteButton.disabled = true;
+      hideErrorCard();
+
+      try {
+        const response = await fetch(`/api/runs/${encodeURIComponent(run.id)}/${endpoint}`, {
+          method: "POST"
+        });
+        const result = await parseJsonResponse(response);
+
+        if (!response.ok) {
+          throw new Error(buildErrorMessage(`Could not ${endpoint} run`, result, "Request failed"));
+        }
+
+        statusBox.textContent = `Run #${run.id} ${run.archived ? "unarchived" : "archived"}.`;
+        await loadRuns();
+      } catch (error) {
+        const message = `${run.archived ? "Unarchive" : "Archive"} failed: ${error.message}`;
+        statusBox.textContent = message;
+        showErrorCard(message);
+      } finally {
+        archiveButton.disabled = false;
+        deleteButton.disabled = false;
+      }
+    };
+
+    const deleteButton = document.createElement("button");
+    deleteButton.type = "button";
+    deleteButton.className = "danger-button";
+    deleteButton.textContent = "Delete";
+    deleteButton.onclick = async () => {
+      const confirmation = window.prompt(`Type "Delete" to delete run #${run.id}.`);
+      if (confirmation !== "Delete") {
+        statusBox.textContent = `Delete canceled for run #${run.id}.`;
+        return;
+      }
+
+      archiveButton.disabled = true;
+      deleteButton.disabled = true;
+      hideErrorCard();
+
+      try {
+        const response = await fetch(`/api/runs/${encodeURIComponent(run.id)}`, {
+          method: "DELETE"
+        });
+        const result = await parseJsonResponse(response);
+
+        if (!response.ok) {
+          throw new Error(buildErrorMessage("Could not delete run", result, "Request failed"));
+        }
+
+        statusBox.textContent = `Run #${run.id} deleted.`;
+        await loadRuns();
+      } catch (error) {
+        const message = `Delete failed: ${error.message}`;
+        statusBox.textContent = message;
+        showErrorCard(message);
+      } finally {
+        archiveButton.disabled = false;
+        deleteButton.disabled = false;
+      }
+    };
+
+    actions.appendChild(archiveButton);
+    actions.appendChild(deleteButton);
+
+    li.appendChild(openButton);
+    li.appendChild(actions);
     runsList.appendChild(li);
   }
-}
-
-function filterRuns() {
-  const query = runSearchInput.value.trim().toLowerCase();
-
-  if (!query) {
-    renderRunsList(allRuns);
-    return;
-  }
-
-  const filtered = allRuns.filter((run) => {
-    const project = (run.project_name || "").toLowerCase();
-    const prompt = (run.prompt || "").toLowerCase();
-    const branch = (run.branch_name || "").toLowerCase();
-    return project.includes(query) || prompt.includes(query) || branch.includes(query);
-  });
-
-  renderRunsList(filtered);
 }
 
 async function loadProjects() {
@@ -486,15 +550,29 @@ async function loadProjects() {
 }
 
 async function loadRuns() {
-  const response = await fetch("/api/runs");
+  const requestId = ++loadRunsRequestId;
+  const search = runSearchInput.value.trim();
+  const status = runStatusFilterSelect.value || "active";
+  const query = new URLSearchParams();
+
+  if (search) {
+    query.set("search", search);
+  }
+  query.set("status", status);
+
+  const response = await fetch(`/api/runs?${query.toString()}`);
   const runs = await parseJsonResponse(response);
+
+  if (requestId !== loadRunsRequestId) {
+    return;
+  }
 
   if (!response.ok) {
     throw new Error(buildErrorMessage("Could not load recent runs", runs, "Request failed"));
   }
 
   allRuns = runs;
-  filterRuns();
+  renderRunsList(allRuns);
 }
 
 async function pullSelectedRepository() {
@@ -628,7 +706,20 @@ projectSelect.addEventListener("change", async () => {
 });
 
 baseBranchSelect.addEventListener("change", updateProjectActionState);
-runSearchInput.addEventListener("input", filterRuns);
+runSearchInput.addEventListener("input", () => {
+  loadRuns().catch((error) => {
+    const message = `Run search failed: ${error.message}`;
+    statusBox.textContent = message;
+    showErrorCard(message);
+  });
+});
+runStatusFilterSelect.addEventListener("change", () => {
+  loadRuns().catch((error) => {
+    const message = `Run filter failed: ${error.message}`;
+    statusBox.textContent = message;
+    showErrorCard(message);
+  });
+});
 
 (async () => {
   try {

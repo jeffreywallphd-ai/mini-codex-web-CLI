@@ -6,7 +6,7 @@ const path = require("path");
 const fs = require("fs");
 
 const { runCodexWithUsage, EXECUTION_MODE_OPTIONS } = require("./codexRunner");
-const { saveRun, getRuns, getRunById, updateRunMerge } = require("./db");
+const { saveRun, getRuns, getRunById, updateRunMerge, setRunArchived, deleteRunById } = require("./db");
 const { createCodexBranch, getGitSnapshot, listLocalBranches, mergeBranch, pullRepository } = require("./git");
 
 const app = express();
@@ -270,7 +270,14 @@ app.post("/api/run-test", async (req, res) => {
 });
 
 app.get("/api/runs", async (req, res) => {
-  res.json(await getRuns());
+  const { search = "", status = "active" } = req.query;
+  const normalizedStatus = String(status || "active").toLowerCase();
+
+  if (!["active", "archived", "all"].includes(normalizedStatus)) {
+    return res.status(400).json({ error: "Invalid status filter" });
+  }
+
+  res.json(await getRuns({ search, status: normalizedStatus }));
 });
 
 app.get("/api/runs/:id", async (req, res) => {
@@ -336,6 +343,44 @@ app.post("/api/runs/:id/merge", async (req, res) => {
     console.error("merge failed:", err);
     res.status(500).json({ error: getErrorMessage(err) });
   }
+});
+
+app.post("/api/runs/:id/archive", async (req, res) => {
+  const run = await getRunById(req.params.id);
+  if (!run) return res.status(404).json({ error: "Run not found" });
+
+  const changes = await setRunArchived(run.id, true);
+  if (changes < 1) {
+    return res.status(500).json({ error: "Archive update failed" });
+  }
+
+  const updatedRun = hydrateRun(await getRunById(run.id));
+  return res.json(updatedRun);
+});
+
+app.post("/api/runs/:id/unarchive", async (req, res) => {
+  const run = await getRunById(req.params.id);
+  if (!run) return res.status(404).json({ error: "Run not found" });
+
+  const changes = await setRunArchived(run.id, false);
+  if (changes < 1) {
+    return res.status(500).json({ error: "Unarchive update failed" });
+  }
+
+  const updatedRun = hydrateRun(await getRunById(run.id));
+  return res.json(updatedRun);
+});
+
+app.delete("/api/runs/:id", async (req, res) => {
+  const run = await getRunById(req.params.id);
+  if (!run) return res.status(404).json({ error: "Run not found" });
+
+  const changes = await deleteRunById(run.id);
+  if (changes < 1) {
+    return res.status(500).json({ error: "Delete failed" });
+  }
+
+  return res.json({ deleted: true, id: Number(req.params.id) });
 });
 
 app.listen(PORT, () => {

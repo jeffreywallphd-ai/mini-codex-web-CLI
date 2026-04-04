@@ -53,6 +53,12 @@
         type="text"
         placeholder="Search by project or prompt..."
       />
+      <label for="runStatusFilterSelect">Run Status</label>
+      <select id="runStatusFilterSelect">
+        <option value="active" selected>Active Runs</option>
+        <option value="archived">Archived Runs</option>
+        <option value="all">All Runs</option>
+      </select>
 
       <ul id="runsList"></ul>
     </section>
