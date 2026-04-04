@@ -16,6 +16,8 @@ const {
   getStoryAutomationContext,
   attachRunToStory,
   syncStoryCompletionFromRun,
+  createAutomationRun,
+  updateAutomationRunMetadata,
   getCompletionEligibleRuns,
   setRunArchived,
   deleteRunById,
@@ -379,6 +381,7 @@ app.post("/api/stories/:storyId/complete-with-automation", async (req, res) => {
   const streamId = String(req.body?.streamId || "").trim() || null;
   const stopMergeIfStoryImplementationIncomplete = Boolean(req.body?.stopMergeIfStoryImplementationIncomplete);
   const executionMode = "write";
+  let automationRunRecord = null;
 
   if (!Number.isInteger(storyId) || storyId <= 0) {
     return res.status(400).json({ error: "Invalid story id." });
@@ -419,6 +422,12 @@ app.post("/api/stories/:storyId/complete-with-automation", async (req, res) => {
       storyId,
       startedAt: new Date().toISOString()
     };
+    automationRunRecord = await createAutomationRun({
+      automationType: "story",
+      targetId: storyId,
+      stopFlag: false,
+      currentPosition: 1
+    });
     publishRunEvent(streamId, { type: "automation.started", message: `Story automation started for #${storyId}.` });
 
     const { runId, responsePayload } = await executeRunFlow({
@@ -438,6 +447,11 @@ app.post("/api/stories/:storyId/complete-with-automation", async (req, res) => {
     };
 
     if (shouldSkipAutoMerge) {
+      if (automationRunRecord?.id) {
+        await updateAutomationRunMetadata(automationRunRecord.id, {
+          stopFlag: true
+        });
+      }
       autoMerge = {
         status: "skipped",
         reason: `Run completion status was '${runCompletionStatus}'.`
@@ -461,6 +475,11 @@ app.post("/api/stories/:storyId/complete-with-automation", async (req, res) => {
           responsePayload.changeDescription || ""
         );
         await updateRunMerge(runId, mergeResult);
+        if (automationRunRecord?.id) {
+          await updateAutomationRunMetadata(automationRunRecord.id, {
+            stopFlag: false
+          });
+        }
         autoMerge = {
           status: "merged",
           reason: `Merged '${responsePayload.branchName}' into '${baseBranch}' and pushed to origin.`
@@ -492,6 +511,15 @@ app.post("/api/stories/:storyId/complete-with-automation", async (req, res) => {
       baseBranch
     });
   } catch (error) {
+    if (automationRunRecord?.id) {
+      try {
+        await updateAutomationRunMetadata(automationRunRecord.id, {
+          stopFlag: true
+        });
+      } catch (updateError) {
+        console.error("automation metadata update failed:", updateError);
+      }
+    }
     publishRunEvent(streamId, { type: "automation.failed", message: `Story automation failed: ${getErrorMessage(error)}` });
     res.status(500).json({ error: getErrorMessage(error) });
   } finally {
