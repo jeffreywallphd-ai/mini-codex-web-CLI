@@ -8,7 +8,8 @@ const {
   formatUsageSummary,
   mapThreadEventToProgressEvent,
   normalizePrompt,
-  parseChangeSummary
+  parseChangeSummary,
+  parseCompletionMetadata
 } = require("./codexRunner");
 
 test("execution mode options only add sandboxing for write mode", () => {
@@ -27,6 +28,8 @@ test("prompts are normalized before being passed to the sdk", () => {
 test("prompts are augmented with the changelog instructions", () => {
   const augmented = buildAugmentedPrompt("Implement feature X");
   assert.match(augmented, /Implement feature X/);
+  assert.match(augmented, /COMPLETION_STATUS:/);
+  assert.match(augmented, /COMPLETION_WORK:/);
   assert.match(augmented, /<<<CODEX_CHANGESET_START>>>/);
   assert.match(augmented, /TITLE:/);
   assert.match(augmented, /DESCRIPTION:/);
@@ -69,6 +72,18 @@ DESCRIPTION:
     result.changeDescription,
     "- store the generated title\n- render git diff details in the UI"
   );
+});
+
+test("completion metadata is parsed and stripped from response output", () => {
+  const result = parseCompletionMetadata(`
+Implemented all requested behavior.
+COMPLETION_STATUS: complete
+COMPLETION_WORK: none
+`);
+
+  assert.equal(result.completionStatus, "complete");
+  assert.equal(result.completionWork, "none");
+  assert.equal(result.responseText, "Implemented all requested behavior.");
 });
 
 test("thread events are mapped into concise progress events", () => {

@@ -6,7 +6,7 @@ const path = require("path");
 const fs = require("fs");
 
 const { runCodexWithUsage, EXECUTION_MODE_OPTIONS } = require("./codexRunner");
-const { saveRun, getRuns, getRunById, updateRunMerge } = require("./db");
+const { saveRun, getRuns, getRunById, updateRunMerge, dbReady } = require("./db");
 const { createCodexBranch, getGitSnapshot, mergeBranch, pullRepository } = require("./git");
 
 const app = express();
@@ -90,10 +90,21 @@ function parseJson(value, fallback) {
 function hydrateRun(run) {
   if (!run) return run;
 
+  const startTime = Number(run.run_start_time);
+  const endTime = Number(run.run_end_time);
+  const hasStart = Number.isFinite(startTime);
+  const hasEnd = Number.isFinite(endTime);
+  const durationMs = hasStart && hasEnd && endTime >= startTime
+    ? endTime - startTime
+    : null;
+
   return {
     ...run,
+    run_start_time: hasStart ? startTime : null,
+    run_end_time: hasEnd ? endTime : null,
     git_status_files: parseJson(run.git_status_files, []),
-    git_diff_map: parseJson(run.git_diff_map, {})
+    git_diff_map: parseJson(run.git_diff_map, {}),
+    duration_ms: durationMs
   };
 }
 
@@ -195,6 +206,7 @@ app.post("/api/run-test", async (req, res) => {
 
   const repoPath = getRepoPath(projectName);
   runningProjects.add(projectName);
+  const runStartTime = Date.now();
 
   try {
     publishRunEvent(streamId, { type: "branch.creating", message: "Creating branch from base..." });
@@ -206,12 +218,15 @@ app.post("/api/run-test", async (req, res) => {
     publishRunEvent(streamId, { type: "snapshot.collecting", message: "Collecting git snapshot..." });
     const gitSnapshot = await getGitSnapshot(repoPath);
     publishRunEvent(streamId, { type: "run.persisting", message: "Saving run record..." });
+    const runEndTime = Date.now();
 
     const runId = await saveRun({
       projectName,
       prompt,
       ...branchInfo,
       ...result,
+      runStartTime,
+      runEndTime,
       gitStatus: gitSnapshot.gitStatus,
       gitStatusFiles: gitSnapshot.files,
       gitDiffMap: gitSnapshot.diffs
@@ -219,17 +234,25 @@ app.post("/api/run-test", async (req, res) => {
 
     publishRunEvent(streamId, { type: "run.completed", message: `Run completed and saved (#${runId}).` });
 
-    res.json({
+    const responsePayload = hydrateRun({
       runId,
       projectName,
       prompt,
       ...branchInfo,
       ...result,
+      run_start_time: runStartTime,
+      run_end_time: runEndTime,
       gitStatus: gitSnapshot.gitStatus,
       gitStatusFiles: gitSnapshot.files,
       gitDiffMap: gitSnapshot.diffs,
       creditsRemaining: result.creditsRemaining
     });
+    responsePayload.gitStatusFiles = gitSnapshot.files;
+    responsePayload.gitDiffMap = gitSnapshot.diffs;
+    responsePayload.completion_status = result.completionStatus ?? null;
+    responsePayload.completion_work = result.completionWork ?? null;
+
+    res.json(responsePayload);
   } catch (err) {
     console.error("run-test failed:", err);
     publishRunEvent(streamId, { type: "run.failed", message: `Run failed: ${getErrorMessage(err)}` });
@@ -241,7 +264,8 @@ app.post("/api/run-test", async (req, res) => {
 });
 
 app.get("/api/runs", async (req, res) => {
-  res.json(await getRuns());
+  const runs = await getRuns();
+  res.json(runs.map((run) => hydrateRun(run)));
 });
 
 app.get("/api/runs/:id", async (req, res) => {
@@ -309,6 +333,13 @@ app.post("/api/runs/:id/merge", async (req, res) => {
   }
 });
 
-app.listen(PORT, () => {
-  console.log(`Server running on http://localhost:${PORT}`);
-});
+dbReady
+  .then(() => {
+    app.listen(PORT, () => {
+      console.log(`Server running on http://localhost:${PORT}`);
+    });
+  })
+  .catch((error) => {
+    console.error("Database migration failed:", error);
+    process.exit(1);
+  });

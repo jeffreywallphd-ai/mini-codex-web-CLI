@@ -231,6 +231,35 @@ details pre {
   margin-bottom: 4px;
 }
 
+.detail-summary {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 10px;
+}
+
+.detail-summary div {
+  background: var(--panel-alt);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px;
+}
+
+.detail-summary strong,
+.detail-summary span {
+  display: block;
+}
+
+.detail-summary strong {
+  color: var(--muted);
+  font-size: 12px;
+  margin-bottom: 4px;
+}
+
+.duration-highlight {
+  color: var(--success);
+  font-weight: 700;
+}
+
 .git-files-list {
   margin-top: 12px;
   display: flex;
