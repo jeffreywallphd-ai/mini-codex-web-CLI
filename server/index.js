@@ -538,6 +538,8 @@ app.post("/api/stories/:storyId/complete-with-automation", async (req, res) => {
       automationType: "story",
       targetId: storyId,
       stopFlag: false,
+      stopOnIncomplete: stopMergeIfStoryImplementationIncomplete,
+      automationStatus: "running",
       currentPosition: 1
     });
     publishRunEvent(streamId, { type: "automation.started", message: `Story automation started for #${storyId}.` });
@@ -561,7 +563,8 @@ app.post("/api/stories/:storyId/complete-with-automation", async (req, res) => {
     if (shouldSkipAutoMerge) {
       if (automationRunRecord?.id) {
         await updateAutomationRunMetadata(automationRunRecord.id, {
-          stopFlag: true
+          stopFlag: true,
+          automationStatus: "stopped"
         });
       }
       autoMerge = {
@@ -589,7 +592,8 @@ app.post("/api/stories/:storyId/complete-with-automation", async (req, res) => {
         await updateRunMerge(runId, mergeResult);
         if (automationRunRecord?.id) {
           await updateAutomationRunMetadata(automationRunRecord.id, {
-            stopFlag: false
+            stopFlag: false,
+            automationStatus: "completed"
           });
         }
         autoMerge = {
@@ -628,7 +632,8 @@ app.post("/api/stories/:storyId/complete-with-automation", async (req, res) => {
     if (automationRunRecord?.id) {
       try {
         await updateAutomationRunMetadata(automationRunRecord.id, {
-          stopFlag: true
+          stopFlag: true,
+          automationStatus: "failed"
         });
       } catch (updateError) {
         console.error("automation metadata update failed:", updateError);

@@ -26,7 +26,7 @@ The app is designed for personal LAN use, not for public internet exposure or mu
 - Recent run history with search
 - Basic usage tracking when the SDK returns usage data
 - Automation queue generation utilities for deterministic `feature -> epic -> story` ordering
-- Automation metadata persistence for orchestration state (`automation_type`, `target_id`, `stop_flag`, `current_position`)
+- Automation metadata persistence for orchestration state (`automation_type`, `target_id`, `stop_on_incomplete`, `stop_flag`, `current_position`, `automation_status`)
 - SQLite storage with no external database
 - Mobile-friendly, lightweight UI intended for LAN access
 
@@ -158,8 +158,10 @@ Shared automation planning rules are defined in `server/automationQueue.js`.
   `automation_runs` with:
   - `automation_type` (`feature`, `epic`, or `story`)
   - `target_id`
+  - `stop_on_incomplete`
   - `stop_flag`
   - `current_position`
+  - `automation_status` (`pending`, `running`, `completed`, `failed`, or `stopped`)
 
 ## Security
 

@@ -9,7 +9,9 @@ const dbPath = path.resolve(dataDir, "app.db");
 const db = new sqlite3.Database(dbPath);
 db.run("PRAGMA foreign_keys = ON");
 
-const LATEST_SCHEMA_VERSION = 8;
+const LATEST_SCHEMA_VERSION = 9;
+const VALID_AUTOMATION_TYPES = new Set(["feature", "epic", "story"]);
+const VALID_AUTOMATION_STATUSES = new Set(["pending", "running", "completed", "failed", "stopped"]);
 
 function run(sql, params = []) {
   return new Promise((resolve, reject) => {
@@ -75,7 +77,12 @@ async function detectVersionFromSchema() {
     const hasStoryRunId = await columnExists("stories", "run_id");
     const hasFeatureProjectScope = await columnExists("features", "project_name")
       && await columnExists("features", "base_branch");
-    if (hasAutomationRuns && hasStoryRunId && hasArchived && hasFeatureProjectScope) return 8;
+    if (hasAutomationRuns && hasStoryRunId && hasArchived && hasFeatureProjectScope) {
+      const hasStopOnIncomplete = await columnExists("automation_runs", "stop_on_incomplete");
+      const hasAutomationStatus = await columnExists("automation_runs", "automation_status");
+      if (hasStopOnIncomplete && hasAutomationStatus) return 9;
+      return 8;
+    }
     if (hasStoryRunId && hasArchived && hasFeatureProjectScope) return 7;
     if (hasStoryRunId && hasArchived) return 6;
     if (hasStoryRunId) return 5;
@@ -263,6 +270,16 @@ async function migrateToV8() {
   `);
 }
 
+async function migrateToV9() {
+  await ensureColumn("automation_runs", "stop_on_incomplete", "INTEGER NOT NULL DEFAULT 0");
+  await ensureColumn("automation_runs", "automation_status", "TEXT NOT NULL DEFAULT 'running'");
+  await run(`
+    UPDATE automation_runs
+    SET stop_on_incomplete = COALESCE(stop_on_incomplete, 0),
+        automation_status = COALESCE(NULLIF(TRIM(automation_status), ''), 'running')
+  `);
+}
+
 async function runMigrations() {
   let version = await getSchemaVersion();
 
@@ -313,6 +330,12 @@ async function runMigrations() {
   if (version < 8) {
     await migrateToV8();
     version = 8;
+    await setSchemaVersion(version);
+  }
+
+  if (version < 9) {
+    await migrateToV9();
+    version = 9;
     await setSchemaVersion(version);
   }
 
@@ -751,16 +774,28 @@ async function attachRunToStory(storyId, runId) {
 async function createAutomationRun(input = {}) {
   await dbReady;
   const automationType = String(input.automationType || "").trim().toLowerCase();
+  const automationStatus = String(input.automationStatus || "running").trim().toLowerCase();
   const targetId = Number.parseInt(input.targetId, 10);
   const stopFlag = input.stopFlag ? 1 : 0;
-  const currentPosition = Number.parseInt(input.currentPosition, 10);
+  const stopOnIncomplete = input.stopOnIncomplete ? 1 : 0;
+  const currentPosition = Number.parseInt(input.currentPosition ?? 1, 10);
 
   if (!automationType) {
     throw new Error("Automation type is required.");
   }
+  if (!VALID_AUTOMATION_TYPES.has(automationType)) {
+    throw new Error("Automation type must be feature, epic, or story.");
+  }
 
   if (!Number.isInteger(targetId) || targetId <= 0) {
     throw new Error("Target id must be a positive integer.");
+  }
+
+  if (!automationStatus) {
+    throw new Error("Automation status is required.");
+  }
+  if (!VALID_AUTOMATION_STATUSES.has(automationStatus)) {
+    throw new Error("Automation status must be pending, running, completed, failed, or stopped.");
   }
 
   if (!Number.isInteger(currentPosition) || currentPosition <= 0) {
@@ -769,10 +804,11 @@ async function createAutomationRun(input = {}) {
 
   const id = await runWithLastId(
     `
-      INSERT INTO automation_runs (automation_type, target_id, stop_flag, current_position)
-      VALUES (?, ?, ?, ?)
+      INSERT INTO automation_runs
+      (automation_type, target_id, stop_flag, stop_on_incomplete, current_position, automation_status)
+      VALUES (?, ?, ?, ?, ?, ?)
     `,
-    [automationType, targetId, stopFlag, currentPosition]
+    [automationType, targetId, stopFlag, stopOnIncomplete, currentPosition, automationStatus]
   );
 
   return getAutomationRunById(id);
@@ -793,7 +829,9 @@ async function getAutomationRunById(id) {
         automation_type,
         target_id,
         stop_flag,
+        stop_on_incomplete,
         current_position,
+        automation_status,
         created_at,
         updated_at
       FROM automation_runs
@@ -818,6 +856,11 @@ async function updateAutomationRunMetadata(id, updates = {}) {
     params.push(updates.stopFlag ? 1 : 0);
   }
 
+  if (Object.prototype.hasOwnProperty.call(updates, "stopOnIncomplete")) {
+    updateClauses.push("stop_on_incomplete = ?");
+    params.push(updates.stopOnIncomplete ? 1 : 0);
+  }
+
   if (Object.prototype.hasOwnProperty.call(updates, "currentPosition")) {
     const currentPosition = Number.parseInt(updates.currentPosition, 10);
     if (!Number.isInteger(currentPosition) || currentPosition <= 0) {
@@ -825,6 +868,18 @@ async function updateAutomationRunMetadata(id, updates = {}) {
     }
     updateClauses.push("current_position = ?");
     params.push(currentPosition);
+  }
+
+  if (Object.prototype.hasOwnProperty.call(updates, "automationStatus")) {
+    const automationStatus = String(updates.automationStatus || "").trim().toLowerCase();
+    if (!automationStatus) {
+      throw new Error("Automation status is required.");
+    }
+    if (!VALID_AUTOMATION_STATUSES.has(automationStatus)) {
+      throw new Error("Automation status must be pending, running, completed, failed, or stopped.");
+    }
+    updateClauses.push("automation_status = ?");
+    params.push(automationStatus);
   }
 
   if (updateClauses.length === 0) {
