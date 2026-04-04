@@ -297,8 +297,28 @@ function createTextNode(tagName, className, value) {
   return node;
 }
 
-function createDescription(content, text) {
-  content.appendChild(createTextNode("p", "card-description", text || "(no description)"));
+function createDescription(content, text, options = {}) {
+  const descriptionText = String(text || "(no description)");
+  const collapsible = Boolean(options?.collapsible);
+  if (!collapsible) {
+    content.appendChild(createTextNode("p", "card-description", descriptionText));
+    return;
+  }
+
+  const description = document.createElement("p");
+  description.className = "card-description card-description--collapsible is-collapsed";
+  description.textContent = descriptionText;
+  content.appendChild(description);
+
+  const toggle = document.createElement("button");
+  toggle.type = "button";
+  toggle.className = "description-toggle";
+  toggle.textContent = "Show more";
+  toggle.addEventListener("click", () => {
+    const isCollapsed = description.classList.toggle("is-collapsed");
+    toggle.textContent = isCollapsed ? "Show more" : "Show less";
+  });
+  content.appendChild(toggle);
 }
 
 function formatContextBundleOption(bundle) {
@@ -621,6 +641,16 @@ function formatAutomationStartError(result, fallbackMessage) {
   return `${baseMessage} ${validationMessages.join(" ")}`;
 }
 
+function formatQueueCapSuffix(queue = {}) {
+  const wasCapped = Boolean(queue?.wasCapped);
+  if (!wasCapped) {
+    return "";
+  }
+  const maxStories = Number.parseInt(queue?.maxStories, 10) || 125;
+  const droppedStories = Number.parseInt(queue?.droppedStories, 10) || 0;
+  return ` Queue capped to ${maxStories} stories; ${droppedStories} story(s) were deferred.`;
+}
+
 function assertAutomationStartScope(result, { automationType, targetId, enforceSingleStory = false } = {}) {
   const expectedType = String(automationType || "").trim().toLowerCase();
   const expectedTargetId = Number.parseInt(targetId, 10);
@@ -838,6 +868,12 @@ function getAutomationStopReasonSummary(stopReason) {
   }
   if (normalizedReason === "manual_stop") {
     return "Stopped because a manual stop was requested.";
+  }
+  if (normalizedReason === "run_time_limit_reached") {
+    return "Stopped because the run reached the 600-minute limit.";
+  }
+  if (normalizedReason === "story_time_limit_reached") {
+    return "Stopped because a story exceeded the 16-minute limit and hit the 20-minute hard stop window.";
   }
   return null;
 }
@@ -1208,6 +1244,29 @@ async function resumeAutomationRun(automationRunId, options = {}) {
   return result;
 }
 
+async function abortAutomationRun(automationRunId) {
+  const normalizedRunId = parseRunId(automationRunId);
+  if (!normalizedRunId) {
+    throw new Error("Abort requires a valid automation run id.");
+  }
+
+  const response = await fetch(`/api/automation/stop/${encodeURIComponent(String(normalizedRunId))}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      purgeRemainingQueue: true,
+      abortActiveStoryIfPossible: true
+    })
+  });
+  const result = await response.json();
+
+  if (!response.ok) {
+    throw new Error(result?.error || "Unable to abort automation.");
+  }
+
+  return result;
+}
+
 function createFeatureAutomationUi(content, feature) {
   if (isFeatureComplete(feature)) {
     return;
@@ -1252,6 +1311,37 @@ function createFeatureAutomationUi(content, feature) {
   button.disabled = isFeatureStartInFlight
     || isActiveFeatureRun
     || (isAnyAutomationInFlight() && !isActiveFeatureRun);
+
+  const actionRow = document.createElement("div");
+  actionRow.className = "automation-action-row";
+  actionRow.appendChild(button);
+
+  if (isActiveFeatureRun) {
+    const abortButton = document.createElement("button");
+    abortButton.type = "button";
+    abortButton.className = "danger-button";
+    abortButton.textContent = "Abort";
+    abortButton.addEventListener("click", async () => {
+      const activeRunId = parseRunId(globalAutomationLock?.automationRunId || globalAutomationStatus?.automationRun?.id);
+      if (!activeRunId) {
+        createStatusBox.textContent = "Abort unavailable: active automation run id is missing.";
+        return;
+      }
+
+      abortButton.disabled = true;
+      try {
+        const result = await abortAutomationRun(activeRunId);
+        const removedStories = Number.parseInt(result?.queue?.removedStories, 10) || 0;
+        createStatusBox.textContent = `Abort requested for feature automation run #${activeRunId}. Remaining queued stories removed: ${removedStories}. You can resume later.`;
+        await refreshAutomationState();
+      } catch (error) {
+        createStatusBox.textContent = `Abort failed: ${error.message}`;
+      } finally {
+        abortButton.disabled = false;
+      }
+    });
+    actionRow.appendChild(abortButton);
+  }
 
   const stopOnIncompleteCheckbox = document.createElement("input");
   stopOnIncompleteCheckbox.type = "checkbox";
@@ -1312,13 +1402,14 @@ function createFeatureAutomationUi(content, feature) {
       const runId = result?.automationRun?.id;
       const totalStories = result?.queue?.totalStories;
       const isResumeLaunch = String(result?.launchMode || "").toLowerCase() === "resume";
+      const queueCapSuffix = formatQueueCapSuffix(result?.queue);
       createStatusBox.textContent = Number.isInteger(runId)
         ? (isResumeLaunch
-          ? `Feature automation resumed for feature #${feature.id} (run #${runId}, ${totalStories} remaining story(s) queued).`
-          : `Feature automation started for feature #${feature.id} (run #${runId}, ${totalStories} story(s) queued).`)
+          ? `Feature automation resumed for feature #${feature.id} (run #${runId}, ${totalStories} remaining story(s) queued).${queueCapSuffix}`
+          : `Feature automation started for feature #${feature.id} (run #${runId}, ${totalStories} story(s) queued).${queueCapSuffix}`)
         : (isResumeLaunch
-          ? `Feature automation resumed for feature #${feature.id}.`
-          : `Feature automation started for feature #${feature.id}.`);
+          ? `Feature automation resumed for feature #${feature.id}.${queueCapSuffix}`
+          : `Feature automation started for feature #${feature.id}.${queueCapSuffix}`);
       await refreshAutomationState();
     } catch (error) {
       createStatusBox.textContent = isAutomationAlreadyRunningError(error)
@@ -1330,7 +1421,7 @@ function createFeatureAutomationUi(content, feature) {
     }
   });
 
-  content.appendChild(button);
+  content.appendChild(actionRow);
 }
 
 function getIncompleteStoryCountForEpic(epic) {
@@ -1379,6 +1470,37 @@ function createEpicAutomationUi(content, epic) {
   button.disabled = isEpicStartInFlight
     || isActiveEpicRun
     || (isAnyAutomationInFlight() && !isActiveEpicRun);
+
+  const actionRow = document.createElement("div");
+  actionRow.className = "automation-action-row";
+  actionRow.appendChild(button);
+
+  if (isActiveEpicRun) {
+    const abortButton = document.createElement("button");
+    abortButton.type = "button";
+    abortButton.className = "danger-button";
+    abortButton.textContent = "Abort";
+    abortButton.addEventListener("click", async () => {
+      const activeRunId = parseRunId(globalAutomationLock?.automationRunId || globalAutomationStatus?.automationRun?.id);
+      if (!activeRunId) {
+        createStatusBox.textContent = "Abort unavailable: active automation run id is missing.";
+        return;
+      }
+
+      abortButton.disabled = true;
+      try {
+        const result = await abortAutomationRun(activeRunId);
+        const removedStories = Number.parseInt(result?.queue?.removedStories, 10) || 0;
+        createStatusBox.textContent = `Abort requested for epic automation run #${activeRunId}. Remaining queued stories removed: ${removedStories}. You can resume later.`;
+        await refreshAutomationState();
+      } catch (error) {
+        createStatusBox.textContent = `Abort failed: ${error.message}`;
+      } finally {
+        abortButton.disabled = false;
+      }
+    });
+    actionRow.appendChild(abortButton);
+  }
 
   const stopOnIncompleteCheckbox = document.createElement("input");
   stopOnIncompleteCheckbox.type = "checkbox";
@@ -1439,13 +1561,14 @@ function createEpicAutomationUi(content, epic) {
       const runId = result?.automationRun?.id;
       const totalStories = result?.queue?.totalStories;
       const isResumeLaunch = String(result?.launchMode || "").toLowerCase() === "resume";
+      const queueCapSuffix = formatQueueCapSuffix(result?.queue);
       createStatusBox.textContent = Number.isInteger(runId)
         ? (isResumeLaunch
-          ? `Epic automation resumed for epic #${epic.id} (run #${runId}, ${totalStories} remaining story(s) queued).`
-          : `Epic automation started for epic #${epic.id} (run #${runId}, ${totalStories} story(s) queued).`)
+          ? `Epic automation resumed for epic #${epic.id} (run #${runId}, ${totalStories} remaining story(s) queued).${queueCapSuffix}`
+          : `Epic automation started for epic #${epic.id} (run #${runId}, ${totalStories} story(s) queued).${queueCapSuffix}`)
         : (isResumeLaunch
-          ? `Epic automation resumed for epic #${epic.id}.`
-          : `Epic automation started for epic #${epic.id}.`);
+          ? `Epic automation resumed for epic #${epic.id}.${queueCapSuffix}`
+          : `Epic automation started for epic #${epic.id}.${queueCapSuffix}`);
       await refreshAutomationState();
     } catch (error) {
       createStatusBox.textContent = isAutomationAlreadyRunningError(error)
@@ -1457,7 +1580,7 @@ function createEpicAutomationUi(content, epic) {
     }
   });
 
-  content.appendChild(button);
+  content.appendChild(actionRow);
 }
 
 function createStoryAutomationUi(content, story) {
@@ -1491,6 +1614,37 @@ function createStoryAutomationUi(content, story) {
     ? "Automation Running..."
     : (isResumeEligible ? "Resume Automation" : "Complete with Automation");
   automationButton.disabled = isGlobalRunActive && !isStoryStartInFlight;
+
+  const actionRow = document.createElement("div");
+  actionRow.className = "automation-action-row";
+  actionRow.appendChild(automationButton);
+
+  if (isActiveStoryRun) {
+    const abortButton = document.createElement("button");
+    abortButton.type = "button";
+    abortButton.className = "danger-button";
+    abortButton.textContent = "Abort";
+    abortButton.addEventListener("click", async () => {
+      const activeRunId = parseRunId(globalAutomationLock?.automationRunId || globalAutomationStatus?.automationRun?.id);
+      if (!activeRunId) {
+        createStatusBox.textContent = "Abort unavailable: active automation run id is missing.";
+        return;
+      }
+
+      abortButton.disabled = true;
+      try {
+        const result = await abortAutomationRun(activeRunId);
+        const removedStories = Number.parseInt(result?.queue?.removedStories, 10) || 0;
+        createStatusBox.textContent = `Abort requested for story automation run #${activeRunId}. Remaining queued stories removed: ${removedStories}. You can resume later.`;
+        await refreshAutomationState();
+      } catch (error) {
+        createStatusBox.textContent = `Abort failed: ${error.message}`;
+      } finally {
+        abortButton.disabled = false;
+      }
+    });
+    actionRow.appendChild(abortButton);
+  }
 
   const { selectorWrap, select: contextBundleSelect } = createAutomationContextBundleSelector({
     idPrefix: `story-${story.id}`,
@@ -1533,13 +1687,14 @@ function createStoryAutomationUi(content, story) {
       const runId = result?.automationRun?.id;
       const totalStories = Number(result?.queue?.totalStories) || 1;
       const isResumeLaunch = String(result?.launchMode || "").toLowerCase() === "resume";
+      const queueCapSuffix = formatQueueCapSuffix(result?.queue);
       createStatusBox.textContent = Number.isInteger(runId)
         ? (isResumeLaunch
-          ? `Story automation resumed for story #${story.id} (run #${runId}, ${totalStories} remaining story queued).`
-          : `Story automation started for story #${story.id} (run #${runId}, 1 story queued).`)
+          ? `Story automation resumed for story #${story.id} (run #${runId}, ${totalStories} remaining story queued).${queueCapSuffix}`
+          : `Story automation started for story #${story.id} (run #${runId}, 1 story queued).${queueCapSuffix}`)
         : (isResumeLaunch
-          ? `Story automation resumed for story #${story.id}.`
-          : `Story automation started for story #${story.id} (1 story queued).`);
+          ? `Story automation resumed for story #${story.id}.${queueCapSuffix}`
+          : `Story automation started for story #${story.id} (1 story queued).${queueCapSuffix}`);
       await refreshAutomationState();
     } catch (error) {
       createStatusBox.textContent = isAutomationAlreadyRunningError(error)
@@ -1551,7 +1706,7 @@ function createStoryAutomationUi(content, story) {
     }
   });
 
-  content.appendChild(automationButton);
+  content.appendChild(actionRow);
 }
 
 function appendActiveStoryRuntime(content, story) {
@@ -1581,7 +1736,9 @@ function renderStoryCard(story, options = {}) {
     name: story.name,
     status: getStoryStatus(story),
     renderBody: (content) => {
-      createDescription(content, story.description);
+      createDescription(content, story.description, {
+        collapsible: true
+      });
       createStoryAutomationStatusSummary(content, story);
       if (options.showAutomation) {
         createStoryAutomationUi(content, story);
@@ -1748,17 +1905,33 @@ function syncAutomationDrivenCardState() {
   }
 }
 
-function maybeAlertMergeFailure() {
+function maybeAlertAutomationStop() {
   const finalResult = globalAutomationStatus?.finalResult;
+  if (!finalResult) {
+    return;
+  }
+
+  const normalizedStopReason = String(finalResult.stopReason || "").toLowerCase();
+  const runId = Number.parseInt(globalAutomationStatus?.automationRun?.id, 10);
+  const runLabel = Number.isInteger(runId) ? ` (run #${runId})` : "";
+
+  if (normalizedStopReason === "run_time_limit_reached") {
+    createStatusBox.textContent = `Automation stopped after reaching the 600-minute run limit${runLabel}. The remaining queue was cleared; you can resume later.`;
+    return;
+  }
+
+  if (normalizedStopReason === "story_time_limit_reached") {
+    createStatusBox.textContent = `Automation stopped because a story exceeded runtime limits${runLabel}. The remaining queue was cleared; you can resume later.`;
+    return;
+  }
+
   const isMergeFailure = finalResult
     && String(finalResult.status || "").toLowerCase() === "failed"
-    && String(finalResult.stopReason || "").toLowerCase() === "merge_failed";
+    && normalizedStopReason === "merge_failed";
   if (!isMergeFailure) {
     return;
   }
 
-  const runId = Number.parseInt(globalAutomationStatus?.automationRun?.id, 10);
-  const runLabel = Number.isInteger(runId) ? ` (run #${runId})` : "";
   createStatusBox.textContent = `Automation stopped due to an auto-merge failure${runLabel}. Resolve the merge issue before restarting.`;
 }
 
@@ -1832,7 +2005,7 @@ function renderFeatureLists() {
 
   const signature = getAutomationUiSignature();
   if (signature !== lastAutomationUiSignature) {
-    maybeAlertMergeFailure();
+    maybeAlertAutomationStop();
     scrollActiveStoryCardIntoView();
     lastAutomationUiSignature = signature;
   }

@@ -50,6 +50,7 @@ function createServerHarness(overrides = {}) {
     updateAutomationRunMetadata: [],
     executeAutomatedStoryRun: [],
     mergeAutomationStoryRun: [],
+    requestAutomationStoryAbort: [],
     automationLifecycleLogs: [],
     validateContextBundleSelection: []
   };
@@ -202,6 +203,13 @@ function createServerHarness(overrides = {}) {
         stdout: "merged",
         stderr: "",
         gitStatus: ""
+      };
+    },
+    requestAutomationStoryAbort: async (input) => {
+      calls.requestAutomationStoryAbort.push(input);
+      return {
+        supported: false,
+        requested: false
       };
     },
     getAutomationRunById: async (automationRunId) => automationRuns.get(Number(automationRunId)) || ({
@@ -474,6 +482,49 @@ test("feature start applies persisted automation bundle id to every generated st
   await harness.runDetachedTasks();
   assert.equal(harness.calls.executeAutomatedStoryRun.length, 2);
   assert.ok(harness.calls.executeAutomatedStoryRun.every((call) => call.contextBundleId === 77));
+});
+
+test("start endpoint caps queued stories to 125 items", async () => {
+  const featureWithLargeQueue = [{
+    id: 500,
+    name: "Feature 500",
+    created_at: "2026-01-01T10:00:00.000Z",
+    epics: [{
+      id: 900,
+      name: "Epic 900",
+      created_at: "2026-01-01T10:01:00.000Z",
+      stories: Array.from({ length: 130 }, (_, index) => ({
+        id: 10000 + index,
+        name: `Story ${10000 + index}`,
+        description: "Queue story",
+        created_at: `2026-01-01T10:${String(index % 60).padStart(2, "0")}:00.000Z`
+      }))
+    }]
+  }];
+
+  const harness = createServerHarness({
+    getFeaturesTree: async () => featureWithLargeQueue
+  });
+
+  await withServer(harness, async (baseUrl) => {
+    const response = await fetch(`${baseUrl}/api/automation/start/feature/500`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        projectName: "demo-project",
+        baseBranch: "main"
+      })
+    });
+
+    assert.equal(response.status, 202);
+    const payload = await response.json();
+    assert.equal(payload.queue.totalStories, 125);
+    assert.equal(payload.queue.wasCapped, true);
+    assert.equal(payload.queue.maxStories, 125);
+    assert.equal(payload.queue.droppedStories, 5);
+  });
 });
 
 test("automation lifecycle logging includes launch, story execution, stop reason, and final outcome", async () => {
@@ -1801,6 +1852,57 @@ test("stop endpoint marks running automation as manually stopped", async () => {
       && call.updates?.stopReason === "manual_stop"
   );
   assert.ok(stopUpdateCall);
+});
+
+test("stop endpoint can purge queued stories and request active story abort", async () => {
+  const abortCalls = [];
+  const harness = createServerHarness({
+    requestAutomationStoryAbort: async (input) => {
+      abortCalls.push(input);
+      return {
+        supported: true,
+        requested: true
+      };
+    }
+  });
+  let automationRunId = null;
+
+  await withServer(harness, async (baseUrl) => {
+    const startResponse = await fetch(`${baseUrl}/api/automation/start/feature/100`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        projectName: "demo-project",
+        baseBranch: "main"
+      })
+    });
+
+    assert.equal(startResponse.status, 202);
+    const startPayload = await startResponse.json();
+    automationRunId = startPayload.automationRun.id;
+
+    const stopResponse = await fetch(`${baseUrl}/api/automation/stop/${automationRunId}`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        purgeRemainingQueue: true,
+        abortActiveStoryIfPossible: true
+      })
+    });
+    assert.equal(stopResponse.status, 200);
+    const stopPayload = await stopResponse.json();
+
+    assert.equal(stopPayload.queue.purged, true);
+    assert.equal(typeof stopPayload.queue.removedStories, "number");
+    assert.equal(stopPayload.abort.supported, true);
+    assert.equal(stopPayload.abort.requested, true);
+  });
+
+  assert.equal(abortCalls.length, 1);
 });
 
 test("manual stop prevents automation from starting the next queued story", async () => {

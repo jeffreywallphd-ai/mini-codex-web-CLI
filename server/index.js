@@ -562,6 +562,10 @@ app.use("/api/automation", createAutomationStartRouter({
   getAutomationQueueStoriesByTarget,
   mergeAutomationStoryRun,
   validateContextBundleSelection,
+  requestAutomationStoryAbort: async () => ({
+    supported: false,
+    requested: false
+  }),
   getErrorMessage,
   runningProjects,
   getActiveAutomation: () => activeFeatureAutomation,
