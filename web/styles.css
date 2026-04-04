@@ -675,6 +675,30 @@ details pre {
   margin: 0 0 6px;
 }
 
+.bundle-preview-section {
+  border-top: 1px solid var(--border);
+  margin-top: 12px;
+  padding-top: 12px;
+}
+
+.bundle-preview-section h3 {
+  margin: 0;
+}
+
+.bundle-preview-box {
+  margin: 0;
+  min-height: 220px;
+  max-height: 420px;
+  overflow: auto;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+.bundle-preview-status--muted {
+  color: var(--muted);
+  background: rgba(79, 140, 255, 0.08);
+  border-color: rgba(79, 140, 255, 0.28);
+}
+
 .active-story-command-box {
   margin: 0;
   min-height: calc(1.4em * 3 + 20px);

@@ -16,6 +16,10 @@ const contextBundlesList = document.getElementById("contextBundlesList");
 const addBundlePartButton = document.getElementById("addBundlePartButton");
 const bundlePartsHint = document.getElementById("bundlePartsHint");
 const bundlePartsList = document.getElementById("bundlePartsList");
+const refreshBundlePreviewButton = document.getElementById("refreshBundlePreviewButton");
+const bundlePreviewHint = document.getElementById("bundlePreviewHint");
+const bundlePreviewStatus = document.getElementById("bundlePreviewStatus");
+const bundlePreviewBox = document.getElementById("bundlePreviewBox");
 
 const PART_TYPE_OPTIONS = [
   { value: "repository_context", label: "Repository Context" },
@@ -82,6 +86,24 @@ function setStatus(message) {
   bundleStatusBox.textContent = message;
 }
 
+function setPreviewStatus(message, isError = false) {
+  const normalizedMessage = String(message || "").trim();
+  if (!normalizedMessage) {
+    bundlePreviewStatus.textContent = "";
+    bundlePreviewStatus.classList.add("hidden");
+    bundlePreviewStatus.classList.remove("bundle-preview-status--muted");
+    return;
+  }
+
+  bundlePreviewStatus.textContent = normalizedMessage;
+  bundlePreviewStatus.classList.remove("hidden");
+  bundlePreviewStatus.classList.toggle("bundle-preview-status--muted", !isError);
+}
+
+function setPreviewText(text) {
+  bundlePreviewBox.textContent = String(text || "").trim() || "(compiled preview is empty)";
+}
+
 function confirmBundleDelete(bundleId, bundleTitle) {
   const label = String(bundleTitle || "").trim() || `bundle #${bundleId}`;
   if (typeof window !== "undefined" && typeof window.confirm === "function") {
@@ -124,12 +146,16 @@ function syncButtonState() {
   updateBundleButton.disabled = !isEditing;
   deleteBundleButton.disabled = !isEditing;
   addBundlePartButton.disabled = !isEditing;
+  refreshBundlePreviewButton.disabled = !isEditing;
   editingHint.textContent = isEditing
     ? `Editing bundle #${selectedBundleId}.`
     : "Creating a new bundle.";
   bundlePartsHint.textContent = isEditing
     ? "Each part has an explicit purpose. Save changes per part and use move up/down for deterministic order."
     : "Create or select a bundle to author parts.";
+  bundlePreviewHint.textContent = isEditing
+    ? "Preview matches saved part ordering and include-in-compiled settings."
+    : "Create or select a bundle to preview compiled context.";
 }
 
 function clearBundleForm() {
@@ -142,6 +168,8 @@ function clearBundleForm() {
   bundleTagsInput.value = "";
   bundleSummaryInput.value = "";
   bundleParts = [];
+  setPreviewStatus("");
+  setPreviewText("Select a bundle to load compiled preview.");
   clearValidation();
   syncButtonState();
   renderBundleParts();
@@ -158,6 +186,35 @@ function setBundleForm(bundle) {
   bundleSummaryInput.value = bundle.summary || "";
   clearValidation();
   syncButtonState();
+}
+
+async function loadBundlePreview(bundleId, options = {}) {
+  const { silent = false } = options;
+  const response = await fetch(`/api/context-bundles/${encodeURIComponent(String(bundleId))}/preview`);
+  const result = await parseJsonResponse(response);
+  if (!response.ok) {
+    throw new Error(result?.error || "Failed to load compiled preview.");
+  }
+
+  const preview = result?.preview || {};
+  setPreviewText(preview.compiledText || "");
+
+  if (!silent) {
+    const includedCount = Array.isArray(preview.includedPartIds) ? preview.includedPartIds.length : 0;
+    setPreviewStatus(`Preview refreshed from saved state (${includedCount} included part${includedCount === 1 ? "" : "s"}).`);
+  } else {
+    setPreviewStatus("");
+  }
+}
+
+async function refreshPreviewSafely(bundleId) {
+  try {
+    await loadBundlePreview(bundleId);
+    return "";
+  } catch (error) {
+    setPreviewStatus(`Preview unavailable: ${error.message}`, true);
+    return error.message;
+  }
 }
 
 function renderBundles() {
@@ -420,6 +477,12 @@ async function selectBundleForEditing(bundleId) {
   setBundleForm(result);
   bundleParts = sortedParts(Array.isArray(result.parts) ? result.parts : []);
   renderBundleParts();
+  try {
+    await loadBundlePreview(bundleId, { silent: true });
+  } catch (error) {
+    setPreviewStatus(`Preview unavailable: ${error.message}`, true);
+    setPreviewText("Unable to load compiled preview.");
+  }
 }
 
 async function duplicateBundle(bundleId) {
@@ -494,7 +557,12 @@ async function addBundlePart() {
 
     bundleParts = sortedParts([...bundleParts, result]);
     renderBundleParts();
-    setStatus(`Added part #${result.id} to bundle #${bundleId}.`);
+    const previewError = await refreshPreviewSafely(bundleId);
+    setStatus(
+      previewError
+        ? `Added part #${result.id} to bundle #${bundleId}. Preview refresh failed: ${previewError}`
+        : `Added part #${result.id} to bundle #${bundleId}.`
+    );
   } catch (error) {
     setValidation(error.message);
     setStatus(`Add part failed: ${error.message}`);
@@ -521,7 +589,12 @@ async function savePartEdits(partId, payload) {
 
     bundleParts = sortedParts(bundleParts.map((part) => (part.id === result.id ? result : part)));
     renderBundleParts();
-    setStatus(`Saved part #${result.id}.`);
+    const previewError = await refreshPreviewSafely(bundleId);
+    setStatus(
+      previewError
+        ? `Saved part #${result.id}. Preview refresh failed: ${previewError}`
+        : `Saved part #${result.id}.`
+    );
   } catch (error) {
     setValidation(error.message);
     setStatus(`Save part failed: ${error.message}`);
@@ -561,6 +634,7 @@ async function persistPartOrder(partsInOrder) {
 
   bundleParts = sortedParts(persistedParts);
   renderBundleParts();
+  return refreshPreviewSafely(bundleId);
 }
 
 async function movePart(partId, direction) {
@@ -577,8 +651,12 @@ async function movePart(partId, direction) {
     const [moved] = reordered.splice(fromIndex, 1);
     reordered.splice(toIndex, 0, moved);
 
-    await persistPartOrder(reordered);
-    setStatus(`Reordered part #${partId}.`);
+    const previewError = await persistPartOrder(reordered);
+    setStatus(
+      previewError
+        ? `Reordered part #${partId}. Preview refresh failed: ${previewError}`
+        : `Reordered part #${partId}.`
+    );
   } catch (error) {
     setValidation(error.message);
     setStatus(`Reorder failed: ${error.message}`);
@@ -600,13 +678,22 @@ async function deletePart(partId) {
 
     const remaining = sortedParts(bundleParts.filter((part) => part.id !== partId));
     if (remaining.length > 0) {
-      await persistPartOrder(remaining);
+      const previewError = await persistPartOrder(remaining);
+      setStatus(
+        previewError
+          ? `Deleted part #${partId}. Preview refresh failed: ${previewError}`
+          : `Deleted part #${partId}.`
+      );
     } else {
       bundleParts = [];
       renderBundleParts();
+      const previewError = await refreshPreviewSafely(bundleId);
+      setStatus(
+        previewError
+          ? `Deleted part #${partId}. Preview refresh failed: ${previewError}`
+          : `Deleted part #${partId}.`
+      );
     }
-
-    setStatus(`Deleted part #${partId}.`);
   } catch (error) {
     setValidation(error.message);
     setStatus(`Delete part failed: ${error.message}`);
@@ -700,6 +787,20 @@ clearBundleFormButton.addEventListener("click", () => {
 
 addBundlePartButton.addEventListener("click", async () => {
   await addBundlePart();
+});
+
+refreshBundlePreviewButton.addEventListener("click", async () => {
+  if (!selectedBundleId) {
+    setPreviewStatus("Select a bundle first.", true);
+    return;
+  }
+
+  try {
+    await loadBundlePreview(selectedBundleId);
+  } catch (error) {
+    setPreviewStatus(error.message, true);
+    setStatus(`Preview load failed: ${error.message}`);
+  }
 });
 
 (async () => {

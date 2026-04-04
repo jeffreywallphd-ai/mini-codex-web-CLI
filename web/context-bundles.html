@@ -55,6 +55,16 @@
         <div id="bundlePartsList" class="hier-stack"></div>
       </div>
 
+      <div class="bundle-preview-section">
+        <div class="section-heading-row">
+          <h3>Compiled Preview</h3>
+          <button id="refreshBundlePreviewButton" class="secondary-button" type="button" disabled>Refresh Preview</button>
+        </div>
+        <p id="bundlePreviewHint" class="inline-hint">Create or select a bundle to preview compiled context.</p>
+        <p id="bundlePreviewStatus" class="inline-validation hidden" aria-live="polite"></p>
+        <pre id="bundlePreviewBox" class="bundle-preview-box">Select a bundle to load compiled preview.</pre>
+      </div>
+
       <div class="draft-actions">
         <button id="saveBundleButton" type="button">Create Bundle</button>
         <button id="updateBundleButton" class="secondary-button" type="button" disabled>Update Bundle</button>
