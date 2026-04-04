@@ -447,6 +447,30 @@ details pre {
   font-size: 13px;
 }
 
+.story-automation-checkbox {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 13px;
+  margin: 0 0 12px;
+}
+
+.story-automation-checkbox input {
+  width: auto;
+  margin: 0;
+}
+
+.story-automation-status {
+  margin-top: 8px;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel);
+  color: var(--text);
+  font-size: 13px;
+}
+
 .page-actions button {
   margin-bottom: 0;
 }
