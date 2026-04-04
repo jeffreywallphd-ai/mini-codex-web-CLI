@@ -30,6 +30,7 @@ The app is designed for personal LAN use, not for public internet exposure or mu
 - Automation story execution outcome persistence for status reporting (`automation_story_executions` with run linkage and queue outcome state)
 - Automation failure detail persistence at run scope (`failed_story_id`, `failure_summary`) for quick troubleshooting context
 - Sequential automation runner for server-driven queue execution (`server/automationRunner.js`)
+- Shared queue-position ordering utilities reused by runner/API orchestration (`server/automationQueuePosition.js`)
 - Shared automated story run pipeline that reuses manual run creation/execution persistence (`server/automatedStoryRunPipeline.js`)
 - Automated run-origin linkage persisted on each run (`automation_origin_type`, `automation_origin_id`, `automation_run_id`) for feature/epic/story traceability
 - Feature card automation control in **Not Yet Implemented** for launching feature-wide automation (`Complete with Automation`)
@@ -241,6 +242,9 @@ is compatible with the existing story run lifecycle.
 - `onStoryResult` is invoked after each story with deterministic
   `queueAction` (`advanced`, `stopped`, `failed`) and completion fields so
   each story outcome can be persisted for automation status displays.
+- Queue position parsing/sorting is shared with the API layer through
+  `server/automationQueuePosition.js`, reducing duplicated ordering logic while
+  keeping the implementation dependency-free and small.
 
 ## Automated Story Run Pipeline
 

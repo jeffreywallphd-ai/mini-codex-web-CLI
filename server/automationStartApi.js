@@ -1,6 +1,7 @@
 const express = require("express");
 
 const { defineAutomationExecutionPlan, normalizeCompletionStatus } = require("./automationQueue");
+const { sortByPosition, toPositiveInteger } = require("./automationQueuePosition");
 const { runSequentialStoryQueue } = require("./automationRunner");
 
 function normalizeBoolean(value) {
@@ -115,55 +116,16 @@ function toStatusApiExecutionSummary(execution = {}, queueContext = {}) {
   };
 }
 
-function toPositiveInteger(value) {
-  const parsed = Number.parseInt(value, 10);
-  if (!Number.isInteger(parsed) || parsed <= 0) {
-    return null;
-  }
-  return parsed;
-}
-
 function sortQueueStoriesByPosition(queueStories = []) {
-  const stories = Array.isArray(queueStories) ? queueStories : [];
-  return stories
-    .map((story, index) => ({
-      story,
-      index,
-      positionInQueue: toPositiveInteger(story?.positionInQueue)
-    }))
-    .filter((entry) => entry.positionInQueue !== null)
-    .sort((a, b) => {
-      if (a.positionInQueue !== b.positionInQueue) {
-        return a.positionInQueue - b.positionInQueue;
-      }
-
-      return a.index - b.index;
-    })
-    .map((entry) => entry.story);
+  return sortByPosition(queueStories, (story) => story?.positionInQueue);
 }
 
 function sortExecutionsByPosition(storyExecutions = []) {
-  const executions = Array.isArray(storyExecutions) ? storyExecutions : [];
-  return executions
-    .map((execution, index) => ({
-      execution,
-      index,
-      positionInQueue: toPositiveInteger(execution?.position_in_queue),
-      id: toPositiveInteger(execution?.id) ?? Number.MAX_SAFE_INTEGER
-    }))
-    .filter((entry) => entry.positionInQueue !== null)
-    .sort((a, b) => {
-      if (a.positionInQueue !== b.positionInQueue) {
-        return a.positionInQueue - b.positionInQueue;
-      }
-
-      if (a.id !== b.id) {
-        return a.id - b.id;
-      }
-
-      return a.index - b.index;
-    })
-    .map((entry) => entry.execution);
+  return sortByPosition(
+    storyExecutions,
+    (execution) => execution?.position_in_queue,
+    (execution) => execution?.id
+  );
 }
 
 function getLatestExecutionsByPosition(storyExecutions = []) {
