@@ -4,6 +4,8 @@ const { defineAutomationExecutionPlan, normalizeCompletionStatus } = require("./
 const { sortByPosition, toPositiveInteger } = require("./automationQueuePosition");
 const { runSequentialStoryQueue } = require("./automationRunner");
 
+const MAX_AUTOMATION_QUEUE_STORIES = 125;
+
 function normalizeBoolean(value) {
   return value === true || value === 1 || value === "1" || value === "true";
 }
@@ -111,6 +113,13 @@ function parseOptionalPositiveId(value) {
 function normalizePersistedContextBundleId(value) {
   const parsed = parseStrictPositiveInteger(value);
   return Number.isInteger(parsed) && parsed > 0 ? parsed : null;
+}
+
+function parseStopOptions(body = {}) {
+  return {
+    purgeRemainingQueue: normalizeBoolean(body?.purgeRemainingQueue ?? body?.purgeQueue),
+    abortActiveStoryIfPossible: normalizeBoolean(body?.abortActiveStoryIfPossible ?? body?.abortCurrentStory)
+  };
 }
 
 function parseContextBundleSelection(body = {}) {
@@ -266,6 +275,30 @@ function getRemainingQueueStories(persistedQueueStories = [], storyExecutions = 
     const positionInQueue = toPositiveInteger(story?.positionInQueue);
     return positionInQueue !== null && !completedPositions.has(positionInQueue);
   });
+}
+
+function applyQueueStoryCap(stories = []) {
+  const orderedStories = sortQueueStoriesByPosition(stories);
+  if (orderedStories.length <= MAX_AUTOMATION_QUEUE_STORIES) {
+    return {
+      stories: orderedStories,
+      wasCapped: false,
+      droppedStoryCount: 0
+    };
+  }
+
+  return {
+    stories: orderedStories.slice(0, MAX_AUTOMATION_QUEUE_STORIES),
+    wasCapped: true,
+    droppedStoryCount: orderedStories.length - MAX_AUTOMATION_QUEUE_STORIES
+  };
+}
+
+function reindexQueueStories(stories = []) {
+  return sortQueueStoriesByPosition(stories).map((story, index) => ({
+    ...story,
+    positionInQueue: index + 1
+  }));
 }
 
 function resolveStoryProgressPosition({
@@ -622,6 +655,7 @@ function createAutomationStartRouter(deps = {}) {
     getAutomationQueueStoriesByTarget,
     mergeAutomationStoryRun,
     validateContextBundleSelection,
+    requestAutomationStoryAbort = async () => ({ supported: false, requested: false }),
     getErrorMessage,
     runningProjects,
     getActiveAutomation,
@@ -646,6 +680,7 @@ function createAutomationStartRouter(deps = {}) {
   if (typeof getAutomationQueueStoriesByTarget !== "function") throw new Error("getAutomationQueueStoriesByTarget dependency is required.");
   if (typeof mergeAutomationStoryRun !== "function") throw new Error("mergeAutomationStoryRun dependency is required.");
   if (typeof validateContextBundleSelection !== "function") throw new Error("validateContextBundleSelection dependency is required.");
+  if (typeof requestAutomationStoryAbort !== "function") throw new Error("requestAutomationStoryAbort dependency must be a function.");
   if (typeof getErrorMessage !== "function") throw new Error("getErrorMessage dependency is required.");
   if (!runningProjects || typeof runningProjects.has !== "function") throw new Error("runningProjects dependency is required.");
   if (typeof getActiveAutomation !== "function") throw new Error("getActiveAutomation dependency is required.");
@@ -653,6 +688,46 @@ function createAutomationStartRouter(deps = {}) {
 
   const router = express.Router();
   const activeStoryRuntimeByAutomationRunId = new Map();
+
+  async function pruneRemainingQueueStories(automationRunId, keepThroughPosition) {
+    const normalizedRunId = Number.parseInt(automationRunId, 10);
+    const normalizedKeepThrough = Number.parseInt(keepThroughPosition, 10);
+    if (!Number.isInteger(normalizedRunId) || normalizedRunId <= 0) {
+      return { removedCount: 0, keptCount: 0 };
+    }
+    if (!Number.isInteger(normalizedKeepThrough) || normalizedKeepThrough <= 0) {
+      return { removedCount: 0, keptCount: 0 };
+    }
+
+    const persistedQueueStories = sortQueueStoriesByPosition(
+      await getAutomationRunQueueItemsByRunId(normalizedRunId)
+    );
+    if (persistedQueueStories.length <= 0) {
+      return { removedCount: 0, keptCount: 0 };
+    }
+
+    const keptStories = persistedQueueStories.filter((story) => {
+      const position = toPositiveInteger(story?.positionInQueue);
+      return position !== null && position <= normalizedKeepThrough;
+    });
+
+    if (keptStories.length <= 0 || keptStories.length >= persistedQueueStories.length) {
+      return {
+        removedCount: Math.max(0, persistedQueueStories.length - keptStories.length),
+        keptCount: keptStories.length
+      };
+    }
+
+    await recordAutomationRunQueueItems({
+      automationRunId: normalizedRunId,
+      stories: keptStories
+    });
+
+    return {
+      removedCount: persistedQueueStories.length - keptStories.length,
+      keptCount: keptStories.length
+    };
+  }
 
   async function executeAutomationInBackground({
     automationRun,
@@ -699,6 +774,60 @@ function createAutomationStartRouter(deps = {}) {
           const isManualStopRequested = latestAutomationRun.stop_flag === 1
             && latestAutomationRun.stop_reason === "manual_stop";
           return isManualStopRequested;
+        },
+        onStoryTimeout: async (timeoutEvent) => {
+          const phase = String(timeoutEvent?.phase || "").trim().toLowerCase();
+          const eventType = phase === "hard_limit_reached"
+            ? "story_hard_time_limit_reached"
+            : "story_soft_time_limit_reached";
+          logAutomationLifecycle(logger, eventType, {
+            automationRunId: automationRun.id,
+            automationType,
+            targetId,
+            projectName,
+            baseBranch,
+            storyId: timeoutEvent?.storyId ?? null,
+            positionInQueue: timeoutEvent?.positionInQueue ?? null,
+            elapsedMs: timeoutEvent?.elapsedMs ?? null,
+            softTimeoutMs: timeoutEvent?.softTimeoutMs ?? null,
+            hardTimeoutMs: timeoutEvent?.hardTimeoutMs ?? null
+          });
+        },
+        onStoryAbortRequested: async (abortEvent) => {
+          const runtimeState = activeStoryRuntimeByAutomationRunId.get(automationRun.id) || {};
+          let abortRequested = false;
+          let abortSupported = false;
+
+          try {
+            const abortResult = await requestAutomationStoryAbort({
+              automationRunId: automationRun.id,
+              automationType,
+              targetId,
+              projectName,
+              baseBranch,
+              storyId: abortEvent?.storyId ?? null,
+              positionInQueue: abortEvent?.positionInQueue ?? null,
+              runningCodexCommand: runtimeState?.runningCodexCommand || ""
+            });
+            abortRequested = Boolean(abortResult?.requested);
+            abortSupported = Boolean(abortResult?.supported);
+          } catch (abortError) {
+            logger.error("automation story abort request failed:", abortError);
+          }
+
+          logAutomationLifecycle(logger, "story_abort_requested", {
+            automationRunId: automationRun.id,
+            automationType,
+            targetId,
+            projectName,
+            baseBranch,
+            storyId: abortEvent?.storyId ?? null,
+            positionInQueue: abortEvent?.positionInQueue ?? null,
+            elapsedMs: abortEvent?.elapsedMs ?? null,
+            timeoutMs: abortEvent?.timeoutMs ?? null,
+            abortRequested,
+            abortSupported
+          });
         },
         executeStory: async (storyQueueItem) => {
           const storyResult = await executeAutomatedStoryRun({
@@ -909,6 +1038,36 @@ function createAutomationStartRouter(deps = {}) {
             });
           } catch (error) {
             logger.error("automation story progress location update failed:", error);
+          }
+
+          try {
+            const queueAction = String(storyResult?.queueAction || "").trim().toLowerCase();
+            const stopReason = String(queueState?.stopReason || "").trim().toLowerCase();
+            const shouldPruneRemainingQueue = queueAction === "stopped"
+              && (stopReason === "manual_stop"
+                || stopReason === "run_time_limit_reached"
+                || stopReason === "story_time_limit_reached");
+
+            if (shouldPruneRemainingQueue) {
+              const storyPosition = Number.parseInt(storyResult?.positionInQueue, 10);
+              if (Number.isInteger(storyPosition) && storyPosition > 0) {
+                const pruneResult = await pruneRemainingQueueStories(automationRun.id, storyPosition);
+                logAutomationLifecycle(logger, "automation_queue_pruned", {
+                  automationRunId: automationRun.id,
+                  automationType,
+                  targetId,
+                  projectName,
+                  baseBranch,
+                  storyId: storyResult?.storyId ?? null,
+                  keepThroughPosition: storyPosition,
+                  removedCount: pruneResult.removedCount,
+                  keptCount: pruneResult.keptCount,
+                  triggerStopReason: stopReason
+                });
+              }
+            }
+          } catch (error) {
+            logger.error("automation queue prune failed:", error);
           }
         }
       });
@@ -1144,7 +1303,9 @@ function createAutomationStartRouter(deps = {}) {
         });
       }
 
-      const queuedStories = Array.isArray(plan.stories) ? plan.stories : [];
+      const uncappedStories = Array.isArray(plan.stories) ? plan.stories : [];
+      const cappedQueue = applyQueueStoryCap(uncappedStories);
+      const queuedStories = reindexQueueStories(cappedQueue.stories);
       const automationRun = await createAutomationRun({
         automationType,
         targetId,
@@ -1192,6 +1353,13 @@ function createAutomationStartRouter(deps = {}) {
           launchMode: "start",
           automationRun,
           queuedStories,
+          queueExtras: cappedQueue.wasCapped
+            ? {
+              wasCapped: true,
+              maxStories: MAX_AUTOMATION_QUEUE_STORIES,
+              droppedStories: cappedQueue.droppedStoryCount
+            }
+            : null,
           queueStatus: plan.queueStatus,
           projectName,
           baseBranch
@@ -1332,27 +1500,68 @@ function createAutomationStartRouter(deps = {}) {
         contextBundleId: requestedContextBundleId
       });
 
+      const storyExecutions = await getAutomationStoryExecutionsByRunId(automationRun.id);
       const persistedQueueStories = sortQueueStoriesByPosition(
         await getAutomationRunQueueItemsByRunId(automationRun.id)
       );
-      if (persistedQueueStories.length <= 0) {
-        return res.status(409).json({
-          error: "Resume unavailable: persisted automation queue snapshot is missing for this run."
-        });
-      }
-
-      const storyExecutions = await getAutomationStoryExecutionsByRunId(automationRun.id);
-      const remainingStories = getRemainingQueueStories(persistedQueueStories, storyExecutions);
+      let totalStoriesInRunQueue = persistedQueueStories.length;
+      let remainingStories = getRemainingQueueStories(persistedQueueStories, storyExecutions);
+      let didRebuildQueueSnapshot = false;
 
       if (remainingStories.length <= 0) {
-        return res.status(409).json({
-          error: "Resume unavailable: no remaining queued stories.",
-          automationRun: toStatusApiAutomationRun(automationRun),
-          queue: {
-            totalStories: persistedQueueStories.length,
-            remainingStories: 0
-          }
+        const features = await getFeaturesTree({
+          projectName: automationRun.project_name,
+          baseBranch: automationRun.base_branch
         });
+        const rebuiltPlan = defineAutomationExecutionPlan(features, {
+          automationType: automationRun.automation_type,
+          targetId: automationRun.target_id
+        });
+
+        if (!rebuiltPlan?.queueStatus?.isValid) {
+          return res.status(409).json({
+            error: "Resume unavailable: no remaining queued stories.",
+            automationRun: toStatusApiAutomationRun(automationRun),
+            queue: {
+              totalStories: totalStoriesInRunQueue,
+              remainingStories: 0
+            }
+          });
+        }
+
+        remainingStories = Array.isArray(rebuiltPlan.stories)
+          ? sortQueueStoriesByPosition(rebuiltPlan.stories)
+          : [];
+        totalStoriesInRunQueue = remainingStories.length;
+
+        if (remainingStories.length <= 0) {
+          return res.status(409).json({
+            error: "Resume unavailable: no remaining queued stories.",
+            automationRun: toStatusApiAutomationRun(automationRun),
+            queue: {
+              totalStories: totalStoriesInRunQueue,
+              remainingStories: 0
+            }
+          });
+        }
+
+        await recordAutomationRunQueueItems({
+          automationRunId: automationRun.id,
+          stories: remainingStories
+        });
+        didRebuildQueueSnapshot = true;
+      }
+
+      const cappedQueue = applyQueueStoryCap(remainingStories);
+      remainingStories = cappedQueue.stories;
+      if (didRebuildQueueSnapshot || cappedQueue.wasCapped) {
+        const normalizedRemainingStories = reindexQueueStories(remainingStories);
+        await recordAutomationRunQueueItems({
+          automationRunId: automationRun.id,
+          stories: normalizedRemainingStories
+        });
+        remainingStories = normalizedRemainingStories;
+        totalStoriesInRunQueue = remainingStories.length;
       }
 
       const nextPosition = Number.parseInt(remainingStories[0]?.positionInQueue, 10) || 1;
@@ -1390,7 +1599,7 @@ function createAutomationStartRouter(deps = {}) {
         targetId: resumedAutomationRun.target_id,
         stories: remainingStories,
         stopOnIncompleteStory: resumedAutomationRun.stop_on_incomplete === 1,
-        totalStoriesInRunQueue: persistedQueueStories.length,
+        totalStoriesInRunQueue,
         initialPosition: nextPosition,
         contextBundleId: contextBundleIdForResume
       });
@@ -1401,8 +1610,15 @@ function createAutomationStartRouter(deps = {}) {
           automationRun: resumedAutomationRun,
           queuedStories: remainingStories,
           queueExtras: {
-            totalStoriesInRunQueue: persistedQueueStories.length,
-            skippedCompletedStories: persistedQueueStories.length - remainingStories.length
+            totalStoriesInRunQueue,
+            skippedCompletedStories: Math.max(0, totalStoriesInRunQueue - remainingStories.length),
+            ...(cappedQueue.wasCapped
+              ? {
+                wasCapped: true,
+                maxStories: MAX_AUTOMATION_QUEUE_STORIES,
+                droppedStories: cappedQueue.droppedStoryCount
+              }
+              : {})
           },
           projectName: resumedAutomationRun.project_name,
           baseBranch: resumedAutomationRun.base_branch
@@ -1543,6 +1759,7 @@ function createAutomationStartRouter(deps = {}) {
 
   router.post("/stop/:automationRunId", async (req, res) => {
     const automationRunId = parseTargetId(req.params?.automationRunId);
+    const stopOptions = parseStopOptions(req.body || {});
     if (!automationRunId) {
       return res.status(400).json({ error: "Invalid automation id." });
     }
@@ -1569,6 +1786,37 @@ function createAutomationStartRouter(deps = {}) {
         automationStatus: "stopped",
         stopReason: "manual_stop"
       });
+      const normalizedCurrentPosition = Number.parseInt(automationRun.current_position, 10);
+      let queuePruneResult = { removedCount: 0, keptCount: 0 };
+      if (stopOptions.purgeRemainingQueue && Number.isInteger(normalizedCurrentPosition) && normalizedCurrentPosition > 0) {
+        queuePruneResult = await pruneRemainingQueueStories(automationRunId, normalizedCurrentPosition);
+      }
+
+      let abortStatus = {
+        requested: false,
+        supported: false
+      };
+      if (stopOptions.abortActiveStoryIfPossible) {
+        try {
+          const runtimeState = activeStoryRuntimeByAutomationRunId.get(automationRunId) || {};
+          const abortResult = await requestAutomationStoryAbort({
+            automationRunId,
+            automationType: automationRun.automation_type,
+            targetId: automationRun.target_id,
+            projectName: automationRun.project_name,
+            baseBranch: automationRun.base_branch,
+            storyId: runtimeState?.storyId ?? null,
+            positionInQueue: runtimeState?.positionInQueue ?? null,
+            runningCodexCommand: runtimeState?.runningCodexCommand || ""
+          });
+          abortStatus = {
+            requested: Boolean(abortResult?.requested),
+            supported: Boolean(abortResult?.supported)
+          };
+        } catch (abortError) {
+          logger.error("manual abort request failed:", abortError);
+        }
+      }
 
       return res.json({
         automationRun: toStatusApiAutomationRun(updatedAutomationRun),
@@ -1576,7 +1824,14 @@ function createAutomationStartRouter(deps = {}) {
           status: updatedAutomationRun.automation_status,
           stopReason: updatedAutomationRun.stop_reason ?? null
         },
-        message: "Stop requested. Automation will not continue to the next queued story."
+        queue: {
+          purged: Boolean(stopOptions.purgeRemainingQueue),
+          removedStories: queuePruneResult.removedCount
+        },
+        abort: abortStatus,
+        message: stopOptions.abortActiveStoryIfPossible
+          ? "Stop requested. Remaining queued stories were removed and an active-story abort was requested when available."
+          : "Stop requested. Automation will not continue to the next queued story."
       });
     } catch (error) {
       return res.status(500).json({

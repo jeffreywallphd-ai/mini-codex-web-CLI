@@ -90,7 +90,7 @@ test("frontend formats structured automation validation errors into clear status
 test("feature card automation UI keeps existing card copy and eligibility affordance", () => {
   const source = readFeaturesScript();
 
-  assert.match(source, /button\.textContent\s*=\s*isActiveFeatureRun \|\| isFeatureStartInFlight\s*\?\s*"Automation Running\.\.\."\s*:\s*"Complete with Automation"/m);
+  assert.match(source, /button\.textContent\s*=\s*isActiveFeatureRun \|\| isFeatureStartInFlight[\s\S]*"Resume Automation" : "Complete with Automation"/m);
   assert.match(source, /"Stop Run For Incomplete Stories"/);
   assert.match(source, /function getAutomationIneligibleHint\(entityType,\s*summary = \{\}\)/);
   assert.match(source, /Automation unavailable: this \$\{label\} has no stories to automate\./);
@@ -103,7 +103,7 @@ test("epic card automation UI adds complete-with-automation control and status s
   assert.match(source, /function createEpicAutomationUi\(content,\s*epic\)/);
   assert.match(source, /getAutomationIneligibleHint\("epic",\s*epicEligibilitySummary\)/);
   assert.match(source, /createEpicAutomationStatusSummary\(content,\s*epic\);/);
-  assert.match(source, /button\.textContent\s*=\s*isActiveEpicRun \|\| isEpicStartInFlight\s*\?\s*"Automation Running\.\.\."\s*:\s*"Complete with Automation"/m);
+  assert.match(source, /button\.textContent\s*=\s*isActiveEpicRun \|\| isEpicStartInFlight[\s\S]*"Resume Automation" : "Complete with Automation"/m);
   assert.match(source, /stopRunForIncompleteStoriesByEpicId\.get\(epic\.id\)/);
   assert.match(source, /"Stop Run For Incomplete Stories"/);
 });
@@ -342,4 +342,33 @@ test("automation stop reason summary includes merge failure guidance", () => {
   assert.match(source, /if \(normalizedReason === "merge_failed"\)/);
   assert.match(source, /Stopped because a story auto-merge failed\./);
   assert.match(source, /Automation stopped due to an auto-merge failure/);
+});
+
+test("automation stop reason summary includes run and story timeout guidance", () => {
+  const source = readFeaturesScript();
+
+  assert.match(source, /if \(normalizedReason === "run_time_limit_reached"\)/);
+  assert.match(source, /if \(normalizedReason === "story_time_limit_reached"\)/);
+  assert.match(source, /600-minute run limit/);
+  assert.match(source, /16-minute limit and hit the 20-minute hard stop window/);
+});
+
+test("story cards use collapsed descriptions with show more toggle", () => {
+  const source = readFeaturesScript();
+
+  assert.match(source, /function createDescription\(content,\s*text,\s*options = \{\}\)/);
+  assert.match(source, /card-description--collapsible/);
+  assert.match(source, /toggle\.textContent = "Show more";/);
+  assert.match(source, /toggle\.textContent = isCollapsed \? "Show more" : "Show less";/);
+  assert.match(source, /createDescription\(content,\s*story\.description,\s*\{\s*collapsible:\s*true\s*\}\);/m);
+});
+
+test("active automation cards render abort actions that purge queue and request story abort", () => {
+  const source = readFeaturesScript();
+
+  assert.match(source, /async function abortAutomationRun\(automationRunId\)/);
+  assert.match(source, /purgeRemainingQueue:\s*true/);
+  assert.match(source, /abortActiveStoryIfPossible:\s*true/);
+  assert.match(source, /abortButton\.textContent = "Abort";/);
+  assert.match(source, /Remaining queued stories removed:/);
 });

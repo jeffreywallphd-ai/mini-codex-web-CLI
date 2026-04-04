@@ -333,3 +333,70 @@ test("runner marks empty queue as complete", async () => {
   assert.equal(result.totalStories, 0);
   assert.equal(result.processedStories, 0);
 });
+
+test("runner stops after current story when overall runtime limit is reached", async () => {
+  const stories = [
+    { storyId: 601, positionInQueue: 1 },
+    { storyId: 602, positionInQueue: 2 }
+  ];
+  const executionOrder = [];
+  let nowMs = 0;
+
+  const result = await runSequentialStoryQueue({
+    stories,
+    maxRunDurationMs: 5,
+    storySoftTimeoutMs: 0,
+    storyHardTimeoutMs: 0,
+    now: () => nowMs,
+    executeStory: async (story) => {
+      executionOrder.push(story.storyId);
+      nowMs = 10;
+      return {
+        runId: story.storyId * 10,
+        completionStatus: "complete"
+      };
+    }
+  });
+
+  assert.deepEqual(executionOrder, [601]);
+  assert.equal(result.status, "stopped");
+  assert.equal(result.stopReason, "run_time_limit_reached");
+  assert.equal(result.processedStories, 1);
+  assert.equal(result.storyResults[0].queueAction, "stopped");
+});
+
+test("runner requests story abort at hard timeout and stops queue after current story", async () => {
+  const stories = [
+    { storyId: 701, positionInQueue: 1 },
+    { storyId: 702, positionInQueue: 2 }
+  ];
+  const timeoutEvents = [];
+  const abortRequests = [];
+
+  const result = await runSequentialStoryQueue({
+    stories,
+    maxRunDurationMs: 0,
+    storySoftTimeoutMs: 5,
+    storyHardTimeoutMs: 10,
+    onStoryTimeout: async (event) => {
+      timeoutEvents.push(event.phase);
+    },
+    onStoryAbortRequested: async (event) => {
+      abortRequests.push(event.storyId);
+    },
+    executeStory: async (story) => {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      return {
+        runId: story.storyId * 10,
+        completionStatus: "complete"
+      };
+    }
+  });
+
+  assert.equal(result.status, "stopped");
+  assert.equal(result.stopReason, "story_time_limit_reached");
+  assert.equal(result.processedStories, 1);
+  assert.deepEqual(abortRequests, [701]);
+  assert.ok(timeoutEvents.includes("soft_limit_reached"));
+  assert.ok(timeoutEvents.includes("hard_limit_reached"));
+});

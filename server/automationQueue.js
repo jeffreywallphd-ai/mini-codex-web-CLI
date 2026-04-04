@@ -19,7 +19,9 @@ const AUTOMATION_STOP_REASON = Object.freeze({
   ALL_WORK_COMPLETE: "all_work_complete",
   EXECUTION_FAILED: "execution_failed",
   MANUAL_STOP: "manual_stop",
-  STORY_INCOMPLETE: "story_incomplete"
+  STORY_INCOMPLETE: "story_incomplete",
+  RUN_TIME_LIMIT_REACHED: "run_time_limit_reached",
+  STORY_TIME_LIMIT_REACHED: "story_time_limit_reached"
 });
 
 const QUEUE_BUILD_STATUS = Object.freeze({

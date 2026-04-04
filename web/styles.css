@@ -663,6 +663,45 @@ details pre {
   color: var(--muted);
 }
 
+.card-description--collapsible {
+  margin-bottom: 6px;
+}
+
+.card-description--collapsible.is-collapsed {
+  display: -webkit-box;
+  -webkit-line-clamp: 5;
+  line-clamp: 5;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.description-toggle {
+  width: auto;
+  margin: 0 0 12px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--accent);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.description-toggle:hover {
+  opacity: 1;
+}
+
+.automation-action-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.automation-action-row button {
+  margin-bottom: 0;
+}
+
 .bundle-parts-section {
   border-top: 1px solid var(--border);
   margin-top: 12px;
@@ -765,5 +804,12 @@ details pre {
   overflow-x: hidden;
   overflow-y: hidden;
   white-space: pre-wrap;
+}
+
+.run-command-status-box {
+  min-height: calc(1.4em * 3 + 20px);
+  max-height: calc(1.4em * 3 + 20px);
+  overflow-x: hidden;
+  overflow-y: hidden;
 }
 
