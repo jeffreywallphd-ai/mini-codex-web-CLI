@@ -117,47 +117,40 @@ http://192.168.x.x:3000
 
 ## Automation Queue Planning
 
-Story queue planning utilities are available in `server/automationQueue.js` for the
-automation domain.
+Shared automation planning rules are defined in `server/automationQueue.js`.
 
-- `AUTOMATION_SCOPE` defines the supported hierarchy levels:
+- `AUTOMATION_SCOPE` defines supported automation levels:
   - `feature`
   - `epic`
   - `story`
-- `DEFAULT_AUTOMATION_RULES` defines strict ordering and fail-fast stop behavior.
-- `createAutomationRules(overrides)` creates a normalized rule set with optional
-  stop-condition overrides.
-- `evaluateAutomationStopCondition(event, rules)` evaluates whether automation
-  should halt for a specific run outcome (`success`, `failed`, `blocked`,
-  `cancelled`) at the `feature`/`epic`/`story` level.
-- `defineAutomationExecutionPlan(features, overrides)` returns:
-  - ordered scope definition
-  - active rules
-  - epic-level story queues
-  - flattened story execution list
-- `generateStoryExecutionQueues(features)` transforms a feature/epic/story hierarchy
-  into ordered epic-level story queues.
-  - supports both planning-style labels (`title`) and persisted feature-tree labels (`name`)
-- Ordering is deterministic and stable:
-  - features sort by `order` ascending, then original input position
-  - epics sort by `order` ascending, then original input position
-  - stories sort by `order` ascending, then original input position
-  - numeric-string order values are coerced (for example, `"2"` sorts before `"10"`)
-- `flattenStoryExecutionQueues(queues)` returns one flat execution list with
-  `positionInQueue` for strict run sequencing.
+- `DEFAULT_AUTOMATION_RULES` defines the stable execution contract used by queue
+  planning and stop-evaluation logic:
+  - ordering strategy: `original-creation-asc-stable`
+  - feature scope includes all stories in all epics for the selected feature
+  - epic scope includes all stories in the selected epic
+  - story scope includes only the selected story
+  - stop controls include:
+    - `stopOnExecutionFailure` (default `true`)
+    - `stopOnManualStop` (default `true`)
+    - `stopOnIncompleteStory` (default `false`, user-configurable "Stop Run For Incomplete Stories")
+- `defineAutomationExecutionPlan(features, selection, overrides)` builds a
+  scope-aware plan for a selected `automationType` + `targetId`.
+- `buildScopedStoryExecutionQueue(features, selection)` returns deterministic
+  queues and a flattened list of stories with `positionInQueue`.
+- `evaluateAutomationStopCondition(event, rules)` supports these stop outcomes:
+  - run complete (`queue_complete` -> `all_work_complete`)
+  - execution failure (`execution_failed` -> `execution_failed`)
+  - manual stop (`manual_stop` -> `manual_stop`)
+  - incomplete story status when enabled (`story_completed` with completion status not `complete` -> `story_incomplete`)
+- Story completion status evaluation is normalized from
+  `COMPLETION_STATUS`/`completion_status`/`run_completion_status`/`is_complete`
+  so stop-on-incomplete behavior is consistent.
 - Automation run orchestration metadata is persisted in SQLite table
   `automation_runs` with:
-  - `automation_type` (`feature`, `epic`, or `story` scope)
-  - `target_id` (the active scope identifier)
-  - `stop_flag` (whether orchestration should stop)
-  - `current_position` (current position in the ordered execution queue)
-- Stop-condition defaults are fail-fast for these outcomes:
-  - `story`: `failed`, `blocked`, `cancelled`
-  - `epic`: `failed`, `blocked`, `cancelled`
-  - `feature`: `failed`, `blocked`, `cancelled`
-- `createAutomationRules(overrides)` only accepts known stop-condition keys and
-  coerces override values to booleans, preventing unknown rule keys from entering
-  active automation plans.
+  - `automation_type` (`feature`, `epic`, or `story`)
+  - `target_id`
+  - `stop_flag`
+  - `current_position`
 
 ## Security
 

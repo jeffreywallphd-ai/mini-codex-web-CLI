@@ -2,367 +2,294 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 
 const {
-  AUTOMATION_OUTCOME,
   AUTOMATION_SCOPE,
+  AUTOMATION_STOP_REASON,
   DEFAULT_AUTOMATION_RULES,
+  buildScopedStoryExecutionQueue,
   createAutomationRules,
   defineAutomationExecutionPlan,
   evaluateAutomationStopCondition,
-  flattenStoryExecutionQueues,
-  generateStoryExecutionQueues,
-  withStableOrdering
+  normalizeCompletionStatus,
+  withStableCreationOrdering
 } = require("./automationQueue");
 
-test("withStableOrdering sorts by order and keeps original order for ties", () => {
-  const result = withStableOrdering(
-    [
-      { id: "b", order: 2 },
-      { id: "a", order: 1 },
-      { id: "c", order: 2 }
-    ],
-    (item) => item.order
-  );
+const FEATURES_FIXTURE = [
+  {
+    id: 2,
+    name: "Feature 2",
+    created_at: "2026-01-02T09:00:00.000Z",
+    epics: [
+      {
+        id: 22,
+        name: "Epic 2.2",
+        created_at: "2026-01-02T09:05:00.000Z",
+        stories: [
+          {
+            id: 221,
+            name: "Story 2.2.1",
+            created_at: "2026-01-02T09:06:00.000Z",
+            completion_status: "complete"
+          }
+        ]
+      }
+    ]
+  },
+  {
+    id: 1,
+    name: "Feature 1",
+    created_at: "2026-01-01T09:00:00.000Z",
+    epics: [
+      {
+        id: 12,
+        name: "Epic 1.2",
+        created_at: "2026-01-01T09:10:00.000Z",
+        stories: [
+          {
+            id: 121,
+            name: "Story 1.2.1",
+            created_at: "2026-01-01T09:11:00.000Z",
+            completion_status: "complete"
+          }
+        ]
+      },
+      {
+        id: 11,
+        name: "Epic 1.1",
+        created_at: "2026-01-01T09:05:00.000Z",
+        stories: [
+          {
+            id: 112,
+            name: "Story 1.1.2",
+            created_at: "2026-01-01T09:07:00.000Z",
+            completion_status: "complete"
+          },
+          {
+            id: 111,
+            name: "Story 1.1.1",
+            created_at: "2026-01-01T09:06:00.000Z",
+            completion_status: "complete"
+          }
+        ]
+      }
+    ]
+  }
+];
 
-  assert.deepEqual(result.map((item) => item.id), ["a", "b", "c"]);
-});
-
-test("generateStoryExecutionQueues orders features, epics, and stories", () => {
-  const queues = generateStoryExecutionQueues([
-    {
-      id: "feature-2",
-      title: "Feature 2",
-      order: 2,
-      epics: [
-        {
-          id: "epic-2-2",
-          title: "Epic 2.2",
-          order: 2,
-          stories: [
-            { id: "story-2-2-b", title: "Story B", order: 2 },
-            { id: "story-2-2-a", title: "Story A", order: 1 }
-          ]
-        }
-      ]
-    },
-    {
-      id: "feature-1",
-      title: "Feature 1",
-      order: 1,
-      epics: [
-        {
-          id: "epic-1-2",
-          title: "Epic 1.2",
-          order: 2,
-          stories: [
-            { id: "story-1-2", title: "Story 1.2", order: 1 }
-          ]
-        },
-        {
-          id: "epic-1-1",
-          title: "Epic 1.1",
-          order: 1,
-          stories: [
-            { id: "story-1-1-b", title: "Story 1.1.b", order: 2 },
-            { id: "story-1-1-a", title: "Story 1.1.a", order: 1 }
-          ]
-        }
-      ]
-    }
+test("withStableCreationOrdering sorts by created_at then id", () => {
+  const result = withStableCreationOrdering([
+    { id: 2, created_at: "2026-01-01T10:00:00.000Z" },
+    { id: 1, created_at: "2026-01-01T10:00:00.000Z" },
+    { id: 3, created_at: "2026-01-01T09:00:00.000Z" }
   ]);
 
-  const orderedStories = flattenStoryExecutionQueues(queues);
-
-  assert.deepEqual(
-    orderedStories.map((story) => story.storyId),
-    ["story-1-1-a", "story-1-1-b", "story-1-2", "story-2-2-a", "story-2-2-b"]
-  );
-
-  assert.deepEqual(
-    orderedStories.map((story) => story.positionInQueue),
-    [1, 2, 3, 4, 5]
-  );
+  assert.deepEqual(result.map((item) => item.id), [3, 1, 2]);
 });
 
-test("generateStoryExecutionQueues skips epics with no stories", () => {
-  const queues = generateStoryExecutionQueues([
+test("feature automation queues all stories in feature epic/story creation order", () => {
+  const plan = defineAutomationExecutionPlan(
+    FEATURES_FIXTURE,
     {
-      id: "feature-1",
-      title: "Feature 1",
-      order: 1,
-      epics: [
-        {
-          id: "epic-empty",
-          title: "Epic Empty",
-          order: 1,
-          stories: []
-        },
-        {
-          id: "epic-filled",
-          title: "Epic Filled",
-          order: 2,
-          stories: [{ id: "story-1", title: "Story 1", order: 1 }]
-        }
-      ]
+      automationType: AUTOMATION_SCOPE.FEATURE,
+      targetId: 1
     }
-  ]);
+  );
 
-  assert.equal(queues.length, 1);
-  assert.equal(queues[0].epicId, "epic-filled");
-});
-
-test("generateStoryExecutionQueues supports DB-shaped name fields", () => {
-  const queues = generateStoryExecutionQueues([
-    {
-      id: 101,
-      name: "Feature From DB",
-      epics: [
-        {
-          id: 201,
-          name: "Epic From DB",
-          stories: [
-            { id: 301, name: "Story From DB" }
-          ]
-        }
-      ]
-    }
-  ]);
-
-  assert.equal(queues.length, 1);
-  assert.equal(queues[0].featureTitle, "Feature From DB");
-  assert.equal(queues[0].epicTitle, "Epic From DB");
-  assert.equal(queues[0].stories.length, 1);
-  assert.equal(queues[0].stories[0].storyTitle, "Story From DB");
-  assert.equal(queues[0].stories[0].featureId, 101);
-  assert.equal(queues[0].stories[0].epicId, 201);
-  assert.equal(queues[0].stories[0].storyId, 301);
-});
-
-test("generateStoryExecutionQueues accepts numeric-string order values", () => {
-  const queues = generateStoryExecutionQueues([
-    {
-      id: "feature-10",
-      title: "Feature 10",
-      order: "10",
-      epics: [
-        {
-          id: "epic-10",
-          title: "Epic 10",
-          order: "10",
-          stories: [
-            { id: "story-10", title: "Story 10", order: "10" }
-          ]
-        }
-      ]
-    },
-    {
-      id: "feature-2",
-      title: "Feature 2",
-      order: "2",
-      epics: [
-        {
-          id: "epic-2",
-          title: "Epic 2",
-          order: "2",
-          stories: [
-            { id: "story-2", title: "Story 2", order: "2" }
-          ]
-        }
-      ]
-    }
-  ]);
-
-  const orderedStories = flattenStoryExecutionQueues(queues);
-
+  assert.equal(plan.automationType, AUTOMATION_SCOPE.FEATURE);
+  assert.equal(plan.stories.length, 3);
   assert.deepEqual(
-    orderedStories.map((story) => story.storyId),
-    ["story-2", "story-10"]
+    plan.stories.map((story) => story.storyId),
+    [111, 112, 121]
   );
   assert.deepEqual(
-    orderedStories.map((story) => story.storyOrder),
-    [2, 10]
+    plan.stories.map((story) => story.positionInQueue),
+    [1, 2, 3]
   );
 });
 
-test("generateStoryExecutionQueues throws when features input is invalid", () => {
-  assert.throws(
-    () => generateStoryExecutionQueues(null),
-    /features must be an array/
+test("epic automation queues only selected epic stories in story creation order", () => {
+  const plan = defineAutomationExecutionPlan(
+    FEATURES_FIXTURE,
+    {
+      automationType: AUTOMATION_SCOPE.EPIC,
+      targetId: 11
+    }
+  );
+
+  assert.equal(plan.automationType, AUTOMATION_SCOPE.EPIC);
+  assert.equal(plan.queues.length, 1);
+  assert.equal(plan.queues[0].epicId, 11);
+  assert.deepEqual(
+    plan.stories.map((story) => story.storyId),
+    [111, 112]
   );
 });
 
-test("flattenStoryExecutionQueues throws when queue input is invalid", () => {
-  assert.throws(
-    () => flattenStoryExecutionQueues(null),
-    /queues must be an array/
+test("story automation queues only the selected story", () => {
+  const plan = defineAutomationExecutionPlan(
+    FEATURES_FIXTURE,
+    {
+      automationType: AUTOMATION_SCOPE.STORY,
+      targetId: 121
+    }
   );
+
+  assert.equal(plan.automationType, AUTOMATION_SCOPE.STORY);
+  assert.equal(plan.stories.length, 1);
+  assert.equal(plan.stories[0].storyId, 121);
+  assert.equal(plan.stories[0].positionInQueue, 1);
 });
 
-test("automation rule defaults define strict feature epic story ordering", () => {
-  assert.deepEqual(DEFAULT_AUTOMATION_RULES.ordering.levels, [
-    AUTOMATION_SCOPE.FEATURE,
+test("buildScopedStoryExecutionQueue returns empty queue when target is not found", () => {
+  const queueResult = buildScopedStoryExecutionQueue(
+    FEATURES_FIXTURE,
+    {
+      automationType: AUTOMATION_SCOPE.EPIC,
+      targetId: 999
+    }
+  );
+
+  assert.deepEqual(queueResult.queues, []);
+  assert.deepEqual(queueResult.stories, []);
+});
+
+test("default automation rules define explicit scope and stop-rule contract", () => {
+  assert.equal(DEFAULT_AUTOMATION_RULES.ordering.strategy, "original-creation-asc-stable");
+  assert.deepEqual(DEFAULT_AUTOMATION_RULES.scopes.feature.traversal, [
     AUTOMATION_SCOPE.EPIC,
     AUTOMATION_SCOPE.STORY
   ]);
-  assert.equal(DEFAULT_AUTOMATION_RULES.ordering.strategy, "order-asc-stable");
-  assert.equal(DEFAULT_AUTOMATION_RULES.stopConditions.stopOnStoryFailure, true);
-  assert.equal(DEFAULT_AUTOMATION_RULES.stopConditions.stopOnEpicFailure, true);
-  assert.equal(DEFAULT_AUTOMATION_RULES.stopConditions.stopOnEpicBlocked, true);
-  assert.equal(DEFAULT_AUTOMATION_RULES.stopConditions.stopOnEpicCancelled, true);
-  assert.equal(DEFAULT_AUTOMATION_RULES.stopConditions.stopOnFeatureFailure, true);
-  assert.equal(DEFAULT_AUTOMATION_RULES.stopConditions.stopOnFeatureBlocked, true);
-  assert.equal(DEFAULT_AUTOMATION_RULES.stopConditions.stopOnFeatureCancelled, true);
+  assert.deepEqual(DEFAULT_AUTOMATION_RULES.scopes.epic.traversal, [
+    AUTOMATION_SCOPE.STORY
+  ]);
+  assert.deepEqual(DEFAULT_AUTOMATION_RULES.scopes.story.traversal, [
+    AUTOMATION_SCOPE.STORY
+  ]);
+  assert.equal(DEFAULT_AUTOMATION_RULES.stopConditions.stopOnExecutionFailure, true);
+  assert.equal(DEFAULT_AUTOMATION_RULES.stopConditions.stopOnManualStop, true);
+  assert.equal(DEFAULT_AUTOMATION_RULES.stopConditions.stopOnIncompleteStory, false);
 });
 
-test("createAutomationRules merges recognized stop-condition overrides", () => {
+test("createAutomationRules only merges recognized stop condition overrides", () => {
   const rules = createAutomationRules({
-    ordering: {
-      levels: [AUTOMATION_SCOPE.STORY],
-      strategy: "custom"
-    },
     stopConditions: {
-      stopOnStoryFailure: false,
-      stopOnEpicCancelled: false,
-      stopOnUnknownCondition: false
+      stopOnIncompleteStory: true,
+      stopOnExecutionFailure: false,
+      stopOnUnknownCondition: true
     }
   });
 
-  assert.equal(rules.stopConditions.stopOnStoryFailure, false);
-  assert.equal(rules.stopConditions.stopOnEpicCancelled, false);
-  assert.equal(rules.stopConditions.stopOnStoryBlocked, true);
-  assert.equal(rules.stopConditions.stopOnFeatureFailure, true);
+  assert.equal(rules.stopConditions.stopOnIncompleteStory, true);
+  assert.equal(rules.stopConditions.stopOnExecutionFailure, false);
+  assert.equal(rules.stopConditions.stopOnManualStop, true);
   assert.equal(rules.stopConditions.stopOnUnknownCondition, undefined);
-  assert.deepEqual(rules.ordering.levels, [
-    AUTOMATION_SCOPE.FEATURE,
-    AUTOMATION_SCOPE.EPIC,
-    AUTOMATION_SCOPE.STORY
-  ]);
-  assert.equal(rules.ordering.strategy, "order-asc-stable");
 });
 
-test("evaluateAutomationStopCondition applies fail-fast rules", () => {
+test("evaluateAutomationStopCondition handles completion, execution failure, and manual stop", () => {
   assert.deepEqual(
-    evaluateAutomationStopCondition({
-      entityType: AUTOMATION_SCOPE.STORY,
-      outcome: AUTOMATION_OUTCOME.FAILED
-    }),
+    evaluateAutomationStopCondition({ type: "queue_complete" }),
     {
       shouldStop: true,
-      entityType: AUTOMATION_SCOPE.STORY,
-      outcome: AUTOMATION_OUTCOME.FAILED,
-      reason: "story.failed"
+      reason: AUTOMATION_STOP_REASON.ALL_WORK_COMPLETE
+    }
+  );
+
+  assert.deepEqual(
+    evaluateAutomationStopCondition({ type: "execution_failed" }),
+    {
+      shouldStop: true,
+      reason: AUTOMATION_STOP_REASON.EXECUTION_FAILED
+    }
+  );
+
+  assert.deepEqual(
+    evaluateAutomationStopCondition({ type: "manual_stop" }),
+    {
+      shouldStop: true,
+      reason: AUTOMATION_STOP_REASON.MANUAL_STOP
+    }
+  );
+});
+
+test("evaluateAutomationStopCondition enforces stop-on-incomplete rule only when enabled", () => {
+  assert.deepEqual(
+    evaluateAutomationStopCondition(
+      {
+        type: "story_completed",
+        completionStatus: "incomplete"
+      },
+      {
+        stopConditions: {
+          stopOnIncompleteStory: true
+        }
+      }
+    ),
+    {
+      shouldStop: true,
+      reason: AUTOMATION_STOP_REASON.STORY_INCOMPLETE,
+      completionStatus: "incomplete"
     }
   );
 
   assert.deepEqual(
     evaluateAutomationStopCondition(
       {
-        entityType: AUTOMATION_SCOPE.STORY,
-        outcome: AUTOMATION_OUTCOME.FAILED
+        type: "story_completed",
+        completionStatus: "incomplete"
       },
       {
         stopConditions: {
-          stopOnStoryFailure: false
+          stopOnIncompleteStory: false
         }
       }
     ),
     {
       shouldStop: false,
-      entityType: AUTOMATION_SCOPE.STORY,
-      outcome: AUTOMATION_OUTCOME.FAILED,
-      reason: null
-    }
-  );
-
-  assert.deepEqual(
-    evaluateAutomationStopCondition({
-      entityType: AUTOMATION_SCOPE.STORY,
-      outcome: AUTOMATION_OUTCOME.SUCCESS
-    }),
-    {
-      shouldStop: false,
-      entityType: AUTOMATION_SCOPE.STORY,
-      outcome: AUTOMATION_OUTCOME.SUCCESS,
-      reason: null
-    }
-  );
-
-  assert.deepEqual(
-    evaluateAutomationStopCondition({
-      entityType: AUTOMATION_SCOPE.EPIC,
-      outcome: AUTOMATION_OUTCOME.BLOCKED
-    }),
-    {
-      shouldStop: true,
-      entityType: AUTOMATION_SCOPE.EPIC,
-      outcome: AUTOMATION_OUTCOME.BLOCKED,
-      reason: "epic.blocked"
+      reason: null,
+      completionStatus: "incomplete"
     }
   );
 
   assert.deepEqual(
     evaluateAutomationStopCondition(
       {
-        entityType: AUTOMATION_SCOPE.FEATURE,
-        outcome: AUTOMATION_OUTCOME.CANCELLED
+        type: "story_completed",
+        completionStatus: "unknown"
       },
       {
         stopConditions: {
-          stopOnFeatureCancelled: false
+          stopOnIncompleteStory: true
         }
       }
     ),
     {
-      shouldStop: false,
-      entityType: AUTOMATION_SCOPE.FEATURE,
-      outcome: AUTOMATION_OUTCOME.CANCELLED,
-      reason: null
+      shouldStop: true,
+      reason: AUTOMATION_STOP_REASON.STORY_INCOMPLETE,
+      completionStatus: "unknown"
     }
   );
 });
 
-test("evaluateAutomationStopCondition validates event shape", () => {
-  assert.throws(
-    () => evaluateAutomationStopCondition(null),
-    /event must be an object/
-  );
-
-  assert.throws(
-    () => evaluateAutomationStopCondition({ entityType: "team", outcome: AUTOMATION_OUTCOME.SUCCESS }),
-    /event.entityType must be feature, epic, or story/
-  );
-
-  assert.throws(
-    () => evaluateAutomationStopCondition({ entityType: AUTOMATION_SCOPE.STORY, outcome: "unknown" }),
-    /event.outcome must be success, failed, blocked, or cancelled/
-  );
+test("normalizeCompletionStatus prefers explicit COMPLETION_STATUS field", () => {
+  assert.equal(normalizeCompletionStatus({ COMPLETION_STATUS: "complete" }), "complete");
+  assert.equal(normalizeCompletionStatus({ completion_status: "incomplete" }), "incomplete");
+  assert.equal(normalizeCompletionStatus({ is_complete: 1 }), "complete");
+  assert.equal(normalizeCompletionStatus({ is_complete: 0 }), "incomplete");
+  assert.equal(normalizeCompletionStatus({}), "unknown");
 });
 
-test("defineAutomationExecutionPlan returns rules, queues, and flattened stories", () => {
-  const plan = defineAutomationExecutionPlan([
-    {
-      id: "feature-1",
-      title: "Feature 1",
-      order: 1,
-      epics: [
-        {
-          id: "epic-1",
-          title: "Epic 1",
-          order: 1,
-          stories: [
-            { id: "story-2", title: "Story 2", order: 2 },
-            { id: "story-1", title: "Story 1", order: 1 }
-          ]
-        }
-      ]
-    }
-  ]);
+test("defineAutomationExecutionPlan validates selection", () => {
+  assert.throws(
+    () => defineAutomationExecutionPlan(FEATURES_FIXTURE, null),
+    /selection.automationType is required/
+  );
 
-  assert.deepEqual(plan.scope, [
-    AUTOMATION_SCOPE.FEATURE,
-    AUTOMATION_SCOPE.EPIC,
-    AUTOMATION_SCOPE.STORY
-  ]);
-  assert.equal(plan.queues.length, 1);
-  assert.deepEqual(plan.stories.map((story) => story.storyId), ["story-1", "story-2"]);
-  assert.equal(plan.rules.stopConditions.stopOnStoryFailure, true);
+  assert.throws(
+    () => defineAutomationExecutionPlan(FEATURES_FIXTURE, { automationType: "feature" }),
+    /selection.targetId is required/
+  );
+
+  assert.throws(
+    () => defineAutomationExecutionPlan(FEATURES_FIXTURE, { automationType: "team", targetId: 1 }),
+    /automationType must be feature, epic, or story/
+  );
 });
