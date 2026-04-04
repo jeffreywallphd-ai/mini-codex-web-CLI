@@ -207,6 +207,7 @@ automation runs by scope:
 - `POST /api/automation/start/feature/:featureId`
 - `POST /api/automation/start/epic/:epicId`
 - `POST /api/automation/start/story/:storyId`
+- `GET /api/automation/status/:automationRunId`
 
 Each endpoint:
 
@@ -230,6 +231,14 @@ Success response (`202 Accepted`) includes tracking metadata for the UI:
 - `queue` (`totalStories`, `storyIds`, and queue readiness metadata)
 - `projectName`
 - `baseBranch`
+
+Automation status response (`200 OK`) includes polling-friendly state:
+
+- `automationRun` (id, type, target, stop flags, current queue position, status, timestamps)
+- `queue` (`totalStories`, `processedStories`, `remainingStories`, and `currentItem` while running)
+- `summary` (completed/failed/stopped execution counts)
+- `completedSteps` and `failedSteps` (per-story summarized outcomes with run linkage)
+- `finalResult` (`status` + `stopReason`) when automation is no longer running
 
 ## Story Automation Prompt Generation
 
