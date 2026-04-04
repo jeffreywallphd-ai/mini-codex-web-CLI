@@ -152,6 +152,7 @@ Context bundles are persisted with a parent-child data model in SQLite:
 - Saved bundle cards include maintenance actions for `Edit Bundle`, `Duplicate Bundle`, and `Delete Bundle`; duplicate clones the bundle plus all ordered parts into a new `(Copy)` bundle, and delete is confirmation-protected to reduce accidental removal.
 - Bundle authoring UI includes explicit bundle-part card management for state-of-the-art context composition: add multiple parts, edit type/title/content, toggle include-in-compiled output, remove parts, and reorder deterministically with move up/down controls.
 - Bundle preview payloads are available from the API and include deterministic part ordering, section labels, and a compiled context string so the UI can render the exact run-context shape before execution.
+- Bundle compilation is centralized in `server/contextBundleCompilation.js`; outputs include `compiledText`/`compiledString`, ordered part id metadata, and type-aware grouping metadata (`typeGroups`) without reordering user-defined part positions.
 - The index page includes a **Manage Context Bundles** navigation action that routes to `/context-bundles.html`, making it the central bundle authoring/management page.
 - Context bundle API endpoints:
   - `GET /api/context-bundles` (supports `includeParts=false`)
