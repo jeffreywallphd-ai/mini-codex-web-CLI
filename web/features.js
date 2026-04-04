@@ -11,10 +11,22 @@ const completeSearchInput = document.getElementById("completeSearchInput");
 const clearCompleteSearchButton = document.getElementById("clearCompleteSearchButton");
 const incompleteListContainer = document.getElementById("incompleteListContainer");
 const completeListContainer = document.getElementById("completeListContainer");
+const scopeHint = document.getElementById("scopeHint");
+const automationTimer = document.getElementById("automationTimer");
+const automationStatusBox = document.getElementById("automationStatusBox");
 const EDITOR_STATE_KEY = "mini-codex-editor-state";
 
 let allFeatures = [];
 const storyAutomationInFlight = new Set();
+const openCards = new Set();
+let automationScope = {
+  projectName: "",
+  baseBranch: ""
+};
+let globalAutomationLock = null;
+let activeStoryAutomation = null;
+let activeAutomationStream = null;
+let automationTimerInterval = null;
 let epicDraftId = 0;
 let storyDraftId = 0;
 const epicDrafts = [];
@@ -47,16 +59,33 @@ function getStoryStatus(story) {
   return isStoryComplete(story) ? "complete" : "incomplete";
 }
 
-function getCurrentProjectName() {
+function getEditorState() {
   const rawState = localStorage.getItem(EDITOR_STATE_KEY);
-  if (!rawState) return "";
+  if (!rawState) return {};
 
   try {
-    const state = JSON.parse(rawState);
-    return String(state?.projectName || "").trim();
+    return JSON.parse(rawState) || {};
   } catch (error) {
-    return "";
+    return {};
   }
+}
+
+function readScopeFromUrlOrState() {
+  const params = new URLSearchParams(window.location.search);
+  const state = getEditorState();
+  const projectName = String(params.get("projectName") || state.projectName || "").trim();
+  const baseBranch = String(params.get("baseBranch") || state.baseBranch || "").trim();
+  return { projectName, baseBranch };
+}
+
+function syncScopeIntoEditorState(scope) {
+  const state = getEditorState();
+  const mergedState = {
+    ...state,
+    projectName: scope.projectName,
+    baseBranch: scope.baseBranch
+  };
+  localStorage.setItem(EDITOR_STATE_KEY, JSON.stringify(mergedState));
 }
 
 function getStoryRunStatusLabel(story) {
@@ -71,6 +100,115 @@ function getStoryRunStatusLabel(story) {
     return "Run status: in progress";
   }
   return "Run status: not started";
+}
+
+function formatElapsed(ms) {
+  const totalSeconds = Math.max(0, Math.floor(ms / 1000));
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+
+  if (hours > 0) {
+    return `${hours}:${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
+  }
+
+  return `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
+}
+
+function renderScopeHint() {
+  if (!automationScope.projectName || !automationScope.baseBranch) {
+    scopeHint.textContent = "Project and base branch are required. Return to the editor page and select them first.";
+    return;
+  }
+
+  scopeHint.textContent = `Project: ${automationScope.projectName} | Base branch: ${automationScope.baseBranch}`;
+}
+
+function renderAutomationTimer() {
+  if (!activeStoryAutomation?.startedAt) {
+    automationTimer.textContent = "";
+    automationTimer.classList.add("hidden");
+    return;
+  }
+
+  const elapsed = Date.now() - activeStoryAutomation.startedAt;
+  automationTimer.textContent = `Automation running for ${formatElapsed(elapsed)}`;
+  automationTimer.classList.remove("hidden");
+}
+
+function startAutomationTimer() {
+  renderAutomationTimer();
+  if (automationTimerInterval) {
+    clearInterval(automationTimerInterval);
+  }
+  automationTimerInterval = setInterval(renderAutomationTimer, 1000);
+}
+
+function stopAutomationTimer() {
+  if (automationTimerInterval) {
+    clearInterval(automationTimerInterval);
+    automationTimerInterval = null;
+  }
+  renderAutomationTimer();
+}
+
+function createAutomationStreamId() {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return crypto.randomUUID();
+  }
+
+  return `feature-run-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
+function closeAutomationStream() {
+  if (activeAutomationStream?.eventSource) {
+    activeAutomationStream.eventSource.close();
+  }
+  activeAutomationStream = null;
+}
+
+function openAutomationStatusBox() {
+  automationStatusBox.classList.remove("hidden");
+}
+
+function closeAutomationStatusBox() {
+  automationStatusBox.classList.add("hidden");
+}
+
+function startAutomationStream(streamId) {
+  closeAutomationStream();
+  openAutomationStatusBox();
+
+  const eventSource = new EventSource(`/api/run-test/stream/${encodeURIComponent(streamId)}`);
+  activeAutomationStream = { streamId, eventSource };
+
+  eventSource.onmessage = (event) => {
+    if (!activeAutomationStream || activeAutomationStream.streamId !== streamId) {
+      return;
+    }
+
+    try {
+      const payload = JSON.parse(event.data || "{}");
+      if (payload?.message) {
+        automationStatusBox.textContent = payload.message;
+      }
+    } catch (error) {
+      console.warn("Failed to parse automation stream event", error);
+    }
+  };
+
+  eventSource.onerror = () => {
+    if (!activeAutomationStream || activeAutomationStream.streamId !== streamId) {
+      return;
+    }
+    if (activeStoryAutomation) {
+      automationStatusBox.textContent = "Live status disconnected; waiting for final automation result...";
+    }
+  };
+}
+
+function isAnyAutomationInFlight() {
+  return storyAutomationInFlight.size > 0 || Boolean(globalAutomationLock?.isActive);
 }
 
 function matchesQuery(feature, query) {
@@ -125,24 +263,33 @@ function createCardHeader(name, status) {
   return button;
 }
 
-function createCollapsibleCard({ levelClass, name, status, renderBody }) {
+function createCollapsibleCard({ levelClass, cardKey, name, status, renderBody }) {
   const card = document.createElement("article");
   card.className = `hier-card ${levelClass}`;
   const headerButton = createCardHeader(name, status);
   const content = document.createElement("div");
   content.className = "hier-card__content hidden";
 
-  let isOpen = false;
-  headerButton.addEventListener("click", () => {
-    isOpen = !isOpen;
+  let isOpen = openCards.has(cardKey);
+
+  const applyOpenState = () => {
     headerButton.classList.toggle("is-open", isOpen);
     content.classList.toggle("hidden", !isOpen);
-
     if (isOpen) {
       renderBody(content);
     } else {
       content.innerHTML = "";
     }
+  };
+
+  headerButton.addEventListener("click", () => {
+    isOpen = !isOpen;
+    if (isOpen) {
+      openCards.add(cardKey);
+    } else {
+      openCards.delete(cardKey);
+    }
+    applyOpenState();
   });
 
   const header = document.createElement("header");
@@ -150,6 +297,7 @@ function createCollapsibleCard({ levelClass, name, status, renderBody }) {
   header.appendChild(headerButton);
   card.appendChild(header);
   card.appendChild(content);
+  applyOpenState();
   return card;
 }
 
@@ -162,30 +310,51 @@ function createStoryAutomationUi(content, story) {
     content.appendChild(createTextNode("p", "inline-hint", `Associated run: #${linkedRunId}`));
   }
 
+  if (isStoryComplete(story)) {
+    return;
+  }
+
+  const isGlobalRunActive = isAnyAutomationInFlight();
   const automationButton = document.createElement("button");
   automationButton.type = "button";
   automationButton.className = "secondary-button";
   automationButton.textContent = storyAutomationInFlight.has(story.id)
     ? "Automation Running..."
     : "Complete with Automation";
-  automationButton.disabled = storyAutomationInFlight.has(story.id);
+  automationButton.disabled = isGlobalRunActive;
 
   automationButton.addEventListener("click", async () => {
-    const projectName = getCurrentProjectName();
-    if (!projectName) {
-      createStatusBox.textContent = "Select a project on the editor page first, then retry automation.";
+    const projectName = automationScope.projectName;
+    const baseBranch = automationScope.baseBranch;
+    if (!projectName || !baseBranch) {
+      createStatusBox.textContent = "Select a project and branch on the editor page first, then retry automation.";
+      return;
+    }
+    if (isAnyAutomationInFlight()) {
+      createStatusBox.textContent = "Automation is already running. Wait for completion before starting another story.";
       return;
     }
 
+    const streamId = createAutomationStreamId();
+    openCards.add(`feature:${story.feature_id}`);
+    openCards.add(`epic:${story.epic_id}`);
+    openCards.add(`story:${story.id}`);
     storyAutomationInFlight.add(story.id);
+    activeStoryAutomation = {
+      storyId: story.id,
+      startedAt: Date.now(),
+      streamId
+    };
+    startAutomationTimer();
+    startAutomationStream(streamId);
     renderFeatureLists();
-    createStatusBox.textContent = `Starting automation for story #${story.id} on project ${projectName}...`;
+    createStatusBox.textContent = `Starting automation for story #${story.id} on project ${projectName} (${baseBranch})...`;
 
     try {
       const response = await fetch(`/api/stories/${story.id}/complete-with-automation`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ projectName })
+        body: JSON.stringify({ projectName, baseBranch, streamId })
       });
       const result = await response.json();
 
@@ -196,11 +365,15 @@ function createStoryAutomationUi(content, story) {
       allFeatures = Array.isArray(result.features) ? result.features : allFeatures;
       renderFeatureLists();
       createStatusBox.textContent = `Automation finished for story #${story.id}. Linked run #${result.runId}.`;
+      await loadAutomationLock();
     } catch (error) {
       createStatusBox.textContent = `Automation failed: ${error.message}`;
       await loadFeatures();
     } finally {
       storyAutomationInFlight.delete(story.id);
+      activeStoryAutomation = null;
+      closeAutomationStream();
+      stopAutomationTimer();
       renderFeatureLists();
     }
   });
@@ -211,6 +384,7 @@ function createStoryAutomationUi(content, story) {
 function renderStoryCard(story, options = {}) {
   return createCollapsibleCard({
     levelClass: "hier-card--story",
+    cardKey: `story:${story.id}`,
     name: story.name,
     status: getStoryStatus(story),
     renderBody: (content) => {
@@ -232,6 +406,7 @@ function renderStoryCard(story, options = {}) {
 function renderEpicCard(epic, options = {}) {
   return createCollapsibleCard({
     levelClass: "hier-card--epic",
+    cardKey: `epic:${epic.id}`,
     name: epic.name,
     status: getEpicStatus(epic),
     renderBody: (content) => {
@@ -255,6 +430,7 @@ function renderEpicCard(epic, options = {}) {
 function renderFeatureCard(feature, options = {}) {
   return createCollapsibleCard({
     levelClass: "hier-card--feature",
+    cardKey: `feature:${feature.id}`,
     name: feature.name,
     status: getFeatureStatus(feature),
     renderBody: (content) => {
@@ -466,7 +642,17 @@ function clearDraftForm() {
 }
 
 async function loadFeatures() {
-  const response = await fetch("/api/features/tree");
+  if (!automationScope.projectName || !automationScope.baseBranch) {
+    allFeatures = [];
+    renderFeatureLists();
+    return;
+  }
+
+  const query = new URLSearchParams({
+    projectName: automationScope.projectName,
+    baseBranch: automationScope.baseBranch
+  });
+  const response = await fetch(`/api/features/tree?${query.toString()}`);
   const result = await response.json();
 
   if (!response.ok) {
@@ -481,7 +667,24 @@ async function reloadAllData() {
   await loadFeatures();
 }
 
+async function loadAutomationLock() {
+  const response = await fetch("/api/automation-lock");
+  const result = await response.json();
+
+  if (!response.ok) {
+    throw new Error(result.error || "Failed to load automation lock.");
+  }
+
+  globalAutomationLock = result;
+  renderFeatureLists();
+}
+
 async function saveFeatureTree() {
+  if (!automationScope.projectName || !automationScope.baseBranch) {
+    createStatusBox.textContent = "Project and branch are required. Return to the editor page first.";
+    return;
+  }
+
   syncDraftFromInputs();
 
   const draft = {
@@ -509,7 +712,11 @@ async function saveFeatureTree() {
     const response = await fetch("/api/features/tree", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(draft)
+      body: JSON.stringify({
+        ...draft,
+        projectName: automationScope.projectName,
+        baseBranch: automationScope.baseBranch
+      })
     });
     const result = await response.json();
 
@@ -529,7 +736,15 @@ async function saveFeatureTree() {
 }
 
 backButton.addEventListener("click", () => {
-  window.location.href = "/";
+  const query = new URLSearchParams();
+  if (automationScope.projectName) {
+    query.set("projectName", automationScope.projectName);
+  }
+  if (automationScope.baseBranch) {
+    query.set("baseBranch", automationScope.baseBranch);
+  }
+  const suffix = query.toString();
+  window.location.href = suffix ? `/?${suffix}` : "/";
 });
 
 addEpicButton.addEventListener("click", () => {
@@ -550,9 +765,20 @@ clearCompleteSearchButton.addEventListener("click", () => {
   renderFeatureLists();
 });
 
+setInterval(() => {
+  loadAutomationLock().catch((error) => {
+    createStatusBox.textContent = `Automation lock refresh failed: ${error.message}`;
+  });
+}, 3000);
+
 (async () => {
   try {
+    automationScope = readScopeFromUrlOrState();
+    syncScopeIntoEditorState(automationScope);
+    renderScopeHint();
+    closeAutomationStatusBox();
     await reloadAllData();
+    await loadAutomationLock();
     renderDrafts();
   } catch (error) {
     createStatusBox.textContent = `Initial load failed: ${error.message}`;

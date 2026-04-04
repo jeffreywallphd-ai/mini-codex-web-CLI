@@ -9,7 +9,7 @@ const dbPath = path.resolve(dataDir, "app.db");
 const db = new sqlite3.Database(dbPath);
 db.run("PRAGMA foreign_keys = ON");
 
-const LATEST_SCHEMA_VERSION = 6;
+const LATEST_SCHEMA_VERSION = 7;
 
 function run(sql, params = []) {
   return new Promise((resolve, reject) => {
@@ -72,6 +72,9 @@ async function detectVersionFromSchema() {
   if (hasFeatureTables) {
     const hasArchived = await columnExists("runs", "archived");
     const hasStoryRunId = await columnExists("stories", "run_id");
+    const hasFeatureProjectScope = await columnExists("features", "project_name")
+      && await columnExists("features", "base_branch");
+    if (hasStoryRunId && hasArchived && hasFeatureProjectScope) return 7;
     if (hasStoryRunId && hasArchived) return 6;
     if (hasStoryRunId) return 5;
     return 4;
@@ -180,6 +183,8 @@ async function migrateToV4() {
   await run(`
     CREATE TABLE IF NOT EXISTS features (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
+      project_name TEXT NOT NULL DEFAULT '',
+      base_branch TEXT NOT NULL DEFAULT '',
       name TEXT NOT NULL,
       description TEXT NOT NULL DEFAULT '',
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP
@@ -229,6 +234,15 @@ async function migrateToV6() {
   await ensureColumn("runs", "archived", "INTEGER NOT NULL DEFAULT 0");
 }
 
+async function migrateToV7() {
+  await ensureColumn("features", "project_name", "TEXT NOT NULL DEFAULT ''");
+  await ensureColumn("features", "base_branch", "TEXT NOT NULL DEFAULT ''");
+  await run(`
+    CREATE INDEX IF NOT EXISTS idx_features_project_branch
+    ON features(project_name, base_branch)
+  `);
+}
+
 async function runMigrations() {
   let version = await getSchemaVersion();
 
@@ -267,6 +281,12 @@ async function runMigrations() {
   if (version < 6) {
     await migrateToV6();
     version = 6;
+    await setSchemaVersion(version);
+  }
+
+  if (version < 7) {
+    await migrateToV7();
+    version = 7;
     await setSchemaVersion(version);
   }
 
@@ -438,22 +458,30 @@ function updateRunMerge(id, mergeResult) {
   });
 }
 
-async function createFeatureTree(featureDraft) {
+async function createFeatureTree(featureDraft, scope = {}) {
   await dbReady;
 
   const featureName = String(featureDraft?.name || "").trim();
   const featureDescription = String(featureDraft?.description || "").trim();
+  const projectName = String(scope?.projectName || "").trim();
+  const baseBranch = String(scope?.baseBranch || "").trim();
   const epics = Array.isArray(featureDraft?.epics) ? featureDraft.epics : [];
 
   if (!featureName) {
     throw new Error("Feature name is required.");
   }
+  if (!projectName) {
+    throw new Error("Project name is required.");
+  }
+  if (!baseBranch) {
+    throw new Error("Base branch is required.");
+  }
 
   await run("BEGIN TRANSACTION");
   try {
     const featureId = await runWithLastId(
-      `INSERT INTO features (name, description) VALUES (?, ?)`,
-      [featureName, featureDescription]
+      `INSERT INTO features (project_name, base_branch, name, description) VALUES (?, ?, ?, ?)`,
+      [projectName, baseBranch, featureName, featureDescription]
     );
 
     for (const epicDraft of epics) {
@@ -490,15 +518,40 @@ async function createFeatureTree(featureDraft) {
   }
 }
 
-async function getFeaturesTree() {
+async function getFeaturesTree(scope = {}) {
   await dbReady;
+  const projectName = String(scope?.projectName || "").trim();
+  const baseBranch = String(scope?.baseBranch || "").trim();
+
+  if (!projectName || !baseBranch) {
+    return [];
+  }
+
   const [features, epics, stories] = await Promise.all([
-    all(`SELECT id, name, description, created_at FROM features ORDER BY id DESC`),
-    all(`SELECT id, feature_id, name, description, created_at FROM epics ORDER BY id ASC`),
+    all(
+      `
+        SELECT id, project_name, base_branch, name, description, created_at
+        FROM features
+        WHERE project_name = ? AND base_branch = ?
+        ORDER BY id DESC
+      `,
+      [projectName, baseBranch]
+    ),
+    all(
+      `
+        SELECT epics.id, epics.feature_id, epics.name, epics.description, epics.created_at
+        FROM epics
+        INNER JOIN features ON features.id = epics.feature_id
+        WHERE features.project_name = ? AND features.base_branch = ?
+        ORDER BY epics.id ASC
+      `,
+      [projectName, baseBranch]
+    ),
     all(`
       SELECT
         stories.id,
         stories.epic_id,
+        epics.feature_id AS feature_id,
         stories.name,
         stories.description,
         stories.is_complete AS persisted_is_complete,
@@ -513,8 +566,14 @@ async function getFeaturesTree() {
       FROM stories
       LEFT JOIN runs
         ON runs.id = COALESCE(stories.run_id, stories.completion_run_id)
+      INNER JOIN epics
+        ON epics.id = stories.epic_id
+      INNER JOIN features
+        ON features.id = epics.feature_id
+      WHERE features.project_name = ?
+        AND features.base_branch = ?
       ORDER BY stories.id ASC
-    `)
+    `, [projectName, baseBranch])
   ]);
 
   const featuresById = new Map(features.map((feature) => [feature.id, { ...feature, epics: [] }]));
@@ -603,8 +662,15 @@ async function getCompletionEligibleRuns(limit = 100) {
   );
 }
 
-async function getStoryAutomationContext(storyId) {
+async function getStoryAutomationContext(storyId, scope = {}) {
   await dbReady;
+  const projectName = String(scope?.projectName || "").trim();
+  const baseBranch = String(scope?.baseBranch || "").trim();
+
+  if (!projectName || !baseBranch) {
+    return null;
+  }
+
   return get(
     `
       SELECT
@@ -622,8 +688,10 @@ async function getStoryAutomationContext(storyId) {
       INNER JOIN epics ON epics.id = stories.epic_id
       INNER JOIN features ON features.id = epics.feature_id
       WHERE stories.id = ?
+        AND features.project_name = ?
+        AND features.base_branch = ?
     `,
-    [storyId]
+    [storyId, projectName, baseBranch]
   );
 }
 

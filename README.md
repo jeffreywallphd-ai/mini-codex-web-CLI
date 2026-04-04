@@ -119,6 +119,21 @@ http://192.168.x.x:3000
 Story queue planning utilities are available in `server/automationQueue.js` for the
 automation domain.
 
+- `AUTOMATION_SCOPE` defines the supported hierarchy levels:
+  - `feature`
+  - `epic`
+  - `story`
+- `DEFAULT_AUTOMATION_RULES` defines strict ordering and fail-fast stop behavior.
+- `createAutomationRules(overrides)` creates a normalized rule set with optional
+  stop-condition overrides.
+- `evaluateAutomationStopCondition(event, rules)` evaluates whether automation
+  should halt for a specific run outcome (`success`, `failed`, `blocked`,
+  `cancelled`) at the `feature`/`epic`/`story` level.
+- `defineAutomationExecutionPlan(features, overrides)` returns:
+  - ordered scope definition
+  - active rules
+  - epic-level story queues
+  - flattened story execution list
 - `generateStoryExecutionQueues(features)` transforms a feature/epic/story hierarchy
   into ordered epic-level story queues.
 - Ordering is deterministic and stable:
