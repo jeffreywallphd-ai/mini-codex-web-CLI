@@ -130,6 +130,118 @@ function parseJson(value, fallback) {
   }
 }
 
+function getNormalizedTitle(node) {
+  if (!node || typeof node !== "object") return "";
+
+  const title = typeof node.title === "string" ? node.title.trim() : "";
+  if (title) return title;
+
+  const name = typeof node.name === "string" ? node.name.trim() : "";
+  if (name) return name;
+
+  return "";
+}
+
+function getNormalizedDescription(node) {
+  if (!node || typeof node !== "object") return "";
+
+  if (typeof node.description === "string") {
+    return node.description.trim();
+  }
+
+  return "";
+}
+
+function normalizeStoryDraft(storyNode, index) {
+  if (typeof storyNode === "string") {
+    const storyName = storyNode.trim();
+    if (!storyName) {
+      throw new Error(`Story #${index + 1} is missing a title.`);
+    }
+    return { name: storyName, description: "" };
+  }
+
+  if (!storyNode || typeof storyNode !== "object" || Array.isArray(storyNode)) {
+    throw new Error(`Story #${index + 1} must be an object with title/description.`);
+  }
+
+  const storyName = getNormalizedTitle(storyNode);
+  if (storyName) {
+    return {
+      name: storyName,
+      description: getNormalizedDescription(storyNode)
+    };
+  }
+
+  const entries = Object.entries(storyNode);
+  if (entries.length === 1) {
+    const [entryTitle, entryDescription] = entries[0];
+    const normalizedTitle = String(entryTitle || "").trim();
+    if (!normalizedTitle) {
+      throw new Error(`Story #${index + 1} is missing a title.`);
+    }
+
+    return {
+      name: normalizedTitle,
+      description: typeof entryDescription === "string" ? entryDescription.trim() : ""
+    };
+  }
+
+  throw new Error(`Story #${index + 1} is missing title/description fields.`);
+}
+
+function normalizeManifestToFeatureDrafts(manifest) {
+  const root = manifest && typeof manifest === "object" ? manifest : null;
+  const featuresRaw = Array.isArray(root?.features)
+    ? root.features
+    : (Array.isArray(manifest) ? manifest : null);
+
+  if (!featuresRaw || featuresRaw.length === 0) {
+    throw new Error("Manifest must include a non-empty 'features' array.");
+  }
+
+  return featuresRaw.map((featureNode, featureIndex) => {
+    if (!featureNode || typeof featureNode !== "object" || Array.isArray(featureNode)) {
+      throw new Error(`Feature #${featureIndex + 1} must be an object.`);
+    }
+
+    const featureName = getNormalizedTitle(featureNode);
+    if (!featureName) {
+      throw new Error(`Feature #${featureIndex + 1} is missing a title.`);
+    }
+
+    const epicsRaw = Array.isArray(featureNode.epics) ? featureNode.epics : [];
+    const epics = epicsRaw.map((epicNode, epicIndex) => {
+      if (!epicNode || typeof epicNode !== "object" || Array.isArray(epicNode)) {
+        throw new Error(`Feature #${featureIndex + 1}, epic #${epicIndex + 1} must be an object.`);
+      }
+
+      const epicName = getNormalizedTitle(epicNode);
+      if (!epicName) {
+        throw new Error(`Feature #${featureIndex + 1}, epic #${epicIndex + 1} is missing a title.`);
+      }
+
+      const storiesRaw = Array.isArray(epicNode.stories) ? epicNode.stories : [];
+      const stories = storiesRaw.map((storyNode, storyIndex) => normalizeStoryDraft(
+        storyNode,
+        storyIndex
+      ));
+
+      return {
+        name: epicName,
+        description: getNormalizedDescription(epicNode),
+        stories
+      };
+    });
+
+    return {
+      name: featureName,
+      description: getNormalizedDescription(featureNode),
+      epics
+    };
+  });
+}
+
 function hydrateRun(run) {
   if (!run) return run;
 
@@ -596,6 +708,50 @@ app.post("/api/features/tree", async (req, res) => {
     await createFeatureTree(draft, { projectName, baseBranch });
     const features = await getFeaturesTree({ projectName, baseBranch });
     res.status(201).json(features);
+  } catch (error) {
+    res.status(400).json({ error: getErrorMessage(error) });
+  }
+});
+
+app.post("/api/features/tree/from-manifest", async (req, res) => {
+  const projectName = String(req.body?.projectName || "").trim();
+  const baseBranch = String(req.body?.baseBranch || "").trim();
+  const manifestJson = String(req.body?.manifestJson || "").trim();
+
+  if (!projectName || !isValidProject(projectName)) {
+    return res.status(400).json({ error: "A valid project name is required." });
+  }
+  if (!baseBranch) {
+    return res.status(400).json({ error: "Base branch is required." });
+  }
+  if (!manifestJson) {
+    return res.status(400).json({ error: "manifestJson is required." });
+  }
+
+  let parsedManifest;
+  try {
+    parsedManifest = JSON.parse(manifestJson);
+  } catch (error) {
+    return res.status(400).json({ error: "manifestJson must be valid JSON." });
+  }
+
+  let featureDrafts = [];
+  try {
+    featureDrafts = normalizeManifestToFeatureDrafts(parsedManifest);
+  } catch (error) {
+    return res.status(400).json({ error: getErrorMessage(error) });
+  }
+
+  try {
+    for (const featureDraft of featureDrafts) {
+      await createFeatureTree(featureDraft, { projectName, baseBranch });
+    }
+
+    const features = await getFeaturesTree({ projectName, baseBranch });
+    res.status(201).json({
+      createdFeatureCount: featureDrafts.length,
+      features
+    });
   } catch (error) {
     res.status(400).json({ error: getErrorMessage(error) });
   }

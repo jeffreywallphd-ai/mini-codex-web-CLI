@@ -17,14 +17,16 @@
     <p id="scopeHint" class="inline-hint" aria-live="polite"></p>
 
     <section class="panel stack-gap">
-      <h2>Create New Feature</h2>
+      <h2>Create Features</h2>
       <div id="createStatusBox">Ready.</div>
 
       <article class="hier-card hier-card--feature-draft">
         <header class="hier-card__header">
-          <strong>Feature Draft</strong>
+          <button id="createFeatureCardToggle" type="button" class="hier-card__toggle is-open">
+            <strong>Create New Feature</strong>
+          </button>
         </header>
-        <div class="hier-card__content">
+        <div id="createFeatureCardContent" class="hier-card__content">
           <label for="featureNameInput">Feature Name</label>
           <input id="featureNameInput" type="text" placeholder="Feature name" />
           <label for="featureDescriptionInput">Feature Description</label>
@@ -36,6 +38,58 @@
           </div>
 
           <div id="epicDraftsContainer" class="hier-stack"></div>
+        </div>
+      </article>
+
+      <article class="hier-card hier-card--feature-draft">
+        <header class="hier-card__header">
+          <button id="manifestCardToggle" type="button" class="hier-card__toggle">
+            <strong>Create New Feature from JSON Manifest</strong>
+          </button>
+        </header>
+        <div id="manifestCardContent" class="hier-card__content hidden">
+          <label for="manifestJsonInput">JSON Manifest</label>
+          <textarea id="manifestJsonInput" rows="12" placeholder='Paste manifest JSON here. Example: { "features": [ ... ] }'></textarea>
+          <button id="createManifestButton" type="button">Create</button>
+
+          <details>
+            <summary>Expected JSON Manifest Structure</summary>
+            <pre>{
+  "features": [
+    {
+      "title": "Feature 1: Example",
+      "description": "Feature description here",
+      "epics": [
+        {
+          "title": "Epic 1.1: Example",
+          "description": "Epic description here",
+          "stories": [
+            {
+              "title": "Story 1.1.1: Example",
+              "description": "Story description here"
+            },
+            {
+              "title": "Story 1.1.2: Another Story",
+              "description": "Another story description"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "title": "Feature 2: Example",
+      "description": "Another feature description",
+      "epics": [
+        {
+          "title": "Epic 2.1: Example",
+          "description": "Epic description",
+          "stories": []
+        }
+      ]
+    }
+  ]
+}</pre>
+          </details>
         </div>
       </article>
     </section>
