@@ -19,6 +19,7 @@ test("feature automation button starts feature-scoped automation endpoint", () =
   assert.match(source, /automationType:\s*"feature"/);
   assert.match(source, /targetId:\s*featureId/);
   assert.match(source, /featureId/);
+  assert.match(source, /contextBundleId/);
   assert.match(
     source,
     /assertAutomationStartScope\(result,\s*\{\s*automationType:\s*"feature",\s*targetId:\s*feature\.id\s*\}\);/m
@@ -37,7 +38,7 @@ test("epic automation button starts epic-scoped automation endpoint with epic id
   assert.match(source, /epicId/);
   assert.match(
     source,
-    /const result = await startEpicAutomation\(epic\.id,\s*\{\s*stopOnIncompleteStory:\s*stopOnIncompleteCheckbox\.checked\s*\}\);/m
+    /const result = await startEpicAutomation\(epic\.id,\s*\{\s*stopOnIncompleteStory:\s*stopOnIncompleteCheckbox\.checked,\s*contextBundleId:\s*selectedContextBundleId\s*\}\);/m
   );
   assert.match(
     source,
@@ -55,6 +56,7 @@ test("story automation button starts story-scoped automation endpoint and queues
   assert.match(source, /automationType:\s*"story"/);
   assert.match(source, /targetId:\s*storyId/);
   assert.match(source, /storyId/);
+  assert.match(source, /const selectedContextBundleId = parseSelectedContextBundleId\(contextBundleSelect\.value\);/);
   assert.match(
     source,
     /assertAutomationStartScope\(result,\s*\{\s*automationType:\s*"story",\s*targetId:\s*story\.id,\s*enforceSingleStory:\s*true\s*\}\);/m
@@ -253,12 +255,25 @@ test("story cards link associated runs to run-details page", () => {
 test("feature/epic/story automation controls support explicit resume mode from persisted run id", () => {
   const source = readFeaturesScript();
 
-  assert.match(source, /async function resumeAutomationRun\(automationRunId\)/);
+  assert.match(source, /async function resumeAutomationRun\(automationRunId,\s*options = \{\}\)/);
+  assert.match(source, /body:\s*JSON\.stringify\(\{\s*contextBundleId\s*\}\)/m);
   assert.match(source, /fetch\(`\/api\/automation\/resume\/\$\{encodeURIComponent\(String\(normalizedRunId\)\)\}`,\s*\{\s*method:\s*"POST"/m);
   assert.match(source, /button\.textContent = isActiveFeatureRun \|\| isFeatureStartInFlight[\s\S]*"Resume Automation" : "Complete with Automation"/m);
   assert.match(source, /button\.textContent = isActiveEpicRun \|\| isEpicStartInFlight[\s\S]*"Resume Automation" : "Complete with Automation"/m);
   assert.match(source, /automationButton\.textContent = isStoryStartInFlight \|\| isActiveStoryRun[\s\S]*"Resume Automation" : "Complete with Automation"/m);
   assert.match(source, /const isResumeLaunch = String\(result\?\.launchMode \|\| ""\)\.toLowerCase\(\) === "resume";/);
+});
+
+test("feature page automation controls include a single-bundle selector loaded from context bundle API", () => {
+  const source = readFeaturesScript();
+
+  assert.match(source, /function createAutomationContextBundleSelector\(\{ idPrefix, automationLabel, disabled = false \} = \{\}\)/);
+  assert.match(source, /defaultOption\.textContent = "No context bundle";/);
+  assert.match(source, /fetch\("\/api\/context-bundles\?includeParts=false"\)/);
+  assert.match(source, /await loadAutomationContextBundles\(\);/);
+  assert.match(source, /createAutomationContextBundleSelector\(\{\s*idPrefix:\s*`feature-\$\{feature\.id\}`,\s*automationLabel:\s*"feature"/m);
+  assert.match(source, /createAutomationContextBundleSelector\(\{\s*idPrefix:\s*`epic-\$\{epic\.id\}`,\s*automationLabel:\s*"epic"/m);
+  assert.match(source, /createAutomationContextBundleSelector\(\{\s*idPrefix:\s*`story-\$\{story\.id\}`,\s*automationLabel:\s*"story"/m);
 });
 
 test("feature page syncs open cards with active queue story and auto-collapses completed nodes", () => {
