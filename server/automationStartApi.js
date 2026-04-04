@@ -437,6 +437,36 @@ function buildAutomationConflictResponse(conflictingRun) {
   };
 }
 
+function isAutomationTargetConflictError(error) {
+  const normalizedCode = String(error?.code || "").trim().toLowerCase();
+  if (normalizedCode === "automation_target_conflict") {
+    return true;
+  }
+
+  if (normalizedCode !== "sqlite_constraint" && normalizedCode !== "sqlite_constraint_unique") {
+    return false;
+  }
+
+  const normalizedMessage = String(error?.message || "").trim().toLowerCase();
+  return normalizedMessage.includes("automation_runs.automation_type")
+    && normalizedMessage.includes("automation_runs.target_id");
+}
+
+function buildFallbackAutomationConflict({
+  automationType,
+  targetId,
+  projectName,
+  baseBranch
+}) {
+  return {
+    automation_type: automationType,
+    target_id: targetId,
+    project_name: projectName,
+    base_branch: baseBranch,
+    automation_status: "running"
+  };
+}
+
 function getLatestFailedStoryResult(runnerResult) {
   const storyResults = Array.isArray(runnerResult?.storyResults)
     ? runnerResult.storyResults
@@ -1002,6 +1032,23 @@ function createAutomationStartRouter(deps = {}) {
         })
       );
     } catch (error) {
+      if (isAutomationTargetConflictError(error)) {
+        const conflictingRun = await findRunningAutomationByScope({
+          automationType,
+          targetId
+        });
+        return res.status(409).json(
+          buildAutomationConflictResponse(
+            conflictingRun || buildFallbackAutomationConflict({
+              automationType,
+              targetId,
+              projectName,
+              baseBranch
+            })
+          )
+        );
+      }
+
       return res.status(500).json({
         error: getErrorMessage(error)
       });
@@ -1031,8 +1078,10 @@ function createAutomationStartRouter(deps = {}) {
       return res.status(activeConflict.status).json(activeConflict.payload);
     }
 
+    let automationRun = null;
+
     try {
-      const automationRun = await getAutomationRunById(automationRunId);
+      automationRun = await getAutomationRunById(automationRunId);
       if (!automationRun) {
         return res.status(404).json({ error: "Automation run not found." });
       }
@@ -1170,6 +1219,24 @@ function createAutomationStartRouter(deps = {}) {
         })
       );
     } catch (error) {
+      if (isAutomationTargetConflictError(error)) {
+        const conflictingRun = await findRunningAutomationByScope({
+          automationType: automationRun?.automation_type,
+          targetId: automationRun?.target_id,
+          excludeAutomationRunId: automationRun?.id
+        });
+        return res.status(409).json(
+          buildAutomationConflictResponse(
+            conflictingRun || buildFallbackAutomationConflict({
+              automationType: automationRun?.automation_type,
+              targetId: automationRun?.target_id,
+              projectName: automationRun?.project_name,
+              baseBranch: automationRun?.base_branch
+            })
+          )
+        );
+      }
+
       return res.status(500).json({
         error: getErrorMessage(error)
       });
