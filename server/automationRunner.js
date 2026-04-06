@@ -6,8 +6,8 @@ const {
 const { sortByPosition, toPositiveInteger } = require("./automationQueuePosition");
 
 const DEFAULT_MAX_RUN_DURATION_MS = 600 * 60 * 1000;
-const DEFAULT_STORY_SOFT_TIMEOUT_MS = 16 * 60 * 1000;
-const DEFAULT_STORY_HARD_TIMEOUT_MS = 20 * 60 * 1000;
+const DEFAULT_STORY_SOFT_TIMEOUT_MS = 20 * 60 * 1000;
+const DEFAULT_STORY_HARD_TIMEOUT_MS = 25 * 60 * 1000;
 
 function normalizeStories(stories) {
   if (!Array.isArray(stories)) {
