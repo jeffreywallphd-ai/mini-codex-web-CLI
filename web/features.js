@@ -231,20 +231,6 @@ function syncScopeIntoEditorState(scope) {
   localStorage.setItem(EDITOR_STATE_KEY, JSON.stringify(mergedState));
 }
 
-function getStoryRunStatusLabel(story) {
-  const runStatus = String(story?.run_status || "").toLowerCase();
-  if (runStatus === "complete") {
-    return "Run status: complete";
-  }
-  if (runStatus === "incomplete") {
-    return "Run status: incomplete";
-  }
-  if (runStatus === "in_progress") {
-    return "Run status: in progress";
-  }
-  return "Run status: not started";
-}
-
 function getAutomationStatusLabel(status) {
   if (status === "running") return "Running";
   if (status === "completed") return "Completed";
@@ -1662,9 +1648,6 @@ function createEpicAutomationUi(content, epic) {
 }
 
 function createStoryAutomationUi(content, story) {
-  const runLine = createTextNode("p", "inline-hint", getStoryRunStatusLabel(story));
-  content.appendChild(runLine);
-
   appendStoryRunLinkLine(content, story);
 
   if (!isStoryEligibleForAutomation(story)) {
@@ -1820,13 +1803,10 @@ function renderStoryCard(story, options = {}) {
       createDescription(content, story.description, {
         collapsible: true
       });
-      createStoryAutomationStatusSummary(content, story);
       if (options.showAutomation) {
         createStoryAutomationUi(content, story);
         appendActiveStoryRuntime(content, story);
       } else {
-        const runStatusLine = createTextNode("p", "inline-hint", getStoryRunStatusLabel(story));
-        content.appendChild(runStatusLine);
         appendStoryRunLinkLine(content, story);
       }
     }
