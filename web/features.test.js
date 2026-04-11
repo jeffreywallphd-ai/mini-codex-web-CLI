@@ -152,7 +152,7 @@ test("story card automation UI stays lightweight without story-level stop-on-inc
   assert.match(source, /if \(rawStatus === "completed"\) return "completed";/);
   assert.match(source, /if \(rawStatus === "stopped"\) return "stopped";/);
   assert.match(source, /if \(rawStatus === "failed"\) return "failed";/);
-  assert.match(source, /createStoryAutomationStatusSummary\(content,\s*story\);/);
+  assert.doesNotMatch(source, /createStoryAutomationStatusSummary\(content,\s*story\);/);
   assert.match(source, /className = `automation-status-pill automation-status-pill--\$\{status\}`/);
   assert.match(source, /return "not_started";/);
   assert.doesNotMatch(source, /Stop Merge if Story Implementation is Incomplete/);

@@ -669,8 +669,8 @@ details pre {
 
 .card-description--collapsible.is-collapsed {
   display: -webkit-box;
-  -webkit-line-clamp: 5;
-  line-clamp: 5;
+  -webkit-line-clamp: 4;
+  line-clamp: 4;
   -webkit-box-orient: vertical;
   overflow: hidden;
 }
@@ -832,4 +832,3 @@ details pre {
   overflow-x: hidden;
   overflow-y: hidden;
 }
-
