@@ -2084,14 +2084,15 @@ async function getFeaturesTree(scope = {}) {
     const latestStoryAutomation = latestStoryAutomationByStoryId.get(story.id) || null;
 
     const associatedRunId = story.linked_run_id || story.run_id || story.completion_run_id || null;
-    const normalizedCompletionStatus = story.linked_run_completion_status === "complete"
+    const linkedRunCompletionStatus = story.linked_run_completion_status === "complete"
       ? "complete"
       : story.linked_run_completion_status === "incomplete"
         ? "incomplete"
         : "unknown";
-    const isComplete = normalizedCompletionStatus === "complete";
+    const isComplete = story.persisted_is_complete === 1;
+    const normalizedCompletionStatus = isComplete ? "complete" : "incomplete";
     const runStatus = associatedRunId
-      ? (normalizedCompletionStatus === "unknown" ? "in_progress" : normalizedCompletionStatus)
+      ? (linkedRunCompletionStatus === "unknown" ? "in_progress" : linkedRunCompletionStatus)
       : "not_started";
 
     parentEpic.stories.push({
@@ -2141,6 +2142,37 @@ async function syncStoryCompletionFromRun(storyId, runId) {
   return {
     storyId,
     runId: runRecord.id,
+    isComplete: isComplete === 1
+  };
+}
+
+async function setStoryCompletionStatus(storyId, completionStatus) {
+  await dbReady;
+
+  const normalizedStatus = String(completionStatus || "").trim().toLowerCase();
+  if (normalizedStatus !== "complete" && normalizedStatus !== "incomplete") {
+    throw new Error("Completion status must be complete or incomplete.");
+  }
+
+  const story = await get(`SELECT id FROM stories WHERE id = ?`, [storyId]);
+  if (!story) {
+    throw new Error("Story not found.");
+  }
+
+  const isComplete = normalizedStatus === "complete" ? 1 : 0;
+  await run(
+    `
+      UPDATE stories
+      SET is_complete = ?,
+          completed_at = CASE WHEN ? = 1 THEN CURRENT_TIMESTAMP ELSE NULL END
+      WHERE id = ?
+    `,
+    [isComplete, isComplete, storyId]
+  );
+
+  return {
+    storyId,
+    completionStatus: normalizedStatus,
     isComplete: isComplete === 1
   };
 }
@@ -3040,6 +3072,7 @@ module.exports = {
   getStoryAutomationContext,
   attachRunToStory,
   syncStoryCompletionFromRun,
+  setStoryCompletionStatus,
   createAutomationRun,
   getAutomationRunById,
   findRunningAutomationByScope,

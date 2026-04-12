@@ -23,6 +23,7 @@ const {
   updateContextBundlePart,
   deleteContextBundlePartById,
   syncStoryCompletionFromRun,
+  setStoryCompletionStatus,
   createAutomationRun,
   getAutomationRunById,
   findRunningAutomationByScope,
@@ -645,6 +646,83 @@ test("deleting an unmerged run clears linked story completion association", asyn
     assert.equal(detachedStoryState.run_id, null);
     assert.equal(detachedStoryState.run_status, "not_started");
     assert.equal(detachedStoryState.is_complete, false);
+  } finally {
+    await cleanupRun(runId);
+    await cleanupFeatureScope(scope);
+  }
+});
+
+test("manual story completion status override updates feature tree status without mutating run record", async () => {
+  await dbReady;
+
+  const stamp = Date.now();
+  const scope = {
+    projectName: `db-manual-story-status-${stamp}`,
+    baseBranch: "main"
+  };
+  let runId = null;
+
+  try {
+    await createFeatureTree(
+      {
+        name: `Feature Manual Story Status ${stamp}`,
+        description: "Manual status fixture",
+        epics: [
+          {
+            name: `Epic Manual Story Status ${stamp}`,
+            description: "Fixture epic",
+            stories: [{ name: `Story Manual Story Status ${stamp}`, description: "Fixture story" }]
+          }
+        ]
+      },
+      scope
+    );
+
+    const seededFeatures = await getFeaturesTree(scope);
+    const storyId = seededFeatures?.[0]?.epics?.[0]?.stories?.[0]?.id;
+    assert.ok(Number.isInteger(storyId) && storyId > 0);
+
+    runId = await saveRun({
+      projectName: scope.projectName,
+      prompt: "fixture prompt",
+      code: 0,
+      stdout: "",
+      stderr: "",
+      statusBefore: "",
+      statusAfter: "",
+      usageDelta: "",
+      creditsRemaining: null,
+      executionMode: "write",
+      branchName: `fixture-manual-status-branch-${stamp}`,
+      baseBranch: scope.baseBranch,
+      gitStatus: "",
+      gitStatusFiles: [],
+      gitDiffMap: {},
+      changeTitle: "fixture",
+      changeDescription: "fixture",
+      promptWithInstructions: "fixture",
+      executedCommand: "fixture command",
+      spawnCommand: "fixture spawn",
+      completionStatus: "incomplete",
+      completionWork: "none",
+      runStartTime: Date.now() - 1000,
+      runEndTime: Date.now()
+    });
+
+    await syncStoryCompletionFromRun(storyId, runId);
+    let linkedStoryState = (await getFeaturesTree(scope))[0].epics[0].stories[0];
+    assert.equal(linkedStoryState.run_completion_status, "incomplete");
+    assert.equal(linkedStoryState.is_complete, false);
+
+    await setStoryCompletionStatus(storyId, "complete");
+    linkedStoryState = (await getFeaturesTree(scope))[0].epics[0].stories[0];
+    assert.equal(linkedStoryState.run_id, runId);
+    assert.equal(linkedStoryState.run_status, "incomplete");
+    assert.equal(linkedStoryState.run_completion_status, "complete");
+    assert.equal(linkedStoryState.is_complete, true);
+
+    const runRecord = await getRunById(runId);
+    assert.equal(runRecord.completion_status, "incomplete");
   } finally {
     await cleanupRun(runId);
     await cleanupFeatureScope(scope);
