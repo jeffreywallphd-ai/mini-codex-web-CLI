@@ -583,6 +583,38 @@ details pre {
   letter-spacing: 0.04em;
 }
 
+.status-pill-dropdown {
+  position: relative;
+}
+
+.status-pill-dropdown__toggle {
+  width: auto;
+  margin: 0;
+  border: none;
+  cursor: pointer;
+}
+
+.status-pill-dropdown__menu {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 6px);
+  min-width: 150px;
+  padding: 6px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--panel-alt);
+  z-index: 10;
+}
+
+.status-pill-dropdown__option {
+  margin: 0;
+  width: 100%;
+  border: 1px solid var(--border);
+  background: var(--panel);
+  color: var(--text);
+  text-align: left;
+}
+
 .status-pill--complete {
   background: rgba(46, 204, 113, 0.18);
   color: #aef0c9;

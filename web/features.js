@@ -506,27 +506,80 @@ function appendStoryRunLinkLine(content, story, { includeLabel = true } = {}) {
   content.appendChild(row);
 }
 
-function createCardHeader(name, status) {
+function createStatusDropdownMenu({ status, onSelectStatus }) {
+  const wrapper = document.createElement("div");
+  wrapper.className = "status-pill-dropdown";
+
+  const toggle = document.createElement("button");
+  toggle.type = "button";
+  toggle.className = `status-pill status-pill--${status} status-pill-dropdown__toggle`;
+  toggle.textContent = status;
+  toggle.setAttribute("aria-haspopup", "menu");
+  toggle.setAttribute("aria-expanded", "false");
+  wrapper.appendChild(toggle);
+
+  const menu = document.createElement("div");
+  menu.className = "status-pill-dropdown__menu hidden";
+  menu.setAttribute("role", "menu");
+  wrapper.appendChild(menu);
+
+  const oppositeStatus = status === "complete" ? "incomplete" : "complete";
+  const option = document.createElement("button");
+  option.type = "button";
+  option.className = "status-pill-dropdown__option";
+  option.textContent = oppositeStatus === "complete" ? "Mark as Complete" : "Mark as Incomplete";
+  option.setAttribute("role", "menuitem");
+  option.addEventListener("click", async (event) => {
+    event.stopPropagation();
+    menu.classList.add("hidden");
+    toggle.setAttribute("aria-expanded", "false");
+    try {
+      await onSelectStatus(oppositeStatus);
+    } catch (error) {
+      createStatusBox.textContent = String(error?.message || "Unable to update story status.");
+    }
+  });
+  menu.appendChild(option);
+
+  toggle.addEventListener("click", (event) => {
+    event.stopPropagation();
+    const isOpen = menu.classList.toggle("hidden") === false;
+    toggle.setAttribute("aria-expanded", String(isOpen));
+  });
+
+  return wrapper;
+}
+
+function createCardHeader(name, status, options = {}) {
   const button = document.createElement("button");
   button.type = "button";
   button.className = "hier-card__toggle";
 
   const title = document.createElement("strong");
   title.textContent = name || "(untitled)";
-  const statusNode = document.createElement("span");
-  statusNode.className = `status-pill status-pill--${status}`;
-  statusNode.textContent = status;
+  let statusNode = null;
+
+  if (typeof options.onSelectStatus === "function" && (status === "complete" || status === "incomplete")) {
+    statusNode = createStatusDropdownMenu({
+      status,
+      onSelectStatus: options.onSelectStatus
+    });
+  } else {
+    statusNode = document.createElement("span");
+    statusNode.className = `status-pill status-pill--${status}`;
+    statusNode.textContent = status;
+  }
 
   button.appendChild(title);
   button.appendChild(statusNode);
   return button;
 }
 
-function createCollapsibleCard({ levelClass, cardKey, name, status, renderBody }) {
+function createCollapsibleCard({ levelClass, cardKey, name, status, renderBody, onSelectStatus }) {
   const card = document.createElement("article");
   card.className = `hier-card ${levelClass}`;
   card.setAttribute("data-card-key", cardKey);
-  const headerButton = createCardHeader(name, status);
+  const headerButton = createCardHeader(name, status, { onSelectStatus });
   const content = document.createElement("div");
   content.className = "hier-card__content hidden";
 
@@ -606,6 +659,26 @@ async function startStoryAutomation(storyId, options = {}) {
 
   if (!response.ok) {
     throw new Error(formatAutomationStartError(result, "Unable to start story automation."));
+  }
+
+  return result;
+}
+
+async function updateStoryCompletionStatus(storyId, completionStatus) {
+  const normalizedStatus = String(completionStatus || "").trim().toLowerCase();
+  if (normalizedStatus !== "complete" && normalizedStatus !== "incomplete") {
+    throw new Error("Completion status must be complete or incomplete.");
+  }
+
+  const response = await fetch(`/api/stories/${encodeURIComponent(String(storyId))}/completion-status`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ completionStatus: normalizedStatus })
+  });
+  const result = await response.json();
+
+  if (!response.ok) {
+    throw new Error(String(result?.error || "Unable to update story completion status."));
   }
 
   return result;
@@ -1799,6 +1872,11 @@ function renderStoryCard(story, options = {}) {
     cardKey: `story:${story.id}`,
     name: story.name,
     status: getStoryStatus(story),
+    onSelectStatus: async (nextStatus) => {
+      await updateStoryCompletionStatus(story.id, nextStatus);
+      createStatusBox.textContent = `Story #${story.id} marked as ${nextStatus}.`;
+      await loadFeatures();
+    },
     renderBody: (content) => {
       createDescription(content, story.description, {
         collapsible: true

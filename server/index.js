@@ -27,6 +27,7 @@ const {
   getStoryAutomationContext,
   attachRunToStory,
   syncStoryCompletionFromRun,
+  setStoryCompletionStatus,
   createAutomationRun,
   getAutomationRunById,
   findRunningAutomationByScope,
@@ -1132,6 +1133,30 @@ app.post("/api/stories/:storyId/sync-completion", async (req, res) => {
 
   try {
     const result = await syncStoryCompletionFromRun(storyId, runId);
+    res.json(result);
+  } catch (error) {
+    const message = getErrorMessage(error);
+    if (message.includes("not found")) {
+      return res.status(404).json({ error: message });
+    }
+    res.status(400).json({ error: message });
+  }
+});
+
+app.patch("/api/stories/:storyId/completion-status", async (req, res) => {
+  const storyId = Number.parseInt(req.params.storyId, 10);
+  const completionStatus = String(req.body?.completionStatus || "").trim().toLowerCase();
+
+  if (!Number.isInteger(storyId) || storyId <= 0) {
+    return res.status(400).json({ error: "Invalid story id." });
+  }
+
+  if (completionStatus !== "complete" && completionStatus !== "incomplete") {
+    return res.status(400).json({ error: "completionStatus must be complete or incomplete." });
+  }
+
+  try {
+    const result = await setStoryCompletionStatus(storyId, completionStatus);
     res.json(result);
   } catch (error) {
     const message = getErrorMessage(error);

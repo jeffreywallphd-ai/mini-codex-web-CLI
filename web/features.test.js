@@ -172,6 +172,26 @@ test("frontend story eligibility mirrors backend completion normalization", () =
   assert.match(source, /"Automation unavailable: this story is already complete\."/);
 });
 
+test("story cards expose clickable completion status dropdown that toggles opposite state", () => {
+  const source = readFeaturesScript();
+
+  assert.match(source, /function createStatusDropdownMenu\(\{\s*status,\s*onSelectStatus\s*\}\)/);
+  assert.match(source, /const oppositeStatus = status === "complete" \? "incomplete" : "complete";/);
+  assert.match(source, /option\.textContent = oppositeStatus === "complete" \? "Mark as Complete" : "Mark as Incomplete";/);
+  assert.match(source, /await onSelectStatus\(oppositeStatus\);/);
+  assert.match(source, /event\.stopPropagation\(\);/);
+});
+
+test("story status dropdown updates backend completion status endpoint and reloads feature tree", () => {
+  const source = readFeaturesScript();
+
+  assert.match(source, /fetch\(`\/api\/stories\/\$\{encodeURIComponent\(String\(storyId\)\)\}\/completion-status`,\s*\{\s*method:\s*"PATCH"/m);
+  assert.match(source, /body: JSON\.stringify\(\{\s*completionStatus:\s*normalizedStatus\s*\}\)/);
+  assert.match(source, /onSelectStatus:\s*async \(nextStatus\) => \{/);
+  assert.match(source, /await updateStoryCompletionStatus\(story\.id,\s*nextStatus\);/);
+  assert.match(source, /await loadFeatures\(\);/);
+});
+
 test("automation status summaries show persisted stop reasons for failure, incomplete stop, and manual stop", () => {
   const source = readFeaturesScript();
 
