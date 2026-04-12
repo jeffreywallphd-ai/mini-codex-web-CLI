@@ -9,7 +9,9 @@ const EXECUTION_MODE_OPTIONS = {
 const CHANGESET_MARKER_START = "<<<CODEX_CHANGESET_START>>>";
 const CHANGESET_MARKER_END = "<<<CODEX_CHANGESET_END>>>";
 const PROMPT_SUFFIX = `
-If the project has a docs folder and a general-prompt-guidance.md file, please follow the guidance provided in general-prompt-guidance.md. 
+Prefer reading ai.md versions of a file over .md files if they exist. 
+If the project has a docs/ folder, please adhere to all docs rules, guidance, and templates. Start with the docs/README file.
+If the project has a docs/context/ folder, please adhere to all context rules, guidance, and templates. Start with the docs/context/README file.
 Before you finish, include this structured completion block:
 COMPLETION_STATUS: <complete|incomplete>
 COMPLETION_WORK: <none or remaining implementation work>
